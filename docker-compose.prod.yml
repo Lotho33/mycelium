@@ -187,7 +187,7 @@ services:
   # restart re-applies them (ReapplyWireproxyAtBoot). No cap_add needed —
   # wireproxy is pure userspace, no kernel WireGuard.
 
-  # Polls the Forgejo registry every 5 min and recreates any container
+  # Polls the registry (GHCR by default) every 5 min and recreates any container
   # carrying `com.centurylinklabs.watchtower.enable=true` when its image tag
   # has a newer digest. Cleans up superseded image layers.
   #

@@ -30,12 +30,14 @@ registry.
 ## Releasing
 
 `scripts/release.sh X.Y.Z` bumps `internal/core/version.go`, commits, tags
-`vX.Y.Z`, and pushes. The push triggers the release workflow
-(`.github/workflows/` on GitHub, `.forgejo/workflows/release.yml` on Forgejo),
-which builds and pushes `<registry>/mycelium:X.Y.Z` + `:latest`.
+`vX.Y.Z`, and pushes. The push triggers `.github/workflows/release.yml`,
+which builds `ghcr.io/lotho33/mycelium:X.Y.Z` + `:latest` (multi-arch,
+`linux/amd64` + `linux/arm64`) and cuts a GitHub Release — GitHub-hosted
+runner, no self-hosted runner or registry secret needed (`GITHUB_TOKEN`
+covers GHCR push + release creation).
 
 `MYCELIUM_RELEASE_REMOTE` (default `origin`) and `MYCELIUM_RELEASE_BRANCH`
-(default `main`) override where the script pushes.
+(default `dev`) override where the script pushes.
 
 The Go SDK is vendored at `third_party/stipes-sdk/` (a `replace` in `go.mod`),
 so the build needs only this one repo — no sibling checkout.
@@ -104,10 +106,10 @@ mycelium creates a dedicated `wireproxy-<name>` sidecar over the Docker socket
 ## Notes
 
 - The dashboard's "update available" banner queries
-  `api.github.com/repos/Lotho33/mycelium-core/releases/latest`. It's cosmetic,
+  `api.github.com/repos/Lotho33/mycelium/releases/latest`. It's cosmetic,
   not the updater.
-- The image is single-arch (amd64). Add `docker buildx` multi-arch to the
-  workflow for an ARM server.
+- The image is multi-arch (`linux/amd64` + `linux/arm64`) — an ARM server
+  pulls the right variant automatically, no compose changes needed.
 - Mounting `/var/run/docker.sock` into `mycelium` (for dashboard metrics and
   wireproxy sidecars) is root-equivalent on the host — keep that in mind on an
   exposed machine.

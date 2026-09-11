@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Rilascia una nuova versione di mycelium.
 #
-#   scripts/release.sh 0.1.4            # bump + commit + tag v0.1.4 + push su forgejo
+#   scripts/release.sh 0.1.4            # bump + commit + tag v0.1.4 + push su GitHub
 #   scripts/release.sh 0.1.4 -n        # dry-run: mostra cosa farebbe e basta
 #
-# Il push del tag vX.Y.Z fa partire il workflow di release (.github/ o
-# .forgejo/), che builda l'immagine Docker (VERSION iniettata dal tag) e la
-# pubblica su <registry>/mycelium:<ver> + :latest.
+# Il push del tag vX.Y.Z fa partire .github/workflows/release.yml, che builda
+# l'immagine Docker multi-arch (VERSION iniettata dal tag) e la pubblica su
+# ghcr.io/lotho33/mycelium:<ver> + :latest — runner GitHub-hosted, nessun
+# secret da configurare (GITHUB_TOKEN copre push GHCR + creazione release).
 #
-# Override: MYCELIUM_RELEASE_REMOTE (default: forgejo), MYCELIUM_RELEASE_BRANCH
+# Override: MYCELIUM_RELEASE_REMOTE (default: origin), MYCELIUM_RELEASE_BRANCH
 # (default: dev).
 set -euo pipefail
 
-REMOTE=${MYCELIUM_RELEASE_REMOTE:-forgejo}
+REMOTE=${MYCELIUM_RELEASE_REMOTE:-origin}
 BRANCH=${MYCELIUM_RELEASE_BRANCH:-dev}
 VERSION_FILE=internal/core/version.go
 
