@@ -28,6 +28,8 @@ import (
 	"sync"
 
 	"golang.org/x/net/http2"
+
+	"mycelium/internal/core"
 )
 
 var (
@@ -61,10 +63,11 @@ func initGRPCWebBridge() {
 			AllowHTTP: true,
 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 				d := &net.Dialer{}
-				if !grpcListenTLS {
+				target := grpcTargetPtr.Load()
+				if target == nil || !target.tls {
 					return d.DialContext(ctx, network, addr)
 				}
-				// The gRPC server on grpcListenAddr speaks TLS (default) with a
+				// The gRPC server on grpcTarget.addr speaks TLS (default) with a
 				// self-signed cert: no CA chain to verify, no hostname to match
 				// on this loopback hop. Instead we pin the leaf cert — its
 				// SHA-256 is known in-process (tlsFingerprint, set by Start()).
@@ -87,7 +90,7 @@ func initGRPCWebBridge() {
 
 // GRPCWebHandler returns an HTTP handler that proxies gRPC-web requests to the
 // local gRPC server. It must be mounted after Start() has been called so that
-// grpcListenAddr is set.
+// grpcTargetPtr is set.
 func GRPCWebHandler() http.Handler {
 	initGRPCWebBridge()
 	return http.HandlerFunc(serveGRPCWeb)
@@ -115,19 +118,20 @@ func serveGRPCWeb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grpcListenAddr == "" {
+	target := grpcTargetPtr.Load()
+	if target == nil {
 		http.Error(w, "gRPC server not ready", http.StatusServiceUnavailable)
 		return
 	}
 
 	// Forward to the local gRPC server as a native gRPC/HTTP2 request. The
 	// scheme must match how the server listens (TLS by default); the
-	// http2.Transport's DialTLSContext handles both via grpcListenTLS.
+	// http2.Transport's DialTLSContext handles both via grpcTargetPtr.
 	scheme := "http://"
-	if grpcListenTLS {
+	if target.tls {
 		scheme = "https://"
 	}
-	grpcURL := scheme + grpcListenAddr + r.URL.Path
+	grpcURL := scheme + target.addr + r.URL.Path
 	grpcReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, grpcURL, r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -250,9 +254,11 @@ func serveGRPCWeb(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// See core.SetCORSHeaders for why the wildcard origin is safe here.
 func setCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization, x-grpc-web, x-user-agent, x-profile-id, x-http-host, x-http-scheme, grpc-timeout")
-	w.Header().Set("Access-Control-Expose-Headers", "grpc-status, grpc-message, grpc-status-details-bin")
+	core.SetCORSHeaders(w,
+		"POST, OPTIONS",
+		"content-type, authorization, x-grpc-web, x-user-agent, x-profile-id, x-http-host, x-http-scheme, grpc-timeout",
+		"grpc-status, grpc-message, grpc-status-details-bin",
+	)
 }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
@@ -23,13 +24,19 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// grpcListenAddr is stored so the gRPC-web bridge knows where to forward
-// requests; grpcListenTLS says whether that listener speaks TLS (so the bridge
-// dials it with the right scheme).
-var (
-	grpcListenAddr string
-	grpcListenTLS  bool
-)
+// grpcTarget bundles what the gRPC-web bridge needs to reach the native gRPC
+// server: the loopback address to dial and whether it speaks TLS (so the
+// bridge dials it with the right scheme). Set once by Start(), read on every
+// bridged request from a different goroutine — atomic.Pointer instead of two
+// plain package vars avoids both the data race (Start()'s write and
+// serveGRPCWeb's read have no happens-before edge the Go memory model
+// guarantees) and a window where one field is updated and the other isn't.
+type grpcTarget struct {
+	addr string
+	tls  bool
+}
+
+var grpcTargetPtr atomic.Pointer[grpcTarget]
 
 // tlsFingerprint is the SHA-256 (hex) of the gRPC server's leaf certificate,
 // empty when TLS is disabled. Exposed via TLSFingerprint() so internal/api's
@@ -70,8 +77,8 @@ func Start(addr string, jwtSecret []byte, tlsCert *tls.Certificate) *grpc.Server
 	mediaHandler := NewMediaHandler()
 	pluginHandler := NewPluginHandler()
 
+	tlsEnabled := tlsCert != nil
 	opts := []grpc.ServerOption{grpc.UnaryInterceptor(authInterceptor(authHandler))}
-	grpcListenTLS = tlsCert != nil
 	if tlsCert != nil {
 		opts = append(opts, grpc.Creds(credentials.NewServerTLSFromCert(tlsCert)))
 		if len(tlsCert.Certificate) > 0 {
@@ -95,12 +102,14 @@ func Start(addr string, jwtSecret []byte, tlsCert *tls.Certificate) *grpc.Server
 	// explicit loopback host with the actually-bound port — NOT lis.Addr()
 	// verbatim, which on a dual-stack listener is "[::]:<port>" and dialing the
 	// unspecified address is unreliable.
+	var listenAddr string
 	if ta, ok := lis.Addr().(*net.TCPAddr); ok {
-		grpcListenAddr = net.JoinHostPort("127.0.0.1", strconv.Itoa(ta.Port))
+		listenAddr = net.JoinHostPort("127.0.0.1", strconv.Itoa(ta.Port))
 	} else {
-		grpcListenAddr = lis.Addr().String()
+		listenAddr = lis.Addr().String()
 	}
-	log.Printf("[pileus] gRPC server listening on %s (bridge dials %s, tls=%v)", lis.Addr().String(), grpcListenAddr, grpcListenTLS)
+	grpcTargetPtr.Store(&grpcTarget{addr: listenAddr, tls: tlsEnabled})
+	log.Printf("[pileus] gRPC server listening on %s (bridge dials %s, tls=%v)", lis.Addr().String(), listenAddr, tlsEnabled)
 	go func() {
 		if err := srv.Serve(lis); err != nil {
 			log.Printf("[pileus] server stopped: %v", err)

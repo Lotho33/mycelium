@@ -14,8 +14,8 @@ import (
 )
 
 // startH2CServer runs handler behind a plaintext HTTP/2 (h2c) listener — the
-// same protocol grpcH2Client (initGRPCWebBridge) speaks to grpcListenAddr when
-// grpcListenTLS is false. Returns "host:port".
+// same protocol grpcH2Client (initGRPCWebBridge) speaks to grpcTargetPtr's
+// addr when its tls field is false. Returns "host:port".
 func startH2CServer(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -26,6 +26,16 @@ func startH2CServer(t *testing.T, handler http.HandlerFunc) string {
 	go srv.Serve(lis) //nolint:errcheck
 	t.Cleanup(func() { srv.Close() })
 	return lis.Addr().String()
+}
+
+// setGRPCTarget points the bridge at addr/tls for the duration of the test,
+// restoring whatever grpcTargetPtr held before (nil in the ordinary case,
+// since Start() never runs in this test binary).
+func setGRPCTarget(t *testing.T, addr string, tls bool) {
+	t.Helper()
+	orig := grpcTargetPtr.Load()
+	grpcTargetPtr.Store(&grpcTarget{addr: addr, tls: tls})
+	t.Cleanup(func() { grpcTargetPtr.Store(orig) })
 }
 
 // The bridge must: forward the body + an allowlisted subset of headers to the
@@ -49,9 +59,7 @@ func TestServeGRPCWeb_ForwardsAndReframesTrailers(t *testing.T) {
 		w.Header().Set(http.TrailerPrefix+"Grpc-Status", "0")
 	})
 
-	restoreAddr, restoreTLS := grpcListenAddr, grpcListenTLS
-	grpcListenAddr, grpcListenTLS = addr, false
-	t.Cleanup(func() { grpcListenAddr, grpcListenTLS = restoreAddr, restoreTLS })
+	setGRPCTarget(t, addr, false)
 	initGRPCWebBridge()
 
 	req := httptest.NewRequest(http.MethodPost, "/mycelium.AuthService/AuthorizeDevice",
@@ -121,9 +129,7 @@ func TestServeGRPCWeb_SynthesisesHostSchemeAndOverwritesXFF(t *testing.T) {
 		gotXFF = r.Header.Get("X-Forwarded-For")
 		w.Header().Set(http.TrailerPrefix+"Grpc-Status", "0")
 	})
-	restoreAddr, restoreTLS := grpcListenAddr, grpcListenTLS
-	grpcListenAddr, grpcListenTLS = addr, false
-	t.Cleanup(func() { grpcListenAddr, grpcListenTLS = restoreAddr, restoreTLS })
+	setGRPCTarget(t, addr, false)
 	initGRPCWebBridge()
 
 	req := httptest.NewRequest(http.MethodPost, "/mycelium.MediaPipeline/GetCatalog", strings.NewReader(""))
@@ -146,12 +152,12 @@ func TestServeGRPCWeb_SynthesisesHostSchemeAndOverwritesXFF(t *testing.T) {
 	}
 }
 
-// No gRPC server registered yet (grpcListenAddr empty) → 503, not a hang or a
+// No gRPC server registered yet (grpcTargetPtr nil) → 503, not a hang or a
 // panic dialing an empty address.
 func TestServeGRPCWeb_503WhenGRPCNotReady(t *testing.T) {
-	restoreAddr := grpcListenAddr
-	grpcListenAddr = ""
-	t.Cleanup(func() { grpcListenAddr = restoreAddr })
+	orig := grpcTargetPtr.Load()
+	grpcTargetPtr.Store(nil)
+	t.Cleanup(func() { grpcTargetPtr.Store(orig) })
 
 	req := httptest.NewRequest(http.MethodPost, "/mycelium.AuthService/AuthorizeDevice", strings.NewReader(""))
 	req.Header.Set("Content-Type", "application/grpc-web+proto")

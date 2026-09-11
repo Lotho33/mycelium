@@ -3,6 +3,7 @@ package pileus
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,14 +58,24 @@ func TestJWT_TamperedSignatureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	// Flip the token's last base64url char — same length, different bytes,
-	// so it still parses as three dot-separated segments but fails the MAC.
-	last := tok[len(tok)-1]
+	// Flip a base64url char in the signature — but NOT its last char: base64's
+	// trailing char in a non-multiple-of-3 group carries a couple of "don't
+	// care" padding bits, so changing only that one can decode to the exact
+	// same bytes and leave the signature verifying fine (flaky test, not a
+	// real bug — found while re-running the suite for an unrelated change).
+	// Any earlier char always sits in a full 3-byte group, so it always flips
+	// real signature bytes.
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 || len(parts[2]) < 2 {
+		t.Fatalf("unexpected JWT shape: %q", tok)
+	}
+	sig := []byte(parts[2])
 	flip := byte('A')
-	if last == 'A' {
+	if sig[0] == 'A' {
 		flip = 'B'
 	}
-	tampered := tok[:len(tok)-1] + string(flip)
+	sig[0] = flip
+	tampered := parts[0] + "." + parts[1] + "." + string(sig)
 	if _, err := h.ParseJWT(tampered); err == nil {
 		t.Fatal("tampered signature was accepted")
 	}

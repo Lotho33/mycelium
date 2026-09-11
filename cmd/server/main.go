@@ -80,9 +80,7 @@ func init() {
 }
 
 // corsMiddleware allows cross-origin requests from hub clients (Kodi addons, mobile apps).
-// Wildcard origin is intentional: hub clients are native apps, not browsers, so there is
-// no cookie-based session to steal. Admin routes use SameSite=Strict cookies and are
-// never called cross-origin by legitimate clients.
+// See core.SetCORSHeaders for why the wildcard origin is safe here.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The gRPC-web bridge sets its own (grpc-web-specific) CORS headers and
@@ -94,9 +92,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token")
+		core.SetCORSHeaders(w, "GET, POST, PUT, DELETE, OPTIONS", "Content-Type, X-Auth-Token", "")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -185,6 +181,10 @@ func main() {
 	// Same master secret keys the HMAC on every /proxy/* URL we mint, so the
 	// HLS proxy can't be driven as an open relay to an arbitrary URL.
 	core.SetProxySignKey(jwtSecret)
+	// ...and the admin dashboard's session cookie (P2-6): self-verifying, so a
+	// self-update-triggered restart no longer logs every admin out (the old
+	// in-memory session map was wiped on every restart).
+	api.SetAdminSessionKey(jwtSecret)
 	grpcAddr := managers.Settings.GetString("pileus_grpc_port", "50051")
 	// TLS di default (2026-08-19): il client Pileus ora pinna il certificato
 	// via il fingerprint esposto da /pileus/info (vedi internal/pileus.
