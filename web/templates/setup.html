@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="it" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0d12">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Mycelium · Setup</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        html,body{background:#0a0d12;-webkit-tap-highlight-color:transparent}
+        @supports (padding:env(safe-area-inset-top)){
+            .safe{padding-top:calc(env(safe-area-inset-top) + 1.5rem);
+                  padding-bottom:calc(env(safe-area-inset-bottom) + 1.5rem)}
+        }
+    </style>
+</head>
+<body class="text-gray-200 font-sans antialiased min-h-screen flex items-center justify-center px-5 safe">
+
+<div class="max-w-md w-full space-y-4" id="wizard">
+
+    <!-- Step 1: Password -->
+    <div id="step-1" class="bg-[#141820] rounded-2xl border border-[#1e2530] shadow-2xl overflow-hidden">
+        <div class="px-6 py-6 border-b border-[#1e2530] flex items-center gap-3">
+            <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+                 style="background:linear-gradient(135deg,#7c6af7,#5a4fd4)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" width="24" height="24">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-white leading-tight">Setup Mycelium</h1>
+                <p class="text-gray-500 text-xs mt-0.5">Configurazione iniziale del nodo</p>
+            </div>
+        </div>
+        <div class="p-6">
+            <h2 class="text-base font-semibold text-white mb-3">Password amministratore</h2>
+            <input type="password" id="admin-pass" autocomplete="new-password"
+                placeholder="Almeno 8 caratteri"
+                class="w-full bg-[#0d1017] border border-[#2a3040] rounded-xl px-4 py-3.5 text-base text-white
+                       focus:outline-none focus:border-[#7c6af7] focus:ring-2 focus:ring-[#7c6af7]/20 transition mb-3">
+            <button onclick="savePassword()"
+                class="w-full bg-[#7c6af7] hover:bg-[#6a58e8] active:bg-[#6a58e8] text-white px-6 py-3.5 rounded-xl font-bold text-base transition">
+                Continua →
+            </button>
+            <p id="pass-error" class="text-red-400 text-sm mt-2 hidden"></p>
+        </div>
+    </div>
+
+    <!-- Step 2: Completato -->
+    <div id="step-done" class="hidden bg-[#141820] rounded-2xl border border-emerald-500/40 shadow-2xl overflow-hidden">
+        <div class="px-6 py-5 border-b border-emerald-500/20 bg-emerald-500/5">
+            <h2 class="text-base font-bold text-emerald-400">Setup completato</h2>
+        </div>
+        <div class="p-6 space-y-3">
+            <div class="p-4 bg-[#0d1017] rounded-xl border border-[#1e2530]">
+                <p class="text-[11px] text-gray-500 uppercase font-bold mb-1">Accesso locale</p>
+                <a id="local-url" href="#" class="text-[#a89bff] font-mono text-sm break-all hover:underline"></a>
+            </div>
+            <div class="p-4 bg-[#0d1017] rounded-xl border border-[#1e2530]">
+                <p class="text-[11px] text-gray-500 uppercase font-bold mb-1">Accesso remoto</p>
+                <span class="text-gray-400 text-sm">Il server sta sulla rete privata (LAN o mesh). Per raggiungerlo da fuori configura tu la rete sulla macchina (es. Tailscale, WireGuard) — Mycelium non gestisce l'accesso remoto.</span>
+            </div>
+            <div class="p-4 bg-[#0d1017] rounded-xl border border-[#1e2530]">
+                <p class="text-[11px] text-gray-500 uppercase font-bold mb-1">Pileus</p>
+                <span class="text-gray-400 text-sm">L'app trova il server da sola sulla rete locale — nessun IP da digitare. Il codice per accoppiare un dispositivo si genera dalla dashboard.</span>
+            </div>
+            <button onclick="window.location='/admin/dashboard'"
+                class="w-full bg-[#7c6af7] hover:bg-[#6a58e8] text-white px-6 py-3.5 rounded-xl font-bold text-base transition mt-1">
+                Vai alla Dashboard →
+            </button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+async function savePassword() {
+    const pass = document.getElementById('admin-pass').value;
+    const err = document.getElementById('pass-error');
+    if (pass.length < 8) {
+        err.textContent = 'La password deve essere di almeno 8 caratteri';
+        err.classList.remove('hidden');
+        return;
+    }
+    err.classList.add('hidden');
+
+    const fd = new FormData();
+    fd.append('master_admin_password', pass);
+    const res = await fetch('/setup/save', { method: 'POST', body: fd });
+    if (!res.ok && res.status !== 303 && res.status !== 302) {
+        err.textContent = await res.text();
+        err.classList.remove('hidden');
+        return;
+    }
+    document.getElementById('step-1').classList.add('opacity-50', 'pointer-events-none');
+    showDone();
+}
+
+function showDone() {
+    document.getElementById('step-done').classList.remove('hidden');
+    const port = window.location.port || '8000';
+    const localURL = window.location.protocol + '//' + window.location.hostname + ':' + port + '/admin';
+    const el = document.getElementById('local-url');
+    el.href = localURL;
+    el.textContent = localURL;
+}
+</script>
+</body>
+</html>

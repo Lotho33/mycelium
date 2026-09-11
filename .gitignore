@@ -1,0 +1,52 @@
+# Runtime config & data
+data/config.json
+data/logs/
+data/pileus-web/
+data/pileus-web-tv/
+data/imgcache/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Per-plugin runtime data (caches, disk fallbacks) — regenerated at runtime,
+# never source, never distributed with a plugin.
+data/plugins/
+plugins/*/*_cache.json
+plugins/*/*_index.json
+
+# mycelium ships no plugins of its own. plugins/ is where an operator drops
+# their own (or a released .zip is extracted); it's local, never committed.
+# `git add -f plugins/<name>` if a first-party plugin is ever bundled.
+/plugins/
+
+# Compiled binaries
+*.exe
+/server
+/mycelium
+cmd/server/server
+cmd/server/mycelium
+
+# Build/dev artifacts
+tmp/
+*.log
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Claude Code local state — settings, worktrees, scheduler locks. All
+# machine-specific (absolute paths, per-session state); never shared config.
+.claude/
+
+# Secrets
+.env
+
+# Companion browser service — local state & debug output (may contain
+# root-owned 0600 files written by the service's own daemon; without this
+# entry `git add .` fails with "Permesso negato" on them).
+data/cobweb/
+
+# Proxy sidecar registration state (auto-generated on first boot; also
+# root-owned 0600 files).
+data/microwarp/
+data/warp/

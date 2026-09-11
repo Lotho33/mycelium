@@ -1,0 +1,154 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../..:/workspace:cached,z
+      # Stesso mount/stesso trade-off di sicurezza di docker-compose.yml (vedi
+      # il commento lì) — serve alla dashboard admin per leggere CPU/RAM del
+      # container microwarp via internal/managers/docker_stats.go.
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace/mycelium-core
+    command: sleep infinity
+    # Pubblica le porte anche indipendentemente da VS Code (che altrimenti le
+    # inoltra da solo solo se il container ha le label devcontainer.* — non le
+    # ha se avviato da terminale con podman-compose invece che dalla UI).
+    ports:
+      - "8000:8000"
+      - "50051:50051"
+      # Discovery LAN UDP per Pileus — vedi il commento gemello in
+      # docker-compose.yml sul servizio "mycelium".
+      - "51900:51900/udp"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - MYCELIUM_BASE=/workspace/mycelium-core
+      - MYCELIUM_DOCKER=1
+      - CGO_ENABLED=0
+      - TZ=Europe/Rome
+      # cobweb — servizio browser companion. NON è più uno stack service qui:
+      # gira nel SUO devcontainer (~/Dev/Rust/cobweb, `cargo run`) o come
+      # container a parte, pubblicato sull'host su 8191. Ci si arriva via
+      # host-gateway così i 3 devcontainer (cobweb, mycelium, pileus) non si
+      # contendono la porta 8191 né un'immagine `cobweb:latest` stantia.
+      # Per usare un'immagine buildata: `docker run -p 8191:8191 cobweb:latest`.
+      - COBWEB_ADDR=http://host.docker.internal:8191
+      # Stesso default di docker-compose.yml (produzione): ogni plugin è
+      # VPN-routed di default (fail-closed) tranne quelli con direct_egress:true,
+      # quindi senza un proxy configurato qui i plugin VPN-routed non
+      # funzionerebbero affatto in dev. Punta alla porta pubblicata sull'host,
+      # NON a
+      # socks5://microwarp:1080: verificato dal vivo il 2026-08-18, una
+      # connessione diretta container-a-container sulla rete bridge verso
+      # microwarp:1080 va in timeout (routing asimmetrico nel policy-routing
+      # WireGuard di MicroWARP), mentre passare per la porta pubblicata
+      # sull'host funziona regolarmente. Richiede comunque che il servizio
+      # microwarp sia avviato (vedi sotto, profilo "vpn") — se non lo è, il
+      # dial fallisce e i plugin VPN-routed falliscono fail-closed
+      # (comportamento corretto, non un bug: meglio "non funziona" che
+      # "funziona bypassando la VPN").
+      - VPN_PROXY_URL=socks5://host.docker.internal:1080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      # cobweb NON è più un servizio di questo stack (vedi COBWEB_ADDR sopra):
+      # gira nel suo devcontainer. mycelium tollera cobweb irraggiungibile
+      # (browser_client.go ritenta per-chiamata) — i plugin che usano
+      # mycelium.browser.* falliscono finché non lo avvii, gli altri no.
+      # microwarp NON è nelle dipendenze di default: è dietro il profilo "vpn"
+      # (vedi sotto). Compose non permette a un servizio del profilo di default
+      # di dipendere da uno gated da profilo, quindi va omesso qui — esattamente
+      # come fa docker-compose.yml (produzione) con mycelium/microwarp.
+
+  # Stesso microwarp della stack di produzione (docker-compose.yml), duplicato
+  # qui per poter testare il routing VPN direttamente dal dev container con `air`.
+  # Non richiede credenziali: si auto-registra un account WARP gratuito al
+  # primo avvio (persistito in ../data/microwarp). Avvialo solo quando serve
+  # testare il routing VPN di un plugin. -p è OBBLIGATORIO: senza, podman-compose
+  # calcola un project name diverso da quello che usa VS Code per il resto
+  # dello stack (basename di questa cartella, "devcontainer", invece di
+  # "mycelium-core_devcontainer") e microwarp finisce su una rete Docker
+  # isolata — si connette regolarmente, ma "microwarp" non risolve più dal
+  # container "dev" (visto succedere con gluetun: dial tcp: lookup gluetun
+  # ... no such host).
+  #   podman-compose -p mycelium-core_devcontainer -f .devcontainer/docker-compose.dev.yml --profile vpn up -d microwarp
+  #
+  # Era caomingjun/warp (warp-cli ufficiale Cloudflare) fino al 2026-08-18:
+  # sostituito con MicroWARP (github.com/ccbkkb/MicroWARP) perché warp-svc ha
+  # una memory leak nota, segnalata da anni su tutte le piattaforme, mai
+  # risolta ufficialmente (community.cloudflare.com/t/warp-svc-memory-leak-grows-from-80mb-to-1gb-over-time/933027)
+  # — verificato dal vivo qui: 183MB su un limite di 192MB dopo 3 giorni di
+  # uptime, in crescita costante (la nota precedente su questa riga, "nessuna
+  # crescita continua osservata: non un leak", veniva da un'osservazione di
+  # 1 minuto — troppo corta per vedere una leak lenta). Un riavvio periodico
+  # (il workaround standard della community) rompe uno streaming video in
+  # corso, quindi scartato. MicroWARP usa WireGuard del kernel Linux
+  # direttamente invece del demone Cloudflare in userspace: nessuno stato che
+  # si accumula nel tempo, verificato dal vivo (1.5-2.7MB anche dopo un
+  # download di 10MB attraverso il proxy, warp=on confermato sul trace
+  # Cloudflare).
+  microwarp:
+    image: ghcr.io/ccbkkb/microwarp:latest
+    # Nome fisso: sia per la risoluzione DNS "microwarp" (in realtà già
+    # garantita dall'alias di rete legato al nome del servizio, anche senza
+    # questo) sia perché internal/managers/docker_stats.go interroga l'API
+    # Docker per nome container esatto ("microwarp") — senza, il nome
+    # dipende dal project name di compose, imprevedibile lato Go. Stesso
+    # motivo/pattern di container_name: redis più sotto.
+    container_name: microwarp
+    profiles: ["vpn"]
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      # SYS_MODULE volutamente NON incluso: il modulo wireguard è già
+      # caricato nel kernel dell'host (verificato con `lsmod` il
+      # 2026-08-18) — vedi il commento gemello in docker-compose.yml.
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+    # Vedi il commento gemello in docker-compose.yml sul perché serve DNS
+    # esplicito (il resolver locale dell'host non è raggiungibile una volta
+    # che il tunnel WireGuard prende il routing di default).
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    ports:
+      - "1080:1080"
+    environment:
+      - BIND_ADDR=0.0.0.0
+      - BIND_PORT=1080
+    volumes:
+      - ../data/microwarp:/etc/wireguard
+
+  # cobweb — NON è più un servizio di questo stack. Girava qui come
+  # `image: cobweb:latest` (build locale) sempre acceso, e pubblicava 8191:
+  # questo si scontrava con il devcontainer del repo cobweb (~/Dev/Rust/cobweb),
+  # che pubblica anch'esso 8191, e usava un'immagine facilmente stantia.
+  # Ora mycelium ci arriva via COBWEB_ADDR=http://host.docker.internal:8191
+  # (vedi il servizio `dev` sopra). Avvialo in UNO di questi modi:
+  #   • devcontainer del repo cobweb + `cargo run`  (codice sempre aggiornato)
+  #   • `cd ~/Dev/Rust/cobweb && docker run --rm -p 8191:8191 \
+  #        -v $PWD/../../Go/mycelium-core/cobweb.toml:/config/config.toml:ro \
+  #        -v $PWD/../../Go/mycelium-core/data/cobweb:/data cobweb:latest`
+  # cobweb irraggiungibile è tollerato: browser_client.go ritenta per-chiamata.
+
+  redis:
+    image: redis:7-alpine
+    # Stesso motivo di docker-compose.yml: nome fisso per interrogarne CPU/RAM
+    # via API Docker (internal/managers/docker_stats.go).
+    container_name: redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  redis_data:

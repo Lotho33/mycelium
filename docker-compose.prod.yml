@@ -1,0 +1,224 @@
+# Home-server stack — pulls prebuilt mycelium/cobweb images from a registry
+# instead of building from source, and lets Watchtower auto-update on every new
+# release tag. Point MYCELIUM_IMAGE / COBWEB_IMAGE at your registry in a .env
+# next to this file (defaults: ghcr.io/lotho33/...).
+#
+# Counterpart of docker-compose.yml (the dev-box file that builds from source).
+# Deploy:
+#   docker login <your-registry>          # once, as the compose user
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# microwarp (Cloudflare WARP egress) now starts with the stack — no --profile.
+# It is always available but never forced: each plugin picks its network exit
+# ("direct" by default, "warp", or an operator-added proxy) in the dashboard
+# → Impostazioni → VPN → "Uscite di rete". To disable WARP entirely, scale it
+# to 0 (`docker compose -f docker-compose.prod.yml up -d --scale microwarp=0`).
+#
+# ── network_mode: host ──────────────────────────────────────────────────────
+# mycelium/cobweb/redis run on the host's network namespace, NOT a bridge:
+#   * the Pileus LAN discovery (UDP broadcast on :51900) only works this way —
+#     Docker does not deliver broadcast packets to a bridged container's
+#     published ports;
+#   * ResolveStream can then autodetect the host's real IP for the video
+#     proxy URLs (peer.LocalAddr) — no server_host to set by hand.
+# Trade-off: the services bind their ports directly on the host (no `ports:`
+# mapping) and talk to each other over 127.0.0.1. Fine on a dedicated CT/VM.
+# redis binds loopback-only; cobweb binds 0.0.0.0:8191 (its config has no bind
+# knob) so it is also reachable on the LAN IP — an internal service, low risk.
+# microwarp stays bridged: with host networking its WireGuard tunnel would
+# hijack the whole host's default route.
+#
+# Rollback / pin: set MYCELIUM_TAG=1.4.2 (or COBWEB_TAG=…) in a .env next to
+# this file, `up -d`, and comment out that service's Watchtower label.
+# See docs/deploy-selfhosted.md for the full walk-through.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    network_mode: host
+    mem_limit: 64m
+    memswap_limit: 64m
+    command: redis-server --bind 127.0.0.1 --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "set", "__healthcheck__", "1", "EX", "10"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # cobweb — the optional companion browser service (separate repo:
+  # https://github.com/Lotho33/cobweb). Override COBWEB_IMAGE / COBWEB_TAG in a
+  # .env next to this file to point at your own registry / pin a version.
+  cobweb:
+    image: ${COBWEB_IMAGE:-ghcr.io/lotho33/cobweb}:${COBWEB_TAG:-latest}
+    container_name: cobweb
+    restart: unless-stopped
+    network_mode: host
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    mem_limit: 2048m
+    memswap_limit: 2048m
+    volumes:
+      - ./data/cobweb:/data
+      - ./cobweb.toml:/config/config.toml:ro
+    # The released cobweb image has no wget/curl, so probe the port with a
+    # bash /dev/tcp connect (bash ships in debian:bookworm-slim). Switch back
+    # to an HTTP /health check once the image bundles a client.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8191' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+  mycelium:
+    image: ${MYCELIUM_IMAGE:-ghcr.io/lotho33/mycelium}:${MYCELIUM_TAG:-latest}
+    container_name: mycelium
+    restart: unless-stopped
+    network_mode: host
+    # 400m OOM-killava al boot (caricamento plugin + warmup cataloghi, per
+    # giunta amplificato dalle tempeste di retry se la rete plugin fallisce).
+    # 768m dà margine; GOMEMLIMIT sotto lascia respirare il GC.
+    mem_limit: 768m
+    memswap_limit: 768m
+    labels:
+      # Watchtower only touches containers carrying this label. Comment it out
+      # to freeze mycelium on its current tag.
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      redis:
+        condition: service_healthy
+      cobweb:
+        condition: service_healthy
+    volumes:
+      # Named volume, NOT a bind mount of the repo: bundled plugins now ship
+      # inside the image and the entrypoint (MYCELIUM_PLUGIN_SYNC=1) copies
+      # them in on every start, so a Watchtower image update delivers plugin
+      # changes on its own — no `git pull` on the host. The volume still
+      # persists dashboard-uploaded plugins and the per-plugin runtime caches.
+      - mycelium_plugins:/app/plugins
+      - ./data:/app/data
+      # WireGuard egress configs (Fase C). Its own named volume — mounted here
+      # AND read-only into every wireproxy-<name> sidecar mycelium creates over
+      # the Docker socket — so mycelium never needs to know its own host path.
+      - mycelium_wireproxy:/app/data/wireproxy
+      # Metrics + sidecar lifecycle (create/start/stop wireproxy-<name>).
+      # WARNING: write access to this socket is root-equivalent on the host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MYCELIUM_BASE=/app
+      - REDIS_ADDR=127.0.0.1:6379
+      - COBWEB_ADDR=http://127.0.0.1:8191
+      # Host/IP the clients use to reach this server — for the video proxy
+      # URLs. Empty: autodetected from the gRPC connection (works with
+      # network_mode: host). Set it (here or the dashboard) only in bridge
+      # mode or behind a reverse proxy.
+      - MYCELIUM_SERVER_HOST=${MYCELIUM_SERVER_HOST-}
+      # Seed dell'uscita "warp" nel registry egress (vedi internal/managers/
+      # egress.go, InitEgressDefaults). microwarp gira sempre e pubblica 1080
+      # sull'host, quindi il default punta lì; i plugin restano comunque su
+      # "direct" finché non si sceglie "warp" dalla dashboard. Override in
+      # .env per un proxy diverso, o stringa vuota per non seminare nulla.
+      - VPN_PROXY_URL=${VPN_PROXY_URL:-socks5://127.0.0.1:1080}
+      - MYCELIUM_DOCKER=1
+      # Sync image-bundled plugins into the plugins volume on start.
+      - MYCELIUM_PLUGIN_SYNC=1
+      # Resolve+dial upstream CDNs over IPv6 first (A fallback). This host's
+      # IPv4 egress is CGNAT'd onto a shared range with a poor reputation that
+      # some CDNs reject; the same fetch over its clean public IPv6 goes
+      # through. Drop this line on a deployment with a clean dedicated IPv4 /
+      # no IPv6.
+      - MYCELIUM_EGRESS_IPV6=1
+      # Immagine dei sidecar WireGuard (Fase C). Vuoto = usa l'immagine
+      # mycelium stessa (include il binario wireproxy, è già sul CT, nessun
+      # registry di terzi da raggiungere). Impostala SOLO se vuoi un'immagine
+      # wireproxy dedicata e sai che si scarica dal CT.
+      - MYCELIUM_WIREPROXY_IMAGE=${MYCELIUM_WIREPROXY_IMAGE:-}
+      - TZ=Europe/Rome
+      - GOMEMLIMIT=600MiB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # Cloudflare WARP egress. Starts with the stack (no profile) so "warp" is
+  # always a selectable exit; plugins opt in per-plugin from the dashboard.
+  # Bridged on purpose (see header note). mycelium reaches it at
+  # socks5://127.0.0.1:1080 (published below).
+  microwarp:
+    image: ghcr.io/ccbkkb/microwarp:latest
+    container_name: microwarp
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    ports:
+      - "127.0.0.1:1080:1080"
+    environment:
+      - BIND_ADDR=0.0.0.0
+      - BIND_PORT=1080
+    volumes:
+      - ./data/microwarp:/etc/wireguard
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace | grep -qE 'warp=(plus|on)'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  # Userspace WireGuard → SOCKS5 (Fase C). There is NO static service here:
+  # for each WireGuard .conf the operator drags onto the dashboard
+  # (Impostazioni → VPN → Uscite di rete), mycelium creates a dedicated
+  # `wireproxy-<name>` container over the Docker socket — image
+  # ghcr.io/whyvl/wireproxy (pulled on demand), bridged, publishing its SOCKS5
+  # on 127.0.0.1:1081..1099, config read-only from the mycelium_wireproxy
+  # volume. enable/disable/delete from the dashboard drive each one; a server
+  # restart re-applies them (ReapplyWireproxyAtBoot). No cap_add needed —
+  # wireproxy is pure userspace, no kernel WireGuard.
+
+  # Polls the Forgejo registry every 5 min and recreates any container
+  # carrying `com.centurylinklabs.watchtower.enable=true` when its image tag
+  # has a newer digest. Cleans up superseded image layers.
+  #
+  # Registry auth: reads the host's Docker credentials — run
+  # `docker login <your-registry>` once on this host before starting.
+  # containrrr/watchtower is unmaintained; its client speaks Docker API 1.25,
+  # which modern daemons (>= 1.40) reject — DOCKER_API_VERSION pins a version
+  # both accept. If it breaks on a newer daemon, swap for the maintained fork
+  # `nickfedor/watchtower:latest` (drop-in, same env) and drop the pin.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    environment:
+      - DOCKER_API_VERSION=1.40
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_ROLLING_RESTART=true
+      - TZ=Europe/Rome
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # host Docker credentials (from `docker login <your-registry>`).
+      # Override with DOCKER_CONFIG_JSON in .env if the path differs.
+      - ${DOCKER_CONFIG_JSON:-${HOME}/.docker/config.json}:/config.json:ro
+
+volumes:
+  redis_data:
+  mycelium_plugins:
+  # Explicit name: so the wireproxy-<name> sidecars (created by mycelium over
+  # the Docker socket, outside compose's project namespace) can bind it by a
+  # stable, predictable name.
+  mycelium_wireproxy:
+    name: mycelium_wireproxy

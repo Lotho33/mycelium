@@ -1,0 +1,219 @@
+services:
+  redis:
+    image: redis:7-alpine
+    # Nome fisso: la dashboard admin lo usa per interrogare l'API Docker
+    # (internal/managers/docker_stats.go) e leggerne CPU/RAM — senza un nome
+    # esplicito dipenderebbe dal project name di compose (es. "mycelium-core-redis-1"),
+    # non prevedibile lato Go.
+    container_name: redis
+    restart: unless-stopped
+    # Hard cap + memswap_limit uguale a mem_limit = niente swap per questo
+    # container (su host poco potenti lo swap è spesso su storage lento,
+    # meglio un riavvio pulito che un degrado silenzioso).
+    mem_limit: 64m
+    memswap_limit: 64m
+    command: redis-server --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "set", "__healthcheck__", "1", "EX", "10"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # cobweb — the optional companion browser service (separate project, its own
+  # repo: https://github.com/Lotho33/cobweb). mycelium talks to it over plain
+  # HTTP (internal/managers/browser_client.go) and never launches a browser
+  # itself. "image: cobweb:latest" here is a locally-built image
+  # (docker build -t cobweb:latest .  from the cobweb repo) — swap for a
+  # published registry reference.
+  cobweb:
+    image: cobweb:latest
+    container_name: cobweb
+    restart: unless-stopped
+    # A single headed Chromium (under Xvfb) serving both the automated sniff
+    # and the interactive VNC session measures ~500-600 MB PSS active, peaking
+    # ~700 MB-1.1 GB during a manual session (a cross-origin verification
+    # iframe spins up an extra renderer). 2048m is comfortable headroom for
+    # `max_contexts: 2`; lower it once real usage confirms it's safe.
+    mem_limit: 2048m
+    memswap_limit: 2048m
+    # VPN-routed plugins forward VPN_PROXY_URL (socks5://host.docker.internal:1080)
+    # down to mycelium.browser.sniff() → here, as the request's proxy_url. cobweb
+    # is a SEPARATE container and without this couldn't resolve
+    # "host.docker.internal" on its own — each container resolves DNS independently.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8191:8191"
+    volumes:
+      - ./data/cobweb:/data
+      - ./cobweb.toml:/config/config.toml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8191/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  mycelium:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: dev
+    image: mycelium:latest
+    container_name: mycelium
+    restart: unless-stopped
+    # 400m copre l'heap Go (soft-capped a 350 MiB via GOMEMLIMIT, vedi sotto)
+    # più l'overhead runtime — niente più browser qui, gira nel container
+    # cobweb a parte. memswap_limit = mem_limit disabilita lo swap: su host
+    # poco potenti preferiamo un riavvio pulito (restart: unless-stopped) a
+    # un degrado silenzioso per swap thrashing.
+    mem_limit: 400m
+    memswap_limit: 400m
+    depends_on:
+      redis:
+        condition: service_healthy
+      cobweb:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+      - "8000:8000"
+      # Discovery LAN per Pileus (internal/api/discovery.go) — risponditore
+      # UDP, non un servizio TCP: Pileus manda un broadcast, mycelium
+      # risponde con IP/porte/fingerprint TLS, così l'app trova il server da
+      # sola invece di richiedere l'IP a mano. Sostituisce il vecchio mDNS
+      # via Avahi (mai realmente funzionante in Docker).
+      - "51900:51900/udp"
+    volumes:
+      - ./plugins:/app/plugins
+      - ./data:/app/data
+      # Dà alla dashboard admin le metriche CPU/RAM reali del container warp
+      # (GET /containers/warp/stats via internal/managers/docker_stats.go).
+      # ATTENZIONE: chiunque scriva su questo socket ottiene controllo pieno
+      # del daemon Docker dell'host — root-equivalent (può lanciare container
+      # privilegiati, montare il filesystem host, leggere/killare qualunque
+      # altro container). Un ":ro" qui NON limita l'API esposta sul socket,
+      # solo l'immutabilità del file — quindi non dà una vera sicurezza in più.
+      # Questo container esegue anche plugin Lua installabili dall'admin UI:
+      # oggi mycelium.network.* usa un http.Client standard che non supporta
+      # lo schema unix:// (nessun Transport.RegisterProtocol registrato), quindi
+      # i plugin non possono raggiungere il socket tramite l'SDK di rete — ma
+      # il mount resta un'espansione reale della superficie d'attacco, scelta
+      # consapevolmente per avere metriche vere sul container WARP.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - MYCELIUM_BASE=/app
+      - REDIS_ADDR=redis:6379
+      # cobweb — vedi il commento sul servizio cobweb sopra. Solo HTTP.
+      - COBWEB_ADDR=http://cobweb:8191
+      # VPN proxy for plugin traffic — every plugin by default, except those that
+      # declare direct_egress: true (which can still opt in per-request with _proxy=true).
+      # Leave empty to run without a VPN. To enable, start the microwarp service
+      # (`docker compose --profile vpn up`) — it self-registers a free
+      # Cloudflare WARP account on first boot, no credentials needed.
+      #
+      # host.docker.internal, NOT socks5://microwarp:1080 — verificato dal
+      # vivo il 2026-08-18: una connessione diretta container-a-container
+      # sulla rete bridge Docker verso microwarp:1080 va in timeout (SYN
+      # inviato, nessuna risposta), quasi certamente routing asimmetrico nel
+      # policy-routing WireGuard di MicroWARP (fwmark + tabelle di routing
+      # multiple) che non gestisce bene traffico da un altro peer sulla
+      # stessa subnet bridge. La stessa identica richiesta funziona invece
+      # passando per la porta pubblicata sull'host (172.17.0.1, già
+      # raggiungibile qui sotto via extra_hosts) — il traffico NAT'ato del
+      # port-forward evidentemente non incappa nello stesso problema.
+      - VPN_PROXY_URL=socks5://host.docker.internal:1080
+      - MYCELIUM_DOCKER=1
+      - TZ=Europe/Rome
+      # Soft heap cap per il GC di Go (vedi cmd/server/main.go: applyMemoryLimit).
+      # Impostato qui esplicitamente per renderlo visibile/regolabile senza
+      # ricompilare; deve restare sotto mem_limit per lasciare margine
+      # all'overhead non-heap.
+      - GOMEMLIMIT=350MiB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # Optional VPN gateway. Start with:  docker compose --profile vpn up -d
+  # then set VPN_PROXY_URL=socks5://microwarp:1080 on the mycelium service
+  # above (already the default). Not a traditional VPN provider: it
+  # self-registers a free Cloudflare WARP account on first boot — no
+  # credentials, no config file to upload. Traffic egresses from Cloudflare's
+  # own consumer edge network rather than a datacenter IP range, which some
+  # upstreams treat more favourably — no guarantee, and it does not pick an
+  # exit country.
+  #
+  # Era caomingjun/warp (warp-cli ufficiale Cloudflare) fino al 2026-08-18:
+  # sostituito con MicroWARP (github.com/ccbkkb/MicroWARP) perché warp-svc
+  # (il demone Cloudflare vero e proprio dentro quell'immagine) ha una memory
+  # leak nota, segnalata da anni su tutte le piattaforme, mai risolta
+  # ufficialmente (community.cloudflare.com/t/warp-svc-memory-leak-grows-from-80mb-to-1gb-over-time/933027)
+  # — verificato dal vivo qui: 183MB su un limite di 192MB dopo 3 giorni di
+  # uptime, in crescita costante. Un riavvio periodico (il workaround
+  # standard della community) non andava bene per questo deployment: rompe
+  # uno streaming video in corso (nessun killswitch/retry lato mycelium
+  # durante il restart di un proxy VPN richiesto). MicroWARP usa WireGuard
+  # del kernel Linux direttamente invece del demone Cloudflare in userspace
+  # — nessuno stato che si accumula nel tempo, quindi nessuna leak da
+  # riavviare. Verificato dal vivo: 1.5-2.7MB di RAM anche dopo un
+  # download di 10MB attraverso il proxy (contro i 150MB+ di warp-svc),
+  # nessuna crescita con l'uso, warp=on confermato sul trace Cloudflare.
+  microwarp:
+    image: ghcr.io/ccbkkb/microwarp:latest
+    container_name: microwarp
+    profiles: ["vpn"]
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      # SYS_MODULE volutamente NON incluso: il modulo wireguard è già
+      # caricato nel kernel dell'host (verificato con `lsmod` il
+      # 2026-08-18), MicroWARP non ha bisogno di caricarlo da sé — evita
+      # di dare al container la capacità di inserire moduli kernel
+      # nell'host, un privilegio più pesante di quanto serva qui. Se su un
+      # host diverso (senza wireguard già caricato) il container fallisse
+      # all'avvio con un errore tipo "could not insmod wireguard", va
+      # riaggiunta qui.
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+    # Senza questo, il container eredita il resolver DNS locale dell'host
+    # (via /etc/resolv.conf di Docker) — irraggiungibile una volta che il
+    # tunnel WireGuard prende il routing di default, perché è un IP privato
+    # non instradabile attraverso l'edge Cloudflare. Risultato: ogni
+    # richiesta per hostname si blocca in resolution (le richieste per IP
+    # nudo funzionano lo stesso, il che rende il problema subdolo — sembra
+    # "quasi funzionare"). Verificato dal vivo il 2026-08-18: senza questo,
+    # `curl --socks5-hostname` su un hostname si impantana silenziosamente;
+    # con questo, risposta pulita e warp=on confermato. 1.1.1.1/1.0.0.1 sono
+    # scelti apposta: sono nella rete Cloudflare, quindi raggiungibili
+    # attraverso lo stesso tunnel.
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    ports:
+      - "1080:1080"
+    environment:
+      - BIND_ADDR=0.0.0.0
+      - BIND_PORT=1080
+    volumes:
+      # Persistenza dell'identità WireGuard registrata — senza questo, ogni
+      # riavvio ri-registra un nuovo device presso Cloudflare e rischia
+      # rate limit (stessa ragione del volume ./data/warp sopra).
+      - ./data/microwarp:/etc/wireguard
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace | grep -qE 'warp=(plus|on)'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  redis_data:

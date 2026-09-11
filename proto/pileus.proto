@@ -1,0 +1,252 @@
+// DEPRECATED: questo file non viene compilato né usato dal server.
+// Le definizioni proto autorevoli si trovano in stipes-sdk/proto/.
+// Il server importa i pacchetti generati da lì via go.mod replace.
+
+syntax = "proto3";
+
+package pileus;
+
+option go_package = "mycelium/internal/pileus/gen;pileusgen";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthService — Pileus → Core
+// Handles device pairing (master PIN) and profile management.
+// All subsequent calls carry JWT via metadata "authorization: Bearer <token>"
+// and "x-profile-id: <uuid>".
+// ─────────────────────────────────────────────────────────────────────────────
+
+message AuthorizeDeviceRequest {
+  string device_id  = 1; // UUID generated on first launch by client
+  string pin_hash   = 2; // SHA-256(PIN) hex — never send raw PIN
+}
+
+message AuthorizeDeviceResponse {
+  string device_jwt       = 1; // Long-lived JWT (30 days)
+  int64  expires_at       = 2; // Unix timestamp
+  string error            = 3; // Non-empty on failure
+}
+
+message CreateProfileRequest {
+  string name            = 1;
+  string avatar_url      = 2;
+  bool   is_child        = 3;
+  string parental_pin_hash = 4; // SHA-256(4-digit PIN), empty = no lock
+}
+
+message ProfileResponse {
+  string profile_id   = 1;
+  string name         = 2;
+  string avatar_url   = 3;
+  bool   is_child     = 4;
+  bool   has_pin      = 5; // true if profile has a parental PIN set
+}
+
+message ListProfilesRequest {}
+message ListProfilesResponse {
+  repeated ProfileResponse profiles = 1;
+}
+
+message DeleteProfileRequest {
+  string profile_id = 1;
+}
+message DeleteProfileResponse {
+  bool   ok    = 1;
+  string error = 2;
+}
+
+// Verify that the PIN (SHA-256 hash) matches the stored profile PIN.
+// Used as a double-check server-side (client also checks locally).
+message VerifyProfilePinRequest {
+  string profile_id = 1;
+  string pin_hash   = 2;
+}
+message VerifyProfilePinResponse {
+  bool ok = 1;
+}
+
+message UpdateProfileRequest {
+  string profile_id       = 1;
+  string name             = 2; // empty = keep current
+  string avatar_url       = 3; // empty = keep current
+  bool   is_child         = 4;
+  string parental_pin_hash = 5; // empty = remove PIN; "keep" = unchanged
+}
+
+message RefreshTokenRequest {}
+
+message DeviceInfo {
+  string device_id    = 1;
+  string label        = 2; // human-readable name set by user
+  int64  created_at   = 3; // Unix timestamp
+  int64  last_seen_at = 4; // Unix timestamp
+}
+message ListDevicesRequest {}
+message ListDevicesResponse {
+  repeated DeviceInfo devices = 1;
+}
+
+message RenameDeviceRequest {
+  string device_id = 1;
+  string label     = 2;
+}
+message RenameDeviceResponse {
+  bool ok = 1;
+}
+
+service AuthService {
+  rpc AuthorizeDevice  (AuthorizeDeviceRequest)  returns (AuthorizeDeviceResponse);
+  rpc CreateProfile    (CreateProfileRequest)    returns (ProfileResponse);
+  rpc ListProfiles     (ListProfilesRequest)     returns (ListProfilesResponse);
+  rpc DeleteProfile    (DeleteProfileRequest)    returns (DeleteProfileResponse);
+  rpc VerifyProfilePin (VerifyProfilePinRequest) returns (VerifyProfilePinResponse);
+  rpc UpdateProfile    (UpdateProfileRequest)    returns (ProfileResponse);
+  rpc RefreshToken     (RefreshTokenRequest)     returns (AuthorizeDeviceResponse);
+  rpc ListDevices      (ListDevicesRequest)      returns (ListDevicesResponse);
+  rpc RenameDevice     (RenameDeviceRequest)     returns (RenameDeviceResponse);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MediaPipeline — Pileus → Core
+// Delegates internally to Provider plugins (Browse/Search/Resolve).
+// ─────────────────────────────────────────────────────────────────────────────
+
+message MediaItem {
+  string id              = 1;
+  string title           = 2;
+  string provider_id     = 3;
+  // media_type values: "movie"|"series"|"episode"|"live"|"music"|"audiobook"|"vod_clip"
+  string media_type      = 4;
+  string poster_url      = 5;
+  string fanart_url      = 6;
+  string plot            = 7;
+  int32  year            = 8;
+  double rating          = 9;
+  repeated string genres = 10;
+  bool   is_dir          = 11; // true → navigate (Browse), false → play
+  string parent_id       = 12;
+  string show_id         = 13;
+  int32  season_number   = 14;
+  int32  episode_number  = 15;
+  map<string, string> extra = 16;
+  // Rich metadata — populated by GetDetails, optional in catalog listings
+  string          audio_tracks    = 17; // JSON array: ["ITA","ENG"]
+  string          subtitle_tracks = 18; // JSON array: ["ITA","ENG"]
+  string          runtime         = 19; // "120 min" | "45 min"
+  repeated string cast            = 20;
+  repeated string directors       = 21;
+  string          trailer_url     = 22;
+  string          released        = 23; // ISO 8601 air date for episodes
+  string          logo_url        = 24; // transparent wordmark PNG/SVG
+  string          banner_url      = 25; // wide landscape (AniList banner / TMDB backdrop banner-mode)
+}
+
+message CatalogRequest {
+  string plugin_id  = 1;
+  string catalog_id = 2; // "trending" | "new" | catalog declared in manifest
+  int32  page       = 3;
+}
+message CatalogResponse {
+  repeated MediaItem items   = 1;
+  bool               has_more = 2;
+}
+
+message SearchRequest {
+  string plugin_id = 1;
+  string query     = 2;
+  int32  page      = 3;
+}
+message SearchResponse {
+  repeated MediaItem items    = 1;
+  bool               has_more = 2;
+}
+
+message DetailsRequest {
+  string plugin_id = 1;
+  string media_id  = 2;
+}
+message DetailsResponse {
+  MediaItem          item    = 1;
+  repeated SeasonInfo seasons = 2; // non-empty for series
+}
+message SeasonInfo {
+  int32  number       = 1;
+  string label        = 2;
+  string directory_id = 3; // pass to BrowseRequest.parent_id
+  string poster_url   = 4;
+}
+
+message BrowseRequest {
+  string plugin_id  = 1;
+  string parent_id  = 2; // season directory_id or show_id
+  string child_id   = 3; // optional sub-directory (episode group)
+  int32  page       = 4;
+}
+message BrowseResponse {
+  repeated MediaItem items    = 1;
+  bool               has_more = 2;
+}
+
+message StreamSource {
+  string id      = 1;
+  string label   = 2;
+  string quality = 3; // "1080p" | "720p" | "SD" | "Live" …
+  bool   is_live = 4;
+}
+message StreamsRequest {
+  string plugin_id = 1;
+  string media_id  = 2;
+}
+message StreamsResponse {
+  repeated StreamSource sources = 1;
+}
+
+message ResolveRequest {
+  string plugin_id = 1;
+  string stream_id = 2; // StreamSource.id from StreamsResponse
+}
+message ResolveResponse {
+  string              resolved_url = 1;
+  map<string, string> http_headers = 2;
+  bool                is_live      = 3;
+  string              error        = 4;
+}
+
+message ProgressRequest {
+  string plugin_id        = 1;
+  string media_id         = 2;
+  string parent_id        = 3; // series/season context, may be empty
+  int64  current_position = 4; // seconds
+  int64  total_duration   = 5; // seconds, 0 if unknown
+}
+message ProgressResponse {
+  bool ok = 1;
+}
+
+message PluginListRequest {}
+message PluginInfo {
+  string plugin_id    = 1;
+  string name         = 2;
+  string version      = 3;
+  bool   is_ready     = 4;
+  repeated string capabilities = 5;
+  repeated CatalogDef catalogs = 6;
+}
+message CatalogDef {
+  string id   = 1;
+  string name = 2;
+  string type = 3; // "movie" | "series" | "tv"
+}
+message PluginListResponse {
+  repeated PluginInfo plugins = 1;
+}
+
+service MediaPipeline {
+  rpc GetCatalog   (CatalogRequest)    returns (CatalogResponse);
+  rpc Search       (SearchRequest)     returns (SearchResponse);
+  rpc GetDetails   (DetailsRequest)    returns (DetailsResponse);
+  rpc Browse       (BrowseRequest)     returns (BrowseResponse);
+  rpc GetStreams    (StreamsRequest)    returns (StreamsResponse);
+  rpc ResolveStream(ResolveRequest)    returns (ResolveResponse);
+  rpc UpdateProgress(ProgressRequest)  returns (ProgressResponse);
+  rpc ListPlugins  (PluginListRequest) returns (PluginListResponse);
+}

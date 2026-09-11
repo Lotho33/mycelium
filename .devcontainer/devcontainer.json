@@ -1,0 +1,28 @@
+{
+  "name": "Mycelium Core",
+  "dockerComposeFile": "docker-compose.dev.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace/mycelium-core",
+  "shutdownAction": "stopCompose",
+  "forwardPorts": [8000, 50051],
+  "portsAttributes": {
+    "8000": { "label": "HTTP API" },
+    "50051": { "label": "gRPC Pileus" },
+    "8191": { "label": "cobweb", "onAutoForward": "ignore" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.go"],
+      "settings": {
+        "go.toolsManagement.autoUpdate": true,
+        "go.useLanguageServer": true,
+        "[go]": {
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
+        }
+      }
+    }
+  },
+  "postCreateCommand": "go mod tidy; go install github.com/air-verse/air@latest; go install github.com/go-delve/delve/cmd/dlv@latest"
+}

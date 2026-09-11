@@ -1,0 +1,50 @@
+id: "jellyfin"
+name: "Jellyfin"
+icon: icon.svg
+version: "1.0.0"
+author: "dev"
+description: "Libreria personale da un server Jellyfin (API key ufficiale, nessuno scraping)"
+direct_egress: true # server sulla LAN dell'operatore: uscita diretta, mai via VPN
+# Server personale sulla stessa rete privata del player, HTTP semplice con
+# l'api_key già nella query string: il proxy HLS/segmenti di mycelium non
+# serve a niente qui e il suo timeout di 60s sull'intera richiesta (pensato
+# per singoli segmenti TS) tronca a metà i file grandi in direct-play.
+direct_stream: true
+
+settings:
+  global:
+    - id: "jellyfin_url"
+      label: "URL server Jellyfin (es. http://192.168.1.10:8096)"
+      type: "string"
+      required: true
+    - id: "jellyfin_api_key"
+      label: "API Key (Dashboard → API Keys)"
+      type: "password"
+      hidden: true
+      required: true
+
+exposes:
+  capabilities:
+    - "search"
+    - "browse"
+  # Fallback statico — usato solo se catalog_list fallisce o è lento al cold start.
+  catalogs:
+    - id: "latest"
+      name: "Aggiunti di Recente"
+      type: "movie"
+      style_hint: "featured"
+      cache_ttl_seconds: 300
+      auto_hide_when_empty: true
+
+entrypoints:
+  catalog:      "get_catalog"
+  catalog_list: "get_catalog_list"
+  search:       "search_items"
+  details:      "get_details"
+  streams:      "get_streams"
+  resolve:      "resolve_stream"
+  browse:       "browse"
+
+tasks:
+  - function: "check_connection"
+    cron: "@every 15m"

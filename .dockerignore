@@ -1,0 +1,32 @@
+# Keep the build context small. In CI the image is built from a shallow
+# `git clone` of the tag (already clean), but a local `docker compose build`
+# has the working tree next to it — .git, data/, tmp/ and the agent
+# worktrees under .claude/ are hundreds of MB.
+
+.git
+.gitignore
+.claude
+.devcontainer
+.air.toml
+
+# runtime data / logs / local db
+data
+tmp
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# regenerated at runtime, never needed for the build
+plugins/*/catalog_cache.json
+plugins/*/logo_cache.json
+plugins/*/fribb_index.json
+plugins/*/avail_cache.json
+
+# not consumed by the image
+docker-compose*.yml
+README.md
+docs/*.md
+cobweb.toml
+.env
+.env.example
