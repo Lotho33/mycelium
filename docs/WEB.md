@@ -71,6 +71,9 @@ the browser can reach.
   client uses an absolute `<origin>/grpc/` channel, so `/app/` is fine — moving
   the bundle to `/` would collide with existing root paths (`/health`,
   `/assets`, `/manifest.json`, …).
-- `/proxy/*` and `/img` are an **open proxy** (no signature on `data`/`u`, no
-  SSRF denylist, no rate-limit). Tracked for the pre-publication security pass —
-  see the audit plan in the Obsidian vault.
+- `/proxy/*` URLs are HMAC-signed (`data`, `origin`, `cookies`, `xhdr`, `vpn`,
+  `egr`, `sid`) — see `internal/core/proxy_sign.go` — so they can't be replayed
+  or forged, but there's still no SSRF denylist on the resolved upstream host
+  and no rate-limit. `/img` remains unsigned (fail-open image passthrough).
+  Tracked for the pre-publication security pass — see the audit plan in the
+  Obsidian vault.
