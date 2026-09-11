@@ -37,7 +37,7 @@ runner, no self-hosted runner or registry secret needed (`GITHUB_TOKEN`
 covers GHCR push + release creation).
 
 `MYCELIUM_RELEASE_REMOTE` (default `origin`) and `MYCELIUM_RELEASE_BRANCH`
-(default `dev`) override where the script pushes.
+(default `main`) override where the script pushes.
 
 The Go SDK is vendored at `third_party/stipes-sdk/` (a `replace` in `go.mod`),
 so the build needs only this one repo — no sibling checkout.

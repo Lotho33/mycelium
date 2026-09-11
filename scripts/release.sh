@@ -10,11 +10,11 @@
 # secret da configurare (GITHUB_TOKEN copre push GHCR + creazione release).
 #
 # Override: MYCELIUM_RELEASE_REMOTE (default: origin), MYCELIUM_RELEASE_BRANCH
-# (default: dev).
+# (default: main).
 set -euo pipefail
 
 REMOTE=${MYCELIUM_RELEASE_REMOTE:-origin}
-BRANCH=${MYCELIUM_RELEASE_BRANCH:-dev}
+BRANCH=${MYCELIUM_RELEASE_BRANCH:-main}
 VERSION_FILE=internal/core/version.go
 
 ver=${1:-}
