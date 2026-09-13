@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	nethttp "net/http"
 	"os"
 	"strings"
@@ -114,6 +115,14 @@ var cobwebDropHeaders = map[string]bool{
 }
 
 func (t *cobwebRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	// Defence in depth: cobweb (a separate, non-auditable-from-here Rust
+	// sidecar) does its own fetch of req.URL on mycelium's behalf. Refuse to
+	// even hand it a target that resolves to a blocked address, independent of
+	// whatever SSRF guard cobweb itself may or may not have.
+	if err := core.CheckURLNotSSRF(req.URL.String()); err != nil {
+		return nil, fmt.Errorf("cobweb relay: %w", err)
+	}
+
 	// Keep the request's User-Agent only when a session cookie (cf_clearance)
 	// is riding along — it's bound to that UA. Otherwise drop it (and its
 	// client-hints) so cobweb's wreq profile supplies a set consistent with

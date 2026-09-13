@@ -59,6 +59,51 @@ func currentBrowserClient() browserAPI {
 	return managers.BrowserClient
 }
 
+// maxSleepMillis caps mycelium.sleep(ms) at the same order of magnitude as
+// defaultEntrypointTimeout (lua_plugin.go) — a plugin has no legitimate reason
+// to sleep past its own call budget, and capping here bounds how long an
+// abandoned post-timeout goroutine can be kept alive by a single sleep call
+// even in the ctx == nil fallback path (no entrypoint deadline to race
+// against).
+const maxSleepMillis = int(defaultEntrypointTimeout / time.Millisecond)
+
+// maxSDKResponseBytes caps how much of an HTTP response body
+// mycelium.network.get/post/fetch will read into memory. Without it, a
+// compromised or merely malformed scrape target (a CDN serving a
+// multi-gigabyte file where a small JSON/HTML page was expected) gets read in
+// full by io.Copy into an unbounded bytes.Buffer — a silent memory DoS.
+// 32 MiB comfortably covers any legitimate catalog/page payload plugins parse
+// today while keeping a single runaway response cheap to discard.
+const maxSDKResponseBytes = 32 << 20 // 32 MiB
+
+// maxLogoImageBytes caps the source image mycelium.image.analyze_logo decodes.
+// Logos are small, deliberately-chosen brand assets (the module targets an
+// 800×200 normalized size) — a dedicated, smaller cap than
+// maxSDKResponseBytes catches a mismatched/hostile URL (e.g. a full video
+// file) before image.Decode allocates a full in-memory frame for it.
+const maxLogoImageBytes = 8 << 20 // 8 MiB
+
+// maxCacheValueBytes caps the serialized size of a single mycelium.cache.set
+// value before it is written to Redis. cache.set entries are meant for a
+// plugin's own API/catalog responses it wants to reuse across calls — not
+// arbitrary blobs — and a call can also pass ttl=0 (no expiry), so without a
+// cap a plugin (buggy or hostile) can grow the shared Redis instance without
+// bound simply by writing large values repeatedly. 4 MiB comfortably covers
+// any legitimate catalog/page payload (well under maxSDKResponseBytes, the
+// cap on the HTTP fetch that would have produced it) while keeping a single
+// key cheap to store and evict.
+const maxCacheValueBytes = 4 << 20 // 4 MiB
+
+// maxStorageWriteBytes caps the serialized size of a single
+// mycelium.storage.write_json payload before it is written to disk. Storage
+// files live in the plugin's own directory and can reasonably hold more than
+// one Redis cache entry (e.g. a plugin's full local catalog dump), so the cap
+// sits above maxCacheValueBytes — but still well under maxSDKResponseBytes,
+// since it is app-level JSON a plugin builds itself, not an arbitrary
+// downloaded file. Without this cap a plugin can fill its own plugin
+// directory (and, in aggregate, the host disk) with unbounded writes.
+const maxStorageWriteBytes = 16 << 20 // 16 MiB
+
 // SDKOpts carries the per-PLUGIN invariants injected into the Lua SDK modules.
 // It is passed once, when a pooled LState is built (RegisterSDK). The bits that
 // vary per entrypoint call — profile id, whether this call must be forced onto
@@ -143,10 +188,30 @@ func RegisterSDK(L *lua.LState, opts SDKOpts, scope *callScope) {
 		return 0
 	}))
 
+	// mycelium.sleep(ms) — blocks the calling Lua goroutine for up to ms
+	// milliseconds, capped at maxSleepMillis and cut short the moment the
+	// current entrypoint's context is done (its normal deadline, or an early
+	// cancellation). Without this, a plugin calling mycelium.sleep(hugeNumber)
+	// from a function that the 30s entrypoint timeout later abandons
+	// (callWithTimeout in lua_plugin.go never stops the goroutine, it just
+	// stops waiting on it) would keep that goroutine — and the *lua.LState it
+	// holds, discarded from the pool but not GC-able while still referenced —
+	// alive for the full requested sleep, unboundedly on every repeated call.
 	mycelium.RawSetString("sleep", L.NewFunction(func(L *lua.LState) int {
 		ms := L.OptInt(1, 0)
-		if ms > 0 {
-			time.Sleep(time.Duration(ms) * time.Millisecond)
+		if ms <= 0 {
+			return 0
+		}
+		if ms > maxSleepMillis {
+			ms = maxSleepMillis
+		}
+		ctx := scope.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		select {
+		case <-time.After(time.Duration(ms) * time.Millisecond):
+		case <-ctx.Done():
 		}
 		return 0
 	}))
@@ -256,7 +321,7 @@ func buildNetworkModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		}
 		defer resp.Body.Close()
 		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, resp.Body)
+		_, _ = io.Copy(&buf, io.LimitReader(resp.Body, maxSDKResponseBytes))
 
 		respHeaders := L.NewTable()
 		for k, vs := range resp.Header {
@@ -775,6 +840,11 @@ func buildCacheModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		key := L.CheckString(1)
 		val := L.CheckString(2)
 		ttl := L.OptInt(3, 0)
+		if len(val) > maxCacheValueBytes {
+			L.Push(lua.LFalse)
+			L.Push(lua.LString(fmt.Sprintf("cache.set: value too large (%d bytes, max %d)", len(val), maxCacheValueBytes)))
+			return 2
+		}
 		if opts.Redis == nil {
 			L.Push(lua.LFalse)
 			L.Push(lua.LString("redis unavailable"))
@@ -936,7 +1006,7 @@ func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		}
 		defer resp.Body.Close()
 
-		imgData, _, err := image.Decode(resp.Body)
+		imgData, _, err := image.Decode(io.LimitReader(resp.Body, maxLogoImageBytes))
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString("image decode: " + err.Error()))
@@ -1187,6 +1257,10 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		data, err := json.MarshalIndent(native, "", "  ")
 		if err != nil {
 			L.Push(lua.LString("json marshal: " + err.Error()))
+			return 1
+		}
+		if len(data) > maxStorageWriteBytes {
+			L.Push(lua.LString(fmt.Sprintf("storage.write_json: payload too large (%d bytes, max %d)", len(data), maxStorageWriteBytes)))
 			return 1
 		}
 		if err := os.WriteFile(path, data, 0644); err != nil {

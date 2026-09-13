@@ -101,14 +101,14 @@ services:
       # changes on its own — no `git pull` on the host. The volume still
       # persists dashboard-uploaded plugins and the per-plugin runtime caches.
       - mycelium_plugins:/app/plugins
+      # WireGuard egress configs (Fase C) live under data/wireproxy/, part of
+      # this same bind mount — no separate volume needed, wireproxy now runs
+      # as a subprocess of mycelium itself (see internal/managers/wireproxy.go)
+      # and reads the .conf straight off this filesystem. Nothing in mycelium
+      # needs /var/run/docker.sock any more — the old wireproxy-<name> sidecars
+      # (and the socket mount they required, root-equivalent on the host) are
+      # gone.
       - ./data:/app/data
-      # WireGuard egress configs (Fase C). Its own named volume — mounted here
-      # AND read-only into every wireproxy-<name> sidecar mycelium creates over
-      # the Docker socket — so mycelium never needs to know its own host path.
-      - mycelium_wireproxy:/app/data/wireproxy
-      # Metrics + sidecar lifecycle (create/start/stop wireproxy-<name>).
-      # WARNING: write access to this socket is root-equivalent on the host.
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - MYCELIUM_BASE=/app
       - REDIS_ADDR=127.0.0.1:6379
@@ -133,11 +133,6 @@ services:
       # through. Drop this line on a deployment with a clean dedicated IPv4 /
       # no IPv6.
       - MYCELIUM_EGRESS_IPV6=1
-      # Immagine dei sidecar WireGuard (Fase C). Vuoto = usa l'immagine
-      # mycelium stessa (include il binario wireproxy, è già sul CT, nessun
-      # registry di terzi da raggiungere). Impostala SOLO se vuoi un'immagine
-      # wireproxy dedicata e sai che si scarica dal CT.
-      - MYCELIUM_WIREPROXY_IMAGE=${MYCELIUM_WIREPROXY_IMAGE:-}
       - TZ=Europe/Rome
       - GOMEMLIMIT=600MiB
     healthcheck:
@@ -177,15 +172,15 @@ services:
       start_period: 20s
       retries: 3
 
-  # Userspace WireGuard → SOCKS5 (Fase C). There is NO static service here:
-  # for each WireGuard .conf the operator drags onto the dashboard
-  # (Impostazioni → VPN → Uscite di rete), mycelium creates a dedicated
-  # `wireproxy-<name>` container over the Docker socket — image
-  # ghcr.io/whyvl/wireproxy (pulled on demand), bridged, publishing its SOCKS5
-  # on 127.0.0.1:1081..1099, config read-only from the mycelium_wireproxy
-  # volume. enable/disable/delete from the dashboard drive each one; a server
-  # restart re-applies them (ReapplyWireproxyAtBoot). No cap_add needed —
-  # wireproxy is pure userspace, no kernel WireGuard.
+  # Userspace WireGuard → SOCKS5 (Fase C). There is NO service here at all,
+  # not even a dynamic one: for each WireGuard .conf the operator drags onto
+  # the dashboard (Impostazioni → VPN → Uscite di rete), mycelium launches its
+  # own `wireproxy` binary (bundled in this image, see Dockerfile) as a plain
+  # child process — no container, no Docker socket — binding its SOCKS5
+  # listener directly on 127.0.0.1:1081..1099. enable/disable/delete from the
+  # dashboard drive each one; a server restart re-applies them
+  # (ReapplyWireproxyAtBoot), since a subprocess dies with mycelium itself.
+  # No cap_add needed — wireproxy is pure userspace, no kernel WireGuard.
 
   # Polls the registry (GHCR by default) every 5 min and recreates any container
   # carrying `com.centurylinklabs.watchtower.enable=true` when its image tag
@@ -217,8 +212,3 @@ services:
 volumes:
   redis_data:
   mycelium_plugins:
-  # Explicit name: so the wireproxy-<name> sidecars (created by mycelium over
-  # the Docker socket, outside compose's project namespace) can bind it by a
-  # stable, predictable name.
-  mycelium_wireproxy:
-    name: mycelium_wireproxy

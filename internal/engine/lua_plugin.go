@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mycelium/internal/core"
@@ -419,6 +421,37 @@ type LuaPlugin struct {
 	stopHR   chan struct{}
 	cronStop chan struct{}
 	taskMu   sync.Mutex // serializza i task dello stesso plugin: uno alla volta
+
+	// discardedStates counts how many times an entrypoint call to this
+	// plugin has timed out and forced its Lua state to be discarded and
+	// replaced (see callWithTimeout / LuaPool.DiscardAndReplace). A single
+	// occurrence is an expected, isolated event by design — but nothing else
+	// tracked it, so a plugin whose cron task always times out (a hung
+	// upstream, a degenerate loop) leaked one goroutine + one *lua.LState per
+	// tick forever with zero visible signal short of the process eventually
+	// running out of memory. Incremented via recordDiscard, read by
+	// DiscardedStates (exposed to the admin dashboard) — atomic because
+	// entrypoint calls for the same plugin can run concurrently (different
+	// pooled LStates) from different request goroutines.
+	discardedStates atomic.Uint64
+}
+
+// discardWarnEvery: log a warning every this-many timeout-discards for a
+// plugin, so an unbounded stream of them (see discardedStates) leaves a
+// trace in the raw logs even before anyone looks at the dashboard counter.
+const discardWarnEvery = 5
+
+// recordDiscard increments discardedStates and, every discardWarnEvery
+// occurrences, logs a warning — see the field's doc comment for why this
+// exists. Intentionally does NOT disable the plugin or its task: an
+// unbounded counter is a strong signal something is stuck, but auto-disabling
+// risks taking down a plugin that is only having a slow moment, and that
+// decision needs a human, not a heuristic here.
+func (p *LuaPlugin) recordDiscard() {
+	n := p.discardedStates.Add(1)
+	if n%discardWarnEvery == 0 {
+		log.Printf("[lua] plugin %s: %d stati Lua scartati per timeout finora — possibile entrypoint/task bloccato, verificare i log del plugin", p.Manifest.ID, n)
+	}
 }
 
 func (p *LuaPlugin) scriptPath() string {
@@ -550,6 +583,15 @@ func (m *LuaPluginManager) LoadAll(dir string) error {
 	return nil
 }
 
+// maxPoolSize caps how many concurrent Lua VMs a single plugin's manifest may
+// request via pool_size. NewLuaPool creates `size` *lua.LState instances
+// synchronously and sequentially at load time (boot, or an admin ZIP upload —
+// so the manifest is not necessarily operator-authored/reviewed), each
+// re-reading the script from disk and executing its top level. Without an
+// upper bound a manifest alone — no plugin action required — can stall server
+// startup or exhaust memory just by declaring an absurd pool_size.
+const maxPoolSize = 16
+
 func (m *LuaPluginManager) loadPlugin(dir string) error {
 	mf, err := readLuaManifest(dir)
 	if err != nil {
@@ -574,6 +616,10 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	poolSize := mf.PoolSize
 	if poolSize <= 0 {
 		poolSize = 2
+	}
+	if poolSize > maxPoolSize {
+		log.Printf("[lua] plugin %s: pool_size %d exceeds the max (%d), clamped", mf.ID, poolSize, maxPoolSize)
+		poolSize = maxPoolSize
 	}
 	var sharedDirs []string
 	if m.pluginsRoot != "" {
@@ -1077,6 +1123,11 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 	sc := scopeOf(L)
 	defer func() {
 		if !released {
+			// Strip any global the call just leaked (see resetNewGlobals) before
+			// resetting the per-call scope fields and handing the state back —
+			// the next Acquire() of this same LState can belong to a different
+			// profile/user (pool_size default 2).
+			sc.resetNewGlobals(L)
 			sc.reset()
 			release()
 		}
@@ -1087,7 +1138,7 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 	// context/network/browser on every call. requireProxy is forced true for a
 	// video-flow entrypoint of a VPN-optional plugin, exactly as before.
 	scReqProxy, scProxyURL := m.pluginCallProxy(pluginID, ep)
-	sc.set(profileID, scReqProxy, scProxyURL, nil)
+	sc.set(ctx, profileID, scReqProxy, scProxyURL, nil)
 
 	fn := L.GetGlobal(fnName)
 	if fn == lua.LNil {
@@ -1099,6 +1150,7 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 	callErr, timedOut := callWithTimeout(ctx, L, fn, luaArgs)
 	if timedOut {
 		p.Pool.DiscardAndReplace()
+		p.recordDiscard()
 		released = true
 		return nil, fmt.Errorf("plugin %q %s: timeout, esecuzione abbandonata", pluginID, fnName)
 	}
@@ -1163,6 +1215,11 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 	sc := scopeOf(L)
 	defer func() {
 		if !released {
+			// Strip any global the call just leaked (see resetNewGlobals) before
+			// resetting the per-call scope fields and handing the state back —
+			// the next Acquire() of this same LState can belong to a different
+			// profile/user (pool_size default 2).
+			sc.resetNewGlobals(L)
 			sc.reset()
 			release()
 		}
@@ -1172,7 +1229,7 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 	// into the LState's callScope; the SDK closures built once in RegisterSDK
 	// read it live. No per-call module rebuild.
 	scReqProxy, scProxyURL := m.pluginCallProxy(pluginID, ep)
-	sc.set(profileID, scReqProxy, scProxyURL, onProgress)
+	sc.set(ctx, profileID, scReqProxy, scProxyURL, onProgress)
 
 	fn := L.GetGlobal(fnName)
 	if fn == lua.LNil {
@@ -1182,6 +1239,7 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 	callErr, timedOut := callWithTimeout(ctx, L, fn, mapToLuaTable(L, args))
 	if timedOut {
 		p.Pool.DiscardAndReplace()
+		p.recordDiscard()
 		released = true
 		return nil, fmt.Errorf("plugin %q %s: timeout, esecuzione abbandonata", pluginID, fnName)
 	}
@@ -1350,6 +1408,12 @@ type LuaPluginMeta struct {
 	// takes (managers.EgressProfiles): "direct", "warp", or an operator-added
 	// profile. Editable from the dashboard Plugin card.
 	Egress string `json:"egress"`
+	// DiscardedStates is how many times an entrypoint timeout has forced this
+	// plugin's Lua pool to discard-and-replace a state since it was loaded
+	// (see LuaPlugin.discardedStates). Zero in the overwhelming majority of
+	// cases; a number that keeps climbing flags a stuck task/entrypoint
+	// leaking a goroutine + LState per occurrence (see recordDiscard).
+	DiscardedStates uint64 `json:"discarded_states"`
 }
 
 // GetMetaWithStatus returns manifest + current runtime status for all loaded plugins.
@@ -1372,9 +1436,24 @@ func (m *LuaPluginManager) GetMetaWithStatus() []LuaPluginMeta {
 			RunState:        m.RunStateOf(id),
 			MissingRequired: missing,
 			Egress:          m.PluginEgress(id),
+			DiscardedStates: m.DiscardedStates(id),
 		})
 	}
 	return out
+}
+
+// DiscardedStates returns how many times pluginID's Lua pool has had a state
+// discarded-and-replaced due to an entrypoint timeout since it was loaded
+// (see LuaPlugin.discardedStates / recordDiscard). Returns 0 for an unknown
+// plugin id, and resets to 0 on reload (loadPlugin builds a fresh *LuaPlugin).
+func (m *LuaPluginManager) DiscardedStates(pluginID string) uint64 {
+	m.mu.RLock()
+	p, ok := m.plugins[pluginID]
+	m.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return p.discardedStates.Load()
 }
 
 // GetStatus reads the current runtime status for pluginID. An explicit status
@@ -1486,6 +1565,18 @@ func ReadLuaManifest(dir string) (LuaManifest, error) {
 // off by default.
 const VPNOptInSettingID = "vpn_enabled"
 
+// pluginIDPattern whitelists manifest.yaml's `id:` field: lowercase
+// alphanumerics, with '.', '_' or '-' allowed only between two alphanumerics
+// (real ids look like "animeunity" or "vix.movie", never leading/trailing
+// punctuation). mf.ID is never sanitized by the YAML parser and, once loaded,
+// is interpolated into HTML attributes (web/static/admin.js buildCard) and
+// used to build filesystem/Redis/setting keys throughout this package — a
+// hostile id (e.g. containing '"' to break out of an HTML attribute) must be
+// rejected here, at the single choke point every manifest load goes through
+// (loadPlugin, the admin ZIP upload and the admin manifest preview all call
+// readLuaManifest), rather than relying only on callers to escape it.
+var pluginIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
+
 func readLuaManifest(dir string) (LuaManifest, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
 	if err != nil {
@@ -1494,6 +1585,12 @@ func readLuaManifest(dir string) (LuaManifest, error) {
 	var mf LuaManifest
 	if err := yaml.Unmarshal(data, &mf); err != nil {
 		return LuaManifest{}, err
+	}
+	if mf.ID == "" {
+		return LuaManifest{}, fmt.Errorf("manifest.yaml missing 'id' in %s", dir)
+	}
+	if !pluginIDPattern.MatchString(mf.ID) {
+		return LuaManifest{}, fmt.Errorf("manifest.yaml 'id' %q in %s is invalid: must match %s", mf.ID, dir, pluginIDPattern.String())
 	}
 	if mf.VPNOptional && mf.DirectEgress {
 		mf.Settings.Global = append(mf.Settings.Global, LuaSettingField{

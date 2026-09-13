@@ -4,7 +4,10 @@ package pileus
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,12 +34,31 @@ type AuthHandler struct {
 }
 
 // NewAuthHandler returns a ready AuthHandler. jwtSecret must be stable across
-// restarts (load from settings / env); if empty it panics.
+// restarts (load from settings / env); if empty it panics. Callers should
+// pass the output of DeriveJWTSecret, not the raw master secret — see there.
 func NewAuthHandler(jwtSecret []byte) *AuthHandler {
 	if len(jwtSecret) == 0 {
 		panic("pileus: jwt secret must not be empty")
 	}
 	return &AuthHandler{jwtSecret: jwtSecret}
+}
+
+// DeriveJWTSecret derives the key used to sign/verify Pileus device JWTs from
+// the shared Pileus master secret ("pileus_jwt_secret" in settings), via
+// HMAC-SHA256 with a domain-separation constant. This mirrors
+// core.SetProxySignKey and api.SetAdminSessionKey, which derive their own
+// subkeys from the very same master with a different constant each — so the
+// one master secret never ends up signing three different things with the
+// same raw key material, and each use could in principle be rotated on its
+// own without touching the other two. Call once at startup and pass the
+// result to NewAuthHandler / Start; never pass the raw master secret there.
+func DeriveJWTSecret(master []byte) []byte {
+	if len(master) == 0 {
+		return nil
+	}
+	m := hmac.New(sha256.New, master)
+	m.Write([]byte("mycelium/jwt/v1"))
+	return m.Sum(nil)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +83,16 @@ func (h *AuthHandler) AuthorizeDevice(ctx context.Context, req *gen.AuthorizeDev
 	// pairing.go) — a separate secret space, single-use, expires on its own.
 	if !VerifyPairingCode(req.PinHash, req.DeviceId) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired pairing code")
+	}
+
+	// A valid pairing code alone must never resurrect a device the admin has
+	// explicitly revoked — device_id is picked by the client, not tied to the
+	// code, so anyone who knows a revoked device's id (ListDevices exposes ids
+	// to any paired device) and can submit the code first wins the race
+	// against a human typing it on a remote. Reactivation must go through the
+	// explicit admin action (UnrevokeDevice / POST .../unrevoke) instead.
+	if exists, revoked := deviceRevoked(req.DeviceId); exists && revoked {
+		return nil, status.Error(codes.PermissionDenied, "device revoked; ask an admin to re-enable it from the dashboard")
 	}
 
 	// Upsert device record.
@@ -373,9 +405,28 @@ type ctxKeyDeviceID struct{}
 // Tables are created by InitPileusDB(), called at startup.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// deviceRevoked reports whether deviceID already has a row in pileus_devices
+// and, if so, whether it's currently revoked. AuthorizeDevice calls this
+// before upsertDevice so a fresh pairing code can't silently undo an admin's
+// explicit revoke of an existing device (see the call site for why that
+// matters — device_id is client-chosen, unrelated to the pairing code).
+func deviceRevoked(deviceID string) (exists bool, revoked bool) {
+	var revokedAt sql.NullString
+	err := managers.DB.QueryRow(
+		`SELECT revoked_at FROM pileus_devices WHERE device_id=?`,
+		deviceID,
+	).Scan(&revokedAt)
+	if err != nil {
+		return false, false
+	}
+	return true, revokedAt.Valid
+}
+
 func upsertDevice(deviceID string) error {
-	// A successful (re-)pairing also clears any revoke flag: the admin just
-	// handed out a fresh pairing code for this device on purpose.
+	// Clears any revoke flag on conflict — harmless today because
+	// AuthorizeDevice already rejects a revoked existing device before calling
+	// this (see deviceRevoked above), so this only ever runs for a brand new
+	// device (revoked_at is NULL already) or an already-active one (ditto).
 	_, err := managers.DB.Exec(
 		`INSERT INTO pileus_devices(device_id, created_at)
 		 VALUES(?, CURRENT_TIMESTAMP)
@@ -433,7 +484,12 @@ func deviceActive(deviceID string) bool {
 func forgetDeviceActive(deviceID string) { deviceActiveCache.Delete(deviceID) }
 
 // RevokeDevice invalidates every current token for deviceID without touching
-// its profiles. A later AuthorizeDevice (fresh pairing code) re-enables it.
+// its profiles. Only an explicit admin action re-enables it (UnrevokeDevice /
+// POST /admin/pileus/devices/{id}/unrevoke) — AuthorizeDevice deliberately
+// refuses to resurrect a revoked device even with a fresh, valid pairing code
+// (see the deviceRevoked check there): device_id is chosen by the client, not
+// bound to the code, so a bare pairing code must not be enough to undo a
+// revoke.
 func RevokeDevice(deviceID string) error {
 	_, err := managers.DB.Exec(
 		`UPDATE pileus_devices SET revoked_at=CURRENT_TIMESTAMP

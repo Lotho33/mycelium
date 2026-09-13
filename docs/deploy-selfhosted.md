@@ -100,8 +100,8 @@ VPN → Network exits** (`Direct` is the default). Disable it with
 `docker compose -f docker-compose.prod.yml up -d --scale microwarp=0`.
 
 For a generic WireGuard exit, drop a `.conf` onto the "Network exits" page —
-mycelium creates a dedicated `wireproxy-<name>` sidecar over the Docker socket
-(userspace, no `cap_add`), reusing the mycelium image itself.
+mycelium launches its own bundled `wireproxy` binary as a plain child process
+(userspace, no `cap_add`, no container, no Docker socket involved).
 
 ## Notes
 
@@ -110,6 +110,9 @@ mycelium creates a dedicated `wireproxy-<name>` sidecar over the Docker socket
   not the updater.
 - The image is multi-arch (`linux/amd64` + `linux/arm64`) — an ARM server
   pulls the right variant automatically, no compose changes needed.
-- Mounting `/var/run/docker.sock` into `mycelium` (for dashboard metrics and
-  wireproxy sidecars) is root-equivalent on the host — keep that in mind on an
-  exposed machine.
+- `mycelium` itself no longer needs `/var/run/docker.sock` at all (dashboard
+  metrics and the WireGuard egress sidecars both used to require it; both are
+  gone — see the WireGuard note above). Only `watchtower` still mounts the
+  socket, for its own unrelated job of recreating containers on a new image
+  tag — root-equivalent access, unavoidable for what it does, worth keeping in
+  mind on an exposed machine.

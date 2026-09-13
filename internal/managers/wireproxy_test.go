@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const testBindAddr = "127.0.0.1:1081"
+
 const validWG = `[Interface]
 PrivateKey = aGVsbG8td29ybGQtcHJpdmF0ZS1rZXktMzJieXRlcw==
 Address = 10.64.0.2/32, fc00:bbbb::2/128
@@ -17,14 +19,14 @@ Endpoint = 193.32.1.1:51820
 `
 
 func TestNormalizeWireguardConf_OK(t *testing.T) {
-	out, err := normalizeWireguardConf(validWG)
+	out, err := normalizeWireguardConf(validWG, testBindAddr)
 	if err != nil {
 		t.Fatalf("valid conf rejected: %v", err)
 	}
 	if !strings.Contains(out, "[Interface]") || !strings.Contains(out, "Endpoint = 193.32.1.1:51820") {
 		t.Fatalf("interface/peer not preserved:\n%s", out)
 	}
-	if !strings.HasSuffix(strings.TrimSpace(out), "BindAddress = "+wireproxyBindInside) {
+	if !strings.HasSuffix(strings.TrimSpace(out), "BindAddress = "+testBindAddr) {
 		t.Fatalf("our [Socks5] not appended last:\n%s", out)
 	}
 	if strings.Count(out, "[Socks5]") != 1 {
@@ -33,7 +35,7 @@ func TestNormalizeWireguardConf_OK(t *testing.T) {
 }
 
 func TestNormalizeWireguardConf_ForcesMTU(t *testing.T) {
-	out, err := normalizeWireguardConf(validWG)
+	out, err := normalizeWireguardConf(validWG, testBindAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func TestNormalizeWireguardConf_ForcesMTU(t *testing.T) {
 
 	// an explicit MTU is left alone
 	withMTU := strings.Replace(validWG, "DNS = 10.64.0.1", "DNS = 10.64.0.1\nMTU = 1412", 1)
-	out2, err := normalizeWireguardConf(withMTU)
+	out2, err := normalizeWireguardConf(withMTU, testBindAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,14 +60,14 @@ func TestNormalizeWireguardConf_ForcesMTU(t *testing.T) {
 
 func TestNormalizeWireguardConf_StripsUploadedProxySections(t *testing.T) {
 	in := validWG + "\n[Socks5]\nBindAddress = 127.0.0.1:9999\n\n[http]\nBindAddress = 127.0.0.1:8888\n"
-	out, err := normalizeWireguardConf(in)
+	out, err := normalizeWireguardConf(in, testBindAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out, "9999") || strings.Contains(out, "[http]") {
 		t.Fatalf("uploaded proxy sections not stripped:\n%s", out)
 	}
-	if strings.Count(out, "[Socks5]") != 1 || !strings.Contains(out, wireproxyBindInside) {
+	if strings.Count(out, "[Socks5]") != 1 || !strings.Contains(out, testBindAddr) {
 		t.Fatalf("our [Socks5] not authoritative:\n%s", out)
 	}
 }
@@ -120,7 +122,7 @@ func TestNormalizeWireguardConf_Rejects(t *testing.T) {
 		"empty":         "",
 	}
 	for name, conf := range cases {
-		if _, err := normalizeWireguardConf(conf); err == nil {
+		if _, err := normalizeWireguardConf(conf, testBindAddr); err == nil {
 			t.Errorf("%s: expected rejection, got nil", name)
 		}
 	}

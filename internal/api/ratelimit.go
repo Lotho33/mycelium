@@ -1,8 +1,10 @@
 package api
 
 import (
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -94,21 +96,96 @@ var (
 	proxyLimiter = newRateLimiter(25, 50)
 	// imgLimiter: poster grids burst on open, then go quiet.
 	imgLimiter = newRateLimiter(40, 80)
+	// wipeLimiter: /admin/profiles/wipe and /admin/plugins/wipe-data re-check
+	// the admin password in the request body on top of the session cookie
+	// (requireAdminPassword in admin_wipe.go) — a stolen session cookie
+	// without the password is the same brute-force risk as the login form,
+	// so the same budget (5 tentativi/min per IP, burst 5). A dedicated
+	// bucket rather than sharing loginLimiter: a legitimate admin fumbling
+	// the wipe confirmation shouldn't burn through the budget they need to
+	// log back in, and vice versa.
+	wipeLimiter = newRateLimiter(5.0/60.0, 5)
 )
 
-// trustedProxyNets lists CIDR ranges whose X-Forwarded-For header is trusted.
-// Only loopback and RFC-1918 ranges are trusted by default (reverse-proxy on same host/LAN).
-var trustedProxyNets = []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+// trustedProxyCIDRsEnv, if set, REPLACES trustedProxyNets entirely with the
+// operator-supplied CIDR list (comma-separated), e.g.:
+//
+//	MYCELIUM_TRUSTED_PROXY_CIDRS=10.0.0.5/32
+//	MYCELIUM_TRUSTED_PROXY_CIDRS=10.0.0.5/32,192.168.1.10/32
+//
+// Use this when the real reverse proxy terminating TLS runs on a dedicated
+// LAN IP rather than on loopback. It is read once at boot (see init below).
+const trustedProxyCIDRsEnv = "MYCELIUM_TRUSTED_PROXY_CIDRS"
 
-// trustedProxyNetworks is the pre-parsed form of trustedProxyNets, built once at init.
+// trustedProxyNets lists the default CIDR ranges whose X-Forwarded-For
+// header is trusted when the direct connection comes from them.
+//
+// Only loopback is trusted by default. A TLS-terminating reverse proxy
+// typically talks to mycelium over 127.0.0.1/::1 (same host, same network
+// namespace, or Docker's loopback-equivalent between a proxy and app
+// container sharing a pod/network). Trusting the *entire* RFC1918 space (the
+// previous default) meant any device on a home LAN, or any other container
+// on the same Docker bridge network, satisfied "trusted proxy" for its own
+// direct connection — letting it set an arbitrary X-Forwarded-For on every
+// request and dodge per-IP rate limiting (e.g. brute-forcing /admin/login,
+// or resetting the /proxy and /img limiters). An operator who genuinely
+// fronts mycelium with a reverse proxy on a dedicated non-loopback LAN IP
+// must opt in explicitly via MYCELIUM_TRUSTED_PROXY_CIDRS (see above) —
+// this is a breaking change from earlier versions, intentionally so.
+var trustedProxyNets = []string{"127.0.0.0/8", "::1/128"}
+
+// trustedProxyNetworks is the parsed form of the trusted-proxy CIDR list
+// actually in effect — either trustedProxyNets or the MYCELIUM_TRUSTED_PROXY_CIDRS
+// override. Built once at init via loadTrustedProxyNetworks; kept as a var
+// (not computed inline) so tests can rebuild it after changing the env var.
 var trustedProxyNetworks []*net.IPNet
 
 func init() {
+	trustedProxyNetworks = loadTrustedProxyNetworks(os.Getenv(trustedProxyCIDRsEnv))
+}
+
+// parseCIDRList parses a comma-separated CIDR list. Any entry that fails to
+// parse is skipped (with a warning logged) rather than aborting the whole
+// list — a single typo shouldn't also cost the other, valid entries. Pure
+// function (no env/global access) so it's directly testable.
+func parseCIDRList(raw string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(part)
+		if err != nil {
+			log.Printf("[ratelimit] %s: CIDR non valida %q, ignorata: %v", trustedProxyCIDRsEnv, part, err)
+			continue
+		}
+		nets = append(nets, network)
+	}
+	return nets
+}
+
+// loadTrustedProxyNetworks builds the effective trusted-proxy network list
+// from the given env var value: if it contains at least one valid CIDR,
+// that list REPLACES the default entirely. Otherwise (env unset, empty, or
+// every entry malformed) it falls back to trustedProxyNets (loopback only).
+// Exposed as a standalone pure function (rather than inlined in init) so
+// tests can rebuild trustedProxyNetworks after changing the env var —
+// init() itself only runs once per process.
+func loadTrustedProxyNetworks(envVal string) []*net.IPNet {
+	if envVal = strings.TrimSpace(envVal); envVal != "" {
+		if nets := parseCIDRList(envVal); len(nets) > 0 {
+			return nets
+		}
+		log.Printf("[ratelimit] %s impostata ma nessuna CIDR valida trovata, uso il default (%v)", trustedProxyCIDRsEnv, trustedProxyNets)
+	}
+	var nets []*net.IPNet
 	for _, cidr := range trustedProxyNets {
 		if _, network, err := net.ParseCIDR(cidr); err == nil {
-			trustedProxyNetworks = append(trustedProxyNetworks, network)
+			nets = append(nets, network)
 		}
 	}
+	return nets
 }
 
 func isTrustedProxy(ip string) bool {
@@ -124,11 +201,21 @@ func isTrustedProxy(ip string) bool {
 	return false
 }
 
-func realIP(r *http.Request) string {
+// directRemoteHost extracts the host part of r.RemoteAddr — the peer that
+// actually opened the TCP connection, before any Forwarded-* header is
+// considered. Shared by realIP (X-Forwarded-For trust) and isSecureRequest
+// (X-Forwarded-Proto trust in admin_auth_pages.go) so both apply the same
+// "trusted proxy" notion of who is allowed to speak for the original client.
+func directRemoteHost(r *http.Request) string {
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remoteHost = r.RemoteAddr
 	}
+	return remoteHost
+}
+
+func realIP(r *http.Request) string {
+	remoteHost := directRemoteHost(r)
 	// Only honour X-Forwarded-For when the direct connection comes from a trusted proxy.
 	if isTrustedProxy(remoteHost) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {

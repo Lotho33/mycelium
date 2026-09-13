@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"mycelium/internal/core"
@@ -42,11 +43,28 @@ func safeJoin(pluginDir, relPath string) (string, bool) {
 
 // ─── helper ───────────────────────────────────────────────────────────────────
 
-// sanitizeName strips path separators and dots to prevent directory traversal.
-func sanitizeName(name string) string {
-	name = filepath.Base(name)
-	name = strings.ReplaceAll(name, "..", "")
-	return name
+// validPluginNameRe whitelists what a sanitized plugin/file name may contain.
+// A whitelist is required here, not a blacklist: naive removal (e.g.
+// strings.ReplaceAll(name, "..", "")) is not idempotent/anchor-safe — for
+// input ".." it yields "", which downstream resolves to the plugins/
+// directory itself rather than a subdirectory of it. See the "....zip"
+// upload bug this closes.
+var validPluginNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// sanitizeName strips path separators and validates the remainder against a
+// strict whitelist to prevent directory traversal. It returns an error
+// instead of a best-effort string so callers can never mistake a rejected
+// name for a usable one — an empty, ".", or ".." result must never reach
+// code that builds a filesystem path from it.
+func sanitizeName(name string) (string, error) {
+	name = filepath.Base(filepath.Clean(name))
+	if name == "" || name == "." || name == ".." || name == string(os.PathSeparator) {
+		return "", fmt.Errorf("nome non valido: %q", name)
+	}
+	if !validPluginNameRe.MatchString(name) {
+		return "", fmt.Errorf("nome contiene caratteri non consentiti: %q", name)
+	}
+	return name, nil
 }
 
 // readLuaManifest is re-exported here so lua_admin.go can use it without

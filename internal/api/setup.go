@@ -158,7 +158,10 @@ func saveSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Errore generazione hash", http.StatusInternalServerError)
 		return
 	}
-	if err := managers.Settings.Save(map[string]any{
+	// SaveInternal, non Save: master_admin_hash non è più nell'allowlist
+	// generica di isAllowedKey (vedi settings.go) — solo il setup one-shot e
+	// POST /admin/password/change possono scriverla.
+	if err := managers.Settings.SaveInternal(map[string]any{
 		"master_admin_hash": hashedPassword,
 	}); err != nil {
 		http.Error(w, "Errore salvataggio configurazione", http.StatusInternalServerError)

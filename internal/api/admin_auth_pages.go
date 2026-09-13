@@ -25,6 +25,33 @@ func adminLoginPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, loginHTML(false))
 }
 
+// isSecureRequest reports whether the browser reached mycelium over HTTPS,
+// for the purpose of setting the admin session cookie's Secure attribute.
+//
+// r.TLS != nil alone is only true for a direct TLS connection to this
+// process. A TLS-terminating reverse proxy (the common deployment, already
+// handled elsewhere via X-Forwarded-Proto — see media_handler.go's
+// proxyScheme resolution and grpcweb.go's X-Http-Scheme synthesis) always
+// talks plain HTTP to mycelium, so r.TLS is nil even though the real client
+// spoke HTTPS: without this, the admin cookie would never get Secure behind
+// such a proxy.
+//
+// X-Forwarded-Proto can't be trusted unconditionally though — a client that
+// isn't behind any proxy can set it on a direct plain-HTTP request too. So
+// it's honoured only when the direct TCP peer is a trusted proxy, reusing
+// the same trustedProxyNets/isTrustedProxy notion ratelimit.go's realIP()
+// already applies to X-Forwarded-For (loopback by default, or the operator's
+// MYCELIUM_TRUSTED_PROXY_CIDRS).
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if isTrustedProxy(directRemoteHost(r)) && r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
+}
+
 // setAdminSessionCookie creates a new admin session and attaches it to the
 // response — shared by the login form and saveSetup (which auto-logs-in the
 // browser that just created the admin account, so it can immediately call
@@ -37,7 +64,7 @@ func setAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/admin",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   43200, // 12h
 	})

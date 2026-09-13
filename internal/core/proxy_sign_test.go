@@ -38,11 +38,40 @@ func TestProxySignRejectsTamper(t *testing.T) {
 		t.Fatal("tampered data still verified")
 	}
 
-	// uid is not signed — changing it must NOT break the signature.
+	// uid IS signed — swapping it for another profile's id (the cross-profile
+	// continue-watching tampering bug) must break the signature.
 	q = u.Query()
 	q.Set("uid", "someone-else")
-	if !VerifyProxyURL(q) {
-		t.Fatal("changing the unsigned uid param broke verification")
+	if VerifyProxyURL(q) {
+		t.Fatal("changing uid did not break verification — cross-profile tampering possible")
+	}
+}
+
+// TestProxySignUIDCoveredBySignature is the explicit regression test for the
+// cross-profile "continue watching" tampering bug: a URL signed for profile A
+// must fail verification once `uid` is swapped to profile B, even though
+// `sig` itself is left untouched (exactly what an attacker holding a
+// legitimately-signed /proxy/* URL and another profile's id — trivially
+// obtained via ListProfiles — could do).
+func TestProxySignUIDCoveredBySignature(t *testing.T) {
+	SetProxySignKey([]byte("test-master-secret"))
+	defer SetProxySignKey(nil)
+
+	signed := AppendProxySig("https://h/proxy/segment.ts?data=AAA&origin=BBB&cookies=CCC&vpn=0&uid=profile-A")
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parse signed: %v", err)
+	}
+	if !VerifyProxyURL(u.Query()) {
+		t.Fatal("URL signed for profile-A failed to verify as-is")
+	}
+
+	// Attacker keeps `sig` from the URL they legitimately hold, and only
+	// swaps uid to another profile's id.
+	tampered := u.Query()
+	tampered.Set("uid", "profile-B")
+	if VerifyProxyURL(tampered) {
+		t.Fatal("swapping uid=profile-A -> uid=profile-B kept the same sig valid")
 	}
 }
 

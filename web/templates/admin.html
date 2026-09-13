@@ -221,8 +221,6 @@
                             <span class="text-gray-300">Extractor</span>
                         </span>
                         <span class="text-gray-500">eng <span id="ov-browser-engine" class="text-gray-300">—</span></span>
-                        <span class="text-gray-500">RAM <span id="ov-browser-mem" class="text-gray-300">—</span></span>
-                        <span class="text-gray-500">CPU <span id="ov-browser-cpu" class="text-gray-300">—</span></span>
                         <button onclick="openManualSession()"
                             class="text-[10px] text-gray-600 hover:text-gray-300 ml-auto transition">Sessione manuale</button>
                     </div>
@@ -232,11 +230,8 @@
                             <span class="text-gray-300">Redis</span>
                         </span>
                         <span class="text-gray-500"><span id="ov-redis-addr" class="text-gray-300">—</span></span>
-                        <span class="text-gray-500">RAM <span id="ov-redis-mem" class="text-gray-300">—</span></span>
-                        <span class="text-gray-500">CPU <span id="ov-redis-cpu" class="text-gray-300">—</span></span>
                     </div>
                 </div>
-                <p id="ov-sys-note" class="text-[11px] text-gray-600 mt-3 hidden"></p>
             </div>
 
         </div>
@@ -276,6 +271,19 @@
         <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Impostazioni</h2>
         <div class="space-y-4 max-w-2xl">
 
+            <!-- Sicurezza -->
+            <div class="card border rounded-xl p-4">
+                <span class="text-sm font-semibold text-white">Sicurezza</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-3">Cambia la password dell'account admin. Richiede la password attuale.</p>
+                <form onsubmit="changeAdminPassword(event)" class="space-y-2 max-w-sm">
+                    <input id="pw-current" type="password" placeholder="Password attuale" required autocomplete="current-password"
+                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <input id="pw-new" type="password" placeholder="Nuova password (min. 8 caratteri)" required minlength="8" autocomplete="new-password"
+                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <button type="submit"
+                        class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cambia password</button>
+                </form>
+            </div>
 
             <!-- Manutenzione -->
             <div class="card border rounded-xl p-4">
@@ -283,6 +291,21 @@
                 <p class="text-[11px] text-gray-600 mt-1 mb-2">Svuota la cache in memoria (risultati browse/search). I plugin la ripopolano alla richiesta successiva.</p>
                 <button onclick="clearCache()"
                     class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Svuota cache</button>
+            </div>
+
+            <!-- App web Pileus -->
+            <div class="card border rounded-xl p-4">
+                <span class="text-sm font-semibold text-white">App web Pileus</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-3">Scarica l'ultimo build web di Pileus dalle GitHub Release del repo configurato e lo installa in <code>data/pileus-web/</code> (servito su <code>/app</code>). La versione precedente resta in <code>data/pileus-web.bak/</code>.</p>
+                <form onsubmit="savePileusWebRepo(event)" class="flex flex-wrap gap-2 mb-3">
+                    <input id="pileus-web-repo" placeholder="owner/repo (es. Lotho33/pileus)"
+                        class="flex-1 min-w-[12rem] bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Salva repo</button>
+                </form>
+                <button type="button" onclick="updatePileusWebApp()" id="pileus-web-update-btn" disabled
+                    class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+                           text-white text-sm px-4 py-2.5 rounded-lg font-semibold transition">Aggiorna app web Pileus</button>
+                <p id="pileus-web-status" class="text-[11px] text-gray-600 mt-2">Configura il repo Pileus qui sopra per abilitare l'aggiornamento.</p>
             </div>
 
             <!-- Danger zone -->

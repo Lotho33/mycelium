@@ -43,6 +43,50 @@ func TestChallengeRegistry(t *testing.T) {
 	}
 }
 
+// TestPruneExpiredChallenges verifies the GC logic the background ticker
+// runs (see init() in challenges.go) removes stale entries by itself,
+// independently of PendingChallenges ever being called (e.g. the admin
+// dashboard is never opened).
+func TestPruneExpiredChallenges(t *testing.T) {
+	challengeMu.Lock()
+	challenges = map[string]*PendingChallenge{}
+	challengeMu.Unlock()
+
+	RecordChallenge("fresh.example", "vpn")
+
+	// Backdate an entry past challengeTTL without going through
+	// PendingChallenges, so this exercises the shared pruning function
+	// directly rather than its on-demand caller.
+	expiredKey := challengeKey("expired.example", "direct")
+	challengeMu.Lock()
+	challenges[expiredKey] = &PendingChallenge{
+		Domain:    "expired.example",
+		Egress:    "direct",
+		FirstSeen: time.Now().Add(-3 * challengeTTL),
+		LastSeen:  time.Now().Add(-challengeTTL - time.Minute),
+		Hits:      1,
+	}
+	challengeMu.Unlock()
+
+	pruneExpiredChallenges()
+
+	challengeMu.Lock()
+	_, expiredStillThere := challenges[expiredKey]
+	_, freshStillThere := challenges[challengeKey("fresh.example", "vpn")]
+	remaining := len(challenges)
+	challengeMu.Unlock()
+
+	if expiredStillThere {
+		t.Errorf("pruneExpiredChallenges left an expired entry in place")
+	}
+	if !freshStillThere {
+		t.Errorf("pruneExpiredChallenges removed a fresh entry it shouldn't have touched")
+	}
+	if remaining != 1 {
+		t.Errorf("want 1 entry left after pruning, got %d", remaining)
+	}
+}
+
 func TestChallengeDomain_UnwrapsCobwebError(t *testing.T) {
 	wrapped := fmt.Errorf("resolve: %w", &CobwebAPIError{Status: 422, Kind: "needs_manual_solve", Domain: "cdn.example"})
 	dom, ok := ChallengeDomain(wrapped)

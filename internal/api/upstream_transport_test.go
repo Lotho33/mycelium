@@ -90,6 +90,54 @@ func TestCobwebRoundTripper_ForwardsAsFetchAndDropsUA(t *testing.T) {
 	}
 }
 
+// The cobweb sidecar is a separate, non-auditable-from-here process; the
+// RoundTripper must refuse to relay a fetch for an SSRF-blocked target rather
+// than trusting cobweb to reject it, and must never even reach cobweb for one.
+func TestCobwebRoundTripper_BlocksSSRFTargetBeforeCallingCobweb(t *testing.T) {
+	called := false
+	cobweb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(200)
+	}))
+	defer cobweb.Close()
+	t.Setenv("COBWEB_ADDR", cobweb.URL)
+
+	rt := &cobwebRoundTripper{}
+	for _, target := range []string{
+		"http://127.0.0.1/secret",
+		"http://169.254.169.254/latest/meta-data/",
+	} {
+		req, _ := http.NewRequest(http.MethodGet, target, nil)
+		if _, err := rt.RoundTrip(req); err == nil {
+			t.Errorf("RoundTrip(%s) succeeded, want blocked", target)
+		}
+	}
+	if called {
+		t.Error("cobweb sidecar was called for an SSRF-blocked target")
+	}
+}
+
+func TestCobwebRoundTripper_AllowsLegitTargetToCallCobweb(t *testing.T) {
+	called := false
+	cobweb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(200)
+	}))
+	defer cobweb.Close()
+	t.Setenv("COBWEB_ADDR", cobweb.URL)
+
+	rt := &cobwebRoundTripper{}
+	req, _ := http.NewRequest(http.MethodGet, "https://cdn.example/seg/1.ts", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if !called {
+		t.Error("cobweb sidecar was not called for a legitimate target")
+	}
+}
+
 func TestCobwebRoundTripper_KeepsUAWithClearanceCookie(t *testing.T) {
 	var gotBody map[string]any
 	cobweb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -18,6 +18,15 @@ type DBManager struct {
 
 var DB *DBManager
 
+// NewDBManager wraps an already-open *sql.DB as a DBManager. InitDB always
+// opens the same fixed on-disk path (dbFile is resolved once, at package
+// load), so it can't hand tests an isolated database — this lets a test build
+// its own (e.g. an in-memory sqlite handle with just the tables it needs) and
+// point managers.DB at it without touching the real db file.
+func NewDBManager(db *sql.DB) *DBManager {
+	return &DBManager{db: db}
+}
+
 // InitDB apre la connessione e crea le tabelle.
 func InitDB() error {
 	os.MkdirAll(core.AppPath("data"), 0755)
@@ -86,31 +95,61 @@ func InitDB() error {
 		return err
 	}
 
-	// Migrations (idempotent — SQLite errors on duplicate column are silently ignored).
-	_, _ = db.Exec(`ALTER TABLE watch_history ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE watch_history ADD COLUMN navigation_context TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE pileus_devices ADD COLUMN label TEXT NOT NULL DEFAULT ''`)
+	// Migrations (idempotent — SQLite's "duplicate column" error, returned
+	// when a previous boot already applied the ALTER, is expected and
+	// ignored; anything else is logged rather than swallowed).
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN navigation_context TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE pileus_devices ADD COLUMN label TEXT NOT NULL DEFAULT ''`)
 	// revoked_at: NULL = active. Set to kill every existing JWT for a device
 	// without deleting its profiles (FK ON DELETE CASCADE) — the auth
 	// interceptor rejects a token whose device row is missing or revoked.
 	// Cleared again on a successful re-pairing (AuthorizeDevice).
-	_, _ = db.Exec(`ALTER TABLE pileus_devices ADD COLUMN revoked_at TIMESTAMP`)
+	runMigration(db, `ALTER TABLE pileus_devices ADD COLUMN revoked_at TIMESTAMP`)
 	// rating/genres/plot/year: continue-watching card metadata beyond title/poster.
 	// genres is comma-joined (SQLite has no array type), same convention the
 	// Flutter client already uses when displaying a joined genre list.
-	_, _ = db.Exec(`ALTER TABLE watch_history ADD COLUMN rating REAL NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE watch_history ADD COLUMN genres TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE watch_history ADD COLUMN plot TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE watch_history ADD COLUMN year INTEGER NOT NULL DEFAULT 0`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN rating REAL NOT NULL DEFAULT 0`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN genres TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN plot TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN year INTEGER NOT NULL DEFAULT 0`)
 	// Per-profile client preferences (subtitle style, audio/sub language, …).
 	// Opaque JSON blob — the Pileus client owns the schema; the server only
 	// stores and echoes it. Profiles are server-wide, so this follows the
 	// person across every device paired to the server.
-	_, _ = db.Exec(`ALTER TABLE pileus_profiles ADD COLUMN preferences TEXT NOT NULL DEFAULT '{}'`)
+	runMigration(db, `ALTER TABLE pileus_profiles ADD COLUMN preferences TEXT NOT NULL DEFAULT '{}'`)
 
 	log.Println("🗄️ Database inizializzato (mycelium.db).")
 	DB = &DBManager{db: db}
 	return nil
+}
+
+// isDuplicateColumnError reports whether err is SQLite's "duplicate column
+// name" error — returned by an `ALTER TABLE ... ADD COLUMN` when a previous
+// boot already applied that migration. modernc.org/sqlite (the driver used
+// here, v1.48.2) reports it as e.g.:
+//
+//	SQL logic error: duplicate column name: parent_id (1)
+//
+// Matched case-insensitively on the "duplicate column" substring (verified
+// against the driver directly) rather than the full message, since the
+// column name varies per call site.
+func isDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column")
+}
+
+// runMigration executes an idempotent schema migration (typically an ALTER
+// TABLE ADD COLUMN). A "duplicate column" error means a previous boot already
+// applied it — expected, ignored. Any other error (full disk, corrupt DB,
+// constraint violation, …) is logged instead of being silently swallowed; it
+// does not fail InitDB, since a single migration hiccup shouldn't block boot.
+func runMigration(db *sql.DB, query string) {
+	if _, err := db.Exec(query); err != nil && !isDuplicateColumnError(err) {
+		log.Printf("⚠️ migrazione DB fallita (%q): %v", query, err)
+	}
 }
 
 // AddClient salva un nuovo dispositivo [cite: 2]
@@ -196,13 +235,6 @@ func (m *DBManager) SetSetting(key, value string) error {
 // UpsertProgress aggiorna la cronologia.
 // Se parentID non è vuoto, rimuove la entry precedente della stessa serie prima di inserire.
 func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, navigationContext, title, poster string, currentTime, totalTime float64, rating float64, genres []string, plot string, year int32) error {
-	if parentID != "" {
-		_, _ = m.db.Exec(
-			`DELETE FROM watch_history WHERE client_id=? AND provider_id=? AND parent_id=? AND playable_id!=?`,
-			clientID, providerID, parentID, playableID,
-		)
-	}
-
 	isCompleted := 0
 	if totalTime > 0 && (currentTime/totalTime) > 0.90 {
 		isCompleted = 1
@@ -230,8 +262,31 @@ func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, n
 			year               = CASE WHEN excluded.year   > 0   THEN excluded.year   ELSE year   END,
 			last_updated       = CURRENT_TIMESTAMP
 	`
-	_, err := m.db.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year)
-	return err
+	// When parentID is set, the stale sibling row (same series, different
+	// episode) must disappear atomically with the new row's insert/update:
+	// a concurrent GetContinueWatching, or a crash between the two
+	// statements, must never observe the series with neither row present.
+	if parentID == "" {
+		_, err := m.db.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year)
+		return err
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op once Commit succeeds
+
+	if _, err := tx.Exec(
+		`DELETE FROM watch_history WHERE client_id=? AND provider_id=? AND parent_id=? AND playable_id!=?`,
+		clientID, providerID, parentID, playableID,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type WatchHistoryEntry struct {

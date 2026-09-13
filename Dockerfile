@@ -23,10 +23,10 @@ RUN CGO_ENABLED=0 go build \
     ./cmd/server
 
 # wireproxy — the userspace-WireGuard → SOCKS5 proxy used by the Fase C egress
-# sidecars. Built here (static, CGO off) and shipped inside THIS image so the
-# sidecars can run `mycelium:<tag>` itself as their image: no third-party
-# registry to pull (ghcr's wireproxy packages 403 on some hosts' Docker auth),
-# it's already on the box. Pinned; bump deliberately.
+# profiles. Built here (static, CGO off) and shipped inside THIS image at
+# /usr/local/bin/wireproxy: mycelium launches it directly as a subprocess (see
+# internal/managers/wireproxy.go), no separate container/image/socket
+# involved. Pinned; bump deliberately.
 RUN CGO_ENABLED=0 go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.3
 
 # ── runtime ──────────────────────────────────────────────────────────────────

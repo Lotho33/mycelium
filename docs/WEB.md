@@ -62,6 +62,13 @@ the browser can reach.
       enough; still needs TLS in front for an `https` PWA.
 - [ ] Bridge / Docker-published ports: `server_host` is **mandatory** (neither
       the client hint nor the veth IP is the host-published address).
+- [ ] `X-Forwarded-For` (used for per-IP rate limiting on `/admin/login`,
+      `/proxy` and `/img`) is only trusted from a connection arriving via
+      loopback by default. If your reverse proxy runs on a dedicated LAN IP
+      instead of loopback, set `MYCELIUM_TRUSTED_PROXY_CIDRS` (comma-separated
+      CIDRs, e.g. `MYCELIUM_TRUSTED_PROXY_CIDRS=10.0.0.5/32`) to that proxy's
+      IP — otherwise its `X-Forwarded-For` is ignored and rate limiting keys
+      on the proxy's own IP for every client behind it.
 - [ ] HLS in Chrome/Firefox needs `hls.js` on the Dart side (Safari plays HLS
       natively). mycelium does not transmux.
 

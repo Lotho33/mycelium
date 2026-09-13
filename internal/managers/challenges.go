@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"mycelium/internal/core"
 )
 
 // Interactive-verification tracking: some upstreams occasionally require a
@@ -82,16 +84,43 @@ func ClearChallengeDomain(domain string) {
 	challengeMu.Unlock()
 }
 
-// PendingChallenges returns the not-yet-expired entries, most-recent first.
-func PendingChallenges() []PendingChallenge {
+// pruneExpiredChallenges drops entries whose LastSeen fell behind challengeTTL.
+// Shared by PendingChallenges (so opening the dashboard still prunes on the
+// spot) and the background GC ticker below (init) — the map must not depend
+// on someone opening the dashboard to stay bounded: RecordChallenge is on the
+// hot HLS-proxy path and runs unattended for as long as the process is up.
+func pruneExpiredChallenges() {
 	cut := time.Now().Add(-challengeTTL)
 	challengeMu.Lock()
-	out := make([]PendingChallenge, 0, len(challenges))
+	defer challengeMu.Unlock()
 	for k, c := range challenges {
 		if c.LastSeen.Before(cut) {
 			delete(challenges, k)
-			continue
 		}
+	}
+}
+
+func init() {
+	go func() {
+		t := time.NewTicker(10 * time.Minute)
+		defer t.Stop()
+		for range t.C {
+			// One bad tick must not stop future ticks — recover per-iteration,
+			// same shape as managers/cache-gc-tick and stream/session-gc-tick.
+			func() {
+				defer core.Guard("managers/challenges-gc-tick")
+				pruneExpiredChallenges()
+			}()
+		}
+	}()
+}
+
+// PendingChallenges returns the not-yet-expired entries, most-recent first.
+func PendingChallenges() []PendingChallenge {
+	pruneExpiredChallenges()
+	challengeMu.Lock()
+	out := make([]PendingChallenge, 0, len(challenges))
+	for _, c := range challenges {
 		out = append(out, *c)
 	}
 	challengeMu.Unlock()

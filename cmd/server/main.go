@@ -168,15 +168,16 @@ func main() {
 	// vecchio VPN_PROXY_URL / vpn_proxy_url così i deployment esistenti
 	// mantengono un'uscita già configurata. I plugin scelgono per nome.
 	managers.InitEgressDefaults(vpnProxy)
-	// Fase C: riporta su i sidecar wireproxy-<nome> salvati (un riavvio non
-	// deve lasciarli morti). In goroutine: al primo avvio può dover fare un
-	// `docker pull` dell'immagine wireproxy, che non deve bloccare il boot
-	// del server HTTP/gRPC.
+	// Fase C: riavvia i sottoprocessi wireproxy dei profili salvati — un
+	// sottoprocesso muore col padre (a differenza dei vecchi sidecar Docker,
+	// che potevano sopravvivere a un riavvio di mycelium), quindi ogni riavvio
+	// deve farli ripartire esplicitamente. In goroutine perché non deve
+	// bloccare il boot del server HTTP/gRPC.
 	core.SafeGo("managers/reapply-wireproxy-boot", managers.ReapplyWireproxyAtBoot)
 	if err := engine.LuaPlugins.LoadAll(core.AppPath("plugins")); err != nil {
 		log.Printf("[server] lua plugin scan error: %v", err)
 	}
-	// Pileus gRPC server — load or generate a stable JWT secret.
+	// Pileus gRPC server — load or generate a stable master secret.
 	jwtSecret := loadOrCreateJWTSecret()
 	// Same master secret keys the HMAC on every /proxy/* URL we mint, so the
 	// HLS proxy can't be driven as an open relay to an arbitrary URL.
@@ -185,6 +186,10 @@ func main() {
 	// self-update-triggered restart no longer logs every admin out (the old
 	// in-memory session map was wiped on every restart).
 	api.SetAdminSessionKey(jwtSecret)
+	// ...and the Pileus device JWT: derived rather than used raw, same as the
+	// two subkeys above, so a leak/rotation of one use doesn't imply the
+	// others (see pileus.DeriveJWTSecret).
+	pileusJWTKey := pileus.DeriveJWTSecret(jwtSecret)
 	grpcAddr := managers.Settings.GetString("pileus_grpc_port", "50051")
 	// TLS di default (2026-08-19): il client Pileus ora pinna il certificato
 	// via il fingerprint esposto da /pileus/info (vedi internal/pileus.
@@ -201,7 +206,7 @@ func main() {
 			tlsCert = &cert
 		}
 	}
-	pileusSrv := pileus.Start(":"+grpcAddr, jwtSecret, tlsCert)
+	pileusSrv := pileus.Start(":"+grpcAddr, pileusJWTKey, tlsCert)
 
 	core.StartAppEngine(core.LauncherConfig{
 		IsSetupDone:       managers.Settings.IsSetupDone(),

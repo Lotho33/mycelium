@@ -113,6 +113,55 @@ func TestJWT_AlgNoneRejected(t *testing.T) {
 	}
 }
 
+// The JWT signing key actually used in production is DeriveJWTSecret(master),
+// never the raw master secret — see cmd/server/main.go, which never passes
+// the master itself to NewAuthHandler/pileus.Start. A token signed with the
+// derived key must NOT verify against the raw master: if it did, the master
+// would effectively be usable as the JWT key too, defeating the whole point
+// of deriving a domain-separated subkey (the same reasoning that already
+// applies to core.SetProxySignKey / api.SetAdminSessionKey).
+func TestJWT_DerivedKeyDiffersFromMaster(t *testing.T) {
+	master := []byte("master-secret-do-not-use-in-prod")
+	derived := DeriveJWTSecret(master)
+	if len(derived) == 0 {
+		t.Fatal("DeriveJWTSecret returned empty key")
+	}
+	if string(derived) == string(master) {
+		t.Fatal("DeriveJWTSecret returned the raw master secret unchanged")
+	}
+
+	hDerived := NewAuthHandler(derived)
+	tok, err := hDerived.mintJWT("device-1", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	hMaster := NewAuthHandler(master)
+	if _, err := hMaster.ParseJWT(tok); err == nil {
+		t.Fatal("token signed with the derived key verified against the raw master secret")
+	}
+}
+
+// Normal round-trip using the derived key, exactly as production wires it up
+// (mint and verify with the same DeriveJWTSecret(master) output).
+func TestJWT_DerivedKeyRoundTrip(t *testing.T) {
+	master := []byte("another-master-secret-not-prod!")
+	derived := DeriveJWTSecret(master)
+	h := NewAuthHandler(derived)
+
+	tok, err := h.mintJWT("device-1", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	id, err := h.ParseJWT(tok)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if id != "device-1" {
+		t.Fatalf("ParseJWT device = %q, want device-1", id)
+	}
+}
+
 func TestJWT_AsymmetricAlgRejected(t *testing.T) {
 	h := testAuthHandler()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

@@ -30,8 +30,8 @@ func RegisterEgressRoutes(mux *http.ServeMux) {
 }
 
 // POST /admin/egress/wireproxy — multipart: `name` + `conf` (a WireGuard .conf).
-// Saves the config, (re)registers the single wireproxy-backed egress and brings
-// the sidecar up.
+// Saves the config, (re)registers the wireproxy-backed egress and starts its
+// subprocess.
 func upsertWireproxyEgress(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(256 << 10); err != nil {
 		http.Error(w, "form non valido", http.StatusBadRequest)
@@ -60,7 +60,8 @@ func upsertWireproxyEgress(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /admin/egress → {profiles:[{name,kind,proxy_url,enabled,port,running}]}
-// `running` is filled in only for wireproxy kinds (a live Docker check).
+// `running` is filled in only for wireproxy kinds (an in-process check against
+// the subprocess registry — see managers.WireproxyRunning).
 func listEgress(w http.ResponseWriter, r *http.Request) {
 	profiles := managers.EgressProfiles()
 	out := make([]map[string]any, 0, len(profiles))

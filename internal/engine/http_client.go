@@ -19,8 +19,23 @@ import (
 //     (both the plain and the TLS dial paths), so nothing can leak around the proxy — a proxy
 //     failure fails the request rather than falling back to a direct connection.
 //   - 30-second timeouts
+//   - SSRF guard on the direct (no-proxy) path only: core.GuardedDialContext
+//     blocks loopback/link-local/cloud-metadata/multicast targets (RFC1918/ULA
+//     allowed by default, opt-in strict mode via MYCELIUM_PROXY_BLOCK_PRIVATE=1
+//     — same policy as internal/api's image and standard upstream proxies).
+//     Plugins run direct_egress (or with no VPN configured) hit arbitrary
+//     attacker-influenced URLs via mycelium.network.get/post/fetch, so this is
+//     the only thing standing between an uploaded plugin ZIP and the Docker/LAN
+//     network the operator's mycelium instance runs on. When a proxy URL is
+//     set, the guard is skipped: the proxy (SOCKS5/HTTP CONNECT) resolves and
+//     dials the target itself, not this process, so a local IP check here
+//     would not see the real destination — same reasoning as
+//     newUTLSProxyTransport in internal/api/upstream_transport.go.
 func NewScrapingClient(proxyURL string) *http.Client {
 	dial := core.ProxyDialer(proxyURL)
+	if proxyURL == "" {
+		dial = core.GuardedDialContext(dial)
+	}
 
 	dialTLSContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, _ := net.SplitHostPort(addr)

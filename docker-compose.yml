@@ -45,8 +45,10 @@ services:
     # "host.docker.internal" on its own — each container resolves DNS independently.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      - "8191:8191"
+    # Nessun binding sull'host: mycelium raggiunge cobweb via rete Docker
+    # interna (COBWEB_ADDR=http://cobweb:8191, vedi sotto), non serve
+    # esporre 8191 sull'host. Se serve fare `curl localhost:8191/health`
+    # per debug manuale, riaggiungere "127.0.0.1:8191:8191".
     volumes:
       - ./data/cobweb:/data
       - ./cobweb.toml:/config/config.toml:ro
@@ -90,20 +92,6 @@ services:
     volumes:
       - ./plugins:/app/plugins
       - ./data:/app/data
-      # Dà alla dashboard admin le metriche CPU/RAM reali del container warp
-      # (GET /containers/warp/stats via internal/managers/docker_stats.go).
-      # ATTENZIONE: chiunque scriva su questo socket ottiene controllo pieno
-      # del daemon Docker dell'host — root-equivalent (può lanciare container
-      # privilegiati, montare il filesystem host, leggere/killare qualunque
-      # altro container). Un ":ro" qui NON limita l'API esposta sul socket,
-      # solo l'immutabilità del file — quindi non dà una vera sicurezza in più.
-      # Questo container esegue anche plugin Lua installabili dall'admin UI:
-      # oggi mycelium.network.* usa un http.Client standard che non supporta
-      # lo schema unix:// (nessun Transport.RegisterProtocol registrato), quindi
-      # i plugin non possono raggiungere il socket tramite l'SDK di rete — ma
-      # il mount resta un'espansione reale della superficie d'attacco, scelta
-      # consapevolmente per avere metriche vere sul container WARP.
-      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -199,8 +187,12 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     ports:
-      - "1080:1080"
+      - "127.0.0.1:1080:1080"
     environment:
+      # BIND_ADDR resta 0.0.0.0: è il bind DENTRO il container, e con la
+      # porta pubblicata solo su 127.0.0.1 (sopra) non è comunque
+      # raggiungibile dall'esterno tramite il port-mapping — non serve
+      # restringerlo (vedi stesso pattern in docker-compose.prod.yml).
       - BIND_ADDR=0.0.0.0
       - BIND_PORT=1080
     volumes:

@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -63,5 +64,46 @@ func TestReadLuaManifest_VPNOptionalInjection(t *testing.T) {
 	}
 	if hasField(optionalOnly.Settings.Global, VPNOptInSettingID) {
 		t.Errorf("vpn_optional without direct_egress: %q must NOT be injected (VPN already covers everything)", VPNOptInSettingID)
+	}
+}
+
+// mf.ID (manifest.yaml's `id:`) is never sanitized by the YAML parser and
+// ends up interpolated into HTML attributes in web/static/admin.js
+// (buildCard) plus filesystem/Redis/setting keys throughout this package. A
+// hostile ZIP upload with a crafted id must be rejected at load time,
+// regardless of what the frontend does with it (defense in depth).
+func TestReadLuaManifest_RejectsUnsafeID(t *testing.T) {
+	unsafe := []string{
+		`plugin"onmouseover=alert(1)`, // HTML attribute breakout
+		`<script>alert(1)</script>`,
+		"plugin id", // space
+		"../../etc", // path traversal-ish
+		"Plugin",    // uppercase not allowed
+		".leading",  // leading punctuation
+		"trailing.", // trailing punctuation
+		"",          // empty (covered separately below too)
+	}
+	for _, id := range unsafe {
+		body := "id: " + strconv.Quote(id) + "\nname: P\n"
+		if _, err := ReadLuaManifest(writeManifest(t, body)); err == nil {
+			t.Errorf("id %q: expected ReadLuaManifest to reject it, got no error", id)
+		}
+	}
+}
+
+// Legitimate ids in use by real plugins in this repo (plugins/*/manifest.yaml)
+// — notably the dotted "vix.movie" / "vix.series" form — must keep working.
+func TestReadLuaManifest_AcceptsLegitimateID(t *testing.T) {
+	legit := []string{"animeunity", "jellyfin", "vix.movie", "vix.series", "cdnlivetv", "sport", "watchfooty", "a", "plugin-name_1.2"}
+	for _, id := range legit {
+		body := "id: " + strconv.Quote(id) + "\nname: P\n"
+		mf, err := ReadLuaManifest(writeManifest(t, body))
+		if err != nil {
+			t.Errorf("id %q: expected ReadLuaManifest to accept it, got error: %v", id, err)
+			continue
+		}
+		if mf.ID != id {
+			t.Errorf("id %q: mf.ID = %q, want unchanged", id, mf.ID)
+		}
 	}
 }

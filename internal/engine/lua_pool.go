@@ -147,6 +147,20 @@ func lockdownStdlib(L *lua.LState) {
 	if pkg, ok := L.GetGlobal("package").(*lua.LTable); ok {
 		L.SetField(pkg, "loadlib", lua.LNil)
 		L.SetField(pkg, "cpath", lua.LString(""))
+		// package.path drives gopher-lua's filesystem require() loader
+		// (loLoaderLua), which resolves modules with os.Stat + LoadFile at the
+		// Go level — entirely outside the globals just neutralized above, and
+		// relative to the process's working directory (WORKDIR /app in
+		// production) when left at its gopher-lua default. Left alone, any
+		// plugin could require("plugins.<other_plugin_id>.init") and execute
+		// another installed plugin's source inside its own LState. Every
+		// legitimate require() in this codebase resolves through
+		// package.preload (populated explicitly by preloadDir/PreloadModule
+		// below, for both plugins/shared/*.lua and the plugin's own modules),
+		// which gopher-lua's loader table checks before ever consulting
+		// package.path — so blanking it only removes the exploitable
+		// filesystem fallback, breaking no legitimate require().
+		L.SetField(pkg, "path", lua.LString(""))
 	}
 }
 
@@ -195,5 +209,13 @@ func (p *LuaPool) newState() (*lua.LState, error) {
 		L.Close()
 		return nil, fmt.Errorf("exec script %s: %w", p.script, err)
 	}
+	// Snapshot _G now, right after the plugin's top-level script has run: this
+	// is the "legitimate" global state (top-level functions, require()d
+	// module tables, config values read from the manifest). Every later
+	// entrypoint call diffs against this baseline and wipes anything new
+	// (see callScope.resetNewGlobals) so a value one call stashes in a global
+	// can't leak into the next call served by the same pooled state — which,
+	// with pool_size defaulting to 2, can belong to a different profile/user.
+	scopeOf(L).snapshotGlobalBaseline(L)
 	return L, nil
 }

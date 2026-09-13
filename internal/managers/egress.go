@@ -30,8 +30,9 @@ type EgressProfile struct {
 	Kind     string `json:"kind"`      // "warp" | "proxy" | "wireproxy"
 	ProxyURL string `json:"proxy_url"` // socks5://… | http://… ; empty only for the built-in "direct"
 	Enabled  bool   `json:"enabled"`
-	// Port is the host port a "wireproxy" sidecar publishes its SOCKS5 on
-	// (0 for every other kind). Persisted so the port survives a restart.
+	// Port is the loopback port the "wireproxy" subprocess binds its SOCKS5
+	// listener on (0 for every other kind). Persisted so the port survives a
+	// restart.
 	Port int `json:"port,omitempty"`
 }
 
@@ -128,7 +129,7 @@ func UpsertEgressProfile(p EgressProfile) error {
 }
 
 // SetEgressEnabled flips a profile's enabled flag. For a wireproxy-backed
-// profile it also brings the sidecar up or down to match.
+// profile it also brings the subprocess up or down to match.
 func SetEgressEnabled(name string, enabled bool) error {
 	name = strings.ToLower(strings.TrimSpace(name))
 	egressMu.Lock()
@@ -148,14 +149,14 @@ func SetEgressEnabled(name string, enabled bool) error {
 	}
 	if found.Kind == "wireproxy" {
 		if err := ApplyWireproxyEgress(*found); err != nil {
-			return fmt.Errorf("profilo salvato ma il sidecar wireproxy non ha risposto: %w", err)
+			return fmt.Errorf("profilo salvato ma il processo wireproxy non ha risposto: %w", err)
 		}
 	}
 	return nil
 }
 
 // DeleteEgressProfile removes one (not "direct"). A wireproxy-backed profile
-// also stops the sidecar and drops the stored .conf.
+// also stops the subprocess and drops the stored .conf.
 func DeleteEgressProfile(name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == EgressDirect {
@@ -180,18 +181,16 @@ func DeleteEgressProfile(name string) error {
 	return nil
 }
 
-// UpsertWireproxyEgress saves a WireGuard config, registers (or updates) a
-// wireproxy-backed egress profile under `name` — assigning it a stable host
-// port — and brings its dedicated sidecar up. Any number of these can coexist.
+// UpsertWireproxyEgress registers (or updates) a wireproxy-backed egress
+// profile under `name` — assigning it a stable loopback port — saves its
+// WireGuard config (bound to that port's [Socks5] section) and brings its
+// dedicated subprocess up. Any number of these can coexist.
 func UpsertWireproxyEgress(name, rawConf string) error {
-	// Store the sanitised form as the canonical Name so the registry key, the
-	// conf filename and the container name can never drift apart.
+	// Store the sanitised form as the canonical Name so the registry key and
+	// the conf filename can never drift apart.
 	name = sanitizeEgressName(name)
 	if name == "" || name == EgressDirect {
 		return fmt.Errorf("nome egress non valido (usa lettere, cifre, - o _)")
-	}
-	if err := SaveWireproxyConf(name, rawConf); err != nil {
-		return err
 	}
 	egressMu.Lock()
 	list := loadEgressLocked()
@@ -199,6 +198,12 @@ func UpsertWireproxyEgress(name, rawConf string) error {
 	if perr != nil {
 		egressMu.Unlock()
 		return perr
+	}
+	// The port must be known before the conf is written — it goes into the
+	// forced [Socks5] BindAddress (see SaveWireproxyConf).
+	if err := SaveWireproxyConf(name, rawConf, port); err != nil {
+		egressMu.Unlock()
+		return err
 	}
 	p := EgressProfile{
 		Name:     name,
@@ -222,16 +227,19 @@ func UpsertWireproxyEgress(name, rawConf string) error {
 	egressMu.Unlock()
 
 	if err := ApplyWireproxyEgress(p); err != nil {
-		return fmt.Errorf("config salvata ma il sidecar wireproxy non è partito: %w", err)
+		return fmt.Errorf("config salvata ma il processo wireproxy non è partito: %w", err)
 	}
 	return nil
 }
 
-// ReapplyWireproxyAtBoot brings every wireproxy sidecar back to the state the
-// stored registry says it should be in — call once after Settings is ready so a
-// server restart doesn't leave an enabled WireGuard egress dead. It also
-// migrates profiles saved before per-egress ports existed (Port == 0): assign a
-// port + fix the ProxyURL if the .conf is still there, disable it otherwise.
+// ReapplyWireproxyAtBoot brings every wireproxy subprocess back to the state
+// the stored registry says it should be in — call once after Settings is
+// ready so a server restart doesn't leave an enabled WireGuard egress dead (a
+// subprocess dies with its parent, unlike the old Docker sidecars which could
+// outlive a mycelium restart). It also migrates profiles saved before
+// per-egress ports existed (Port == 0): assign a port, rewrite the .conf's
+// [Socks5] BindAddress to match and fix the ProxyURL if the .conf is still
+// there, disable it otherwise.
 func ReapplyWireproxyAtBoot() {
 	// egressMu also guards ResolveEgressProxy — on the hot path for every
 	// VPN-routed plugin call. A panic here without a deferred Unlock would
@@ -250,10 +258,17 @@ func ReapplyWireproxyAtBoot() {
 			}
 			if WireproxyConfigured(list[i].Name) {
 				if port, err := assignWireproxyPort(list, list[i].Name); err == nil {
-					list[i].Port = port
-					list[i].ProxyURL = fmt.Sprintf("socks5://127.0.0.1:%d", port)
-					dirty = true
-					continue
+					// The port is baked into the conf's [Socks5] BindAddress
+					// now (not just a Docker port-mapping like before), so a
+					// reassigned port needs the file rewritten to match.
+					if raw, rerr := os.ReadFile(wireproxyConfPath(list[i].Name)); rerr == nil {
+						if serr := SaveWireproxyConf(list[i].Name, string(raw), port); serr == nil {
+							list[i].Port = port
+							list[i].ProxyURL = fmt.Sprintf("socks5://127.0.0.1:%d", port)
+							dirty = true
+							continue
+						}
+					}
 				}
 			}
 			list[i].Enabled = false // no conf / no free port → don't try to route through it

@@ -3,60 +3,49 @@ package managers
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"mycelium/internal/core"
 )
 
 // WireGuard-over-userspace egress. The operator uploads plain WireGuard .conf
 // files (Mullvad, Proton, a self-hosted peer, …). mycelium stores each, forces
-// a [Socks5] section onto it, and runs ONE `wireproxy-<name>` sidecar per
-// config — created on demand over the Docker socket (Fase C: N configs, N
-// sidecars), each publishing its SOCKS5 proxy on a dedicated host port.
+// a [Socks5] section onto it, and runs ONE `wireproxy` subprocess per config —
+// launched directly by mycelium itself (no container, no Docker socket), each
+// binding its own SOCKS5 proxy on a dedicated loopback port.
 //
-// wireproxy is pure userspace WireGuard: no NET_ADMIN, no kernel module. The
-// configs live on the `mycelium_wireproxy` named volume (declared in
-// docker-compose.prod.yml with an explicit name:), mounted read-only into every
-// sidecar — so mycelium never needs to know its own host-side path.
+// wireproxy is pure userspace WireGuard: no NET_ADMIN, no kernel module, just
+// a process opening outbound UDP and a local SOCKS5 listener — running it as a
+// child process of mycelium instead of a separate container loses no
+// meaningful isolation while dropping the /var/run/docker.sock mount entirely
+// (write access to that socket is root-equivalent on the host).
+//
+// The binary ships inside the mycelium image at wireproxyBinPath (see
+// Dockerfile) for the Docker deployment; a bare-metal install (install.sh)
+// needs it installed separately and on $PATH / at that same path for this
+// feature to work — everything else in mycelium runs fine without it.
 
 const (
-	// wireproxyBinInImage is where the mycelium image ships the wireproxy
-	// binary (see Dockerfile) — the sidecars run mycelium's own image with
-	// this as entrypoint.
-	wireproxyBinInImage = "/usr/local/bin/wireproxy"
-	wireproxyVolume     = "mycelium_wireproxy"
-	// wireproxyBindInside is the address wireproxy binds INSIDE its container;
-	// each sidecar maps 127.0.0.1:<hostPort> → this.
-	wireproxyBindInside = "0.0.0.0:1080"
-	// Host-port window for the sidecars' published SOCKS5 proxies.
+	// Loopback port window wireproxy processes bind their SOCKS5 listener on.
 	wireproxyPortBase = 1081
 	wireproxyPortMax  = 1099
 )
 
-// wireproxyImage is the image the egress sidecars run. Default: mycelium's own
-// image (it bundles the wireproxy binary — see Dockerfile — and is already on
-// the box, no third-party registry to reach). Overridable via
-// MYCELIUM_WIREPROXY_IMAGE for a dedicated wireproxy image if ever preferred.
-func wireproxyImage() string {
-	if v := strings.TrimSpace(os.Getenv("MYCELIUM_WIREPROXY_IMAGE")); v != "" {
-		return v
-	}
-	if self := SelfImageRef(); self != "" {
-		return self
-	}
-	return "ghcr.io/windtf/wireproxy:latest" // last resort
-}
-
-// wireproxyEntrypoint is the command the sidecar runs. When the image is
-// mycelium's own, we override the entrypoint to the bundled wireproxy binary;
-// a dedicated wireproxy image already has the right entrypoint so we pass none.
-func wireproxyEntrypoint() []string {
-	if strings.TrimSpace(os.Getenv("MYCELIUM_WIREPROXY_IMAGE")) != "" {
-		return nil // trust the dedicated image's own ENTRYPOINT
-	}
-	return []string{wireproxyBinInImage}
-}
+var (
+	// wireproxyBinPath is a var (not a const) so tests can point it at a fake
+	// executable. Matches where the Dockerfile installs the real binary.
+	wireproxyBinPath = "/usr/local/bin/wireproxy"
+	// wireproxyStopTimeout is how long wireproxyStopProcess waits for a
+	// SIGTERM'd process to exit before escalating to SIGKILL. A var (not a
+	// const) so a test can shrink it instead of taking 5s to exercise the
+	// kill-fallback path.
+	wireproxyStopTimeout = 5 * time.Second
+)
 
 func wireproxyDir() string { return core.AppPath("data", "wireproxy") }
 
@@ -64,11 +53,7 @@ func wireproxyConfPath(name string) string {
 	return filepath.Join(wireproxyDir(), sanitizeEgressName(name)+".conf")
 }
 
-func wireproxyContainerFor(name string) string {
-	return "wireproxy-" + sanitizeEgressName(name)
-}
-
-// sanitizeEgressName keeps a profile name safe as a filename / container-name
+// sanitizeEgressName keeps a profile name safe as a filename / registry-key
 // fragment.
 func sanitizeEgressName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
@@ -88,9 +73,10 @@ func WireproxyConfigured(name string) bool {
 }
 
 // SaveWireproxyConf validates a raw WireGuard config, forces our [Socks5]
-// section onto it and writes it atomically.
-func SaveWireproxyConf(name, raw string) error {
-	cfg, err := normalizeWireguardConf(raw)
+// section (bound to 127.0.0.1:port — the port this profile was assigned) onto
+// it and writes it atomically.
+func SaveWireproxyConf(name, raw string, port int) error {
+	cfg, err := normalizeWireguardConf(raw, fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return err
 	}
@@ -105,9 +91,9 @@ func SaveWireproxyConf(name, raw string) error {
 	return os.Rename(tmp, dst)
 }
 
-// assignWireproxyPort returns the host port for `name`: its current one if the
-// profile already has it, else the lowest free port in the window not used by
-// another wireproxy profile.
+// assignWireproxyPort returns the loopback port for `name`: its current one if
+// the profile already has it, else the lowest free port in the window not
+// used by another wireproxy profile.
 func assignWireproxyPort(list []EgressProfile, name string) (int, error) {
 	used := map[int]bool{}
 	for _, p := range list {
@@ -128,47 +114,157 @@ func assignWireproxyPort(list []EgressProfile, name string) (int, error) {
 	return 0, fmt.Errorf("nessuna porta libera per l'uscita WireGuard (max %d)", wireproxyPortMax-wireproxyPortBase+1)
 }
 
-// ApplyWireproxyEgress brings the sidecar for one wireproxy profile into the
-// wanted state: created+started (or restarted, to pick up a config change) when
-// enabled and configured, stopped otherwise.
+// ─── in-process subprocess registry ─────────────────────────────────────────
+//
+// Replaces the old Docker-sidecar lifecycle (CreateContainer/StartContainer/
+// StopContainer/RestartContainer/ContainerRunning) with a plain map of
+// wireproxy child processes, one per egress profile name. No auto-restart on
+// crash (matching the old sidecars' RestartPolicy: "no"): a process that dies
+// unexpectedly stays down until an explicit action (enable/re-upload from the
+// dashboard, or the next boot's ReapplyWireproxyAtBoot) starts it again.
+
+type wireproxyProc struct {
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	running bool
+	done    chan struct{} // closed once cmd.Wait() returns
+}
+
+var (
+	wireproxyRegMu sync.Mutex
+	wireproxyReg   = map[string]*wireproxyProc{}
+)
+
+// wireproxyIsRunning reports whether a subprocess is currently tracked as
+// running for this profile — an in-memory check, no external call.
+func wireproxyIsRunning(name string) bool {
+	wireproxyRegMu.Lock()
+	p := wireproxyReg[name]
+	wireproxyRegMu.Unlock()
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.running
+}
+
+// wireproxyStopProcess sends SIGTERM to the tracked process for `name` and
+// waits up to wireproxyStopTimeout for it to exit, escalating to SIGKILL
+// otherwise. No-op if nothing is tracked, or it already exited on its own
+// (e.g. a crash) — this is not an error, just "already stopped".
+func wireproxyStopProcess(name string) {
+	wireproxyRegMu.Lock()
+	p := wireproxyReg[name]
+	wireproxyRegMu.Unlock()
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	running := p.running
+	proc := p.cmd.Process
+	p.mu.Unlock()
+	if !running || proc == nil {
+		return
+	}
+	_ = proc.Signal(syscall.SIGTERM)
+	select {
+	case <-p.done:
+	case <-time.After(wireproxyStopTimeout):
+		_ = proc.Kill()
+		<-p.done
+	}
+}
+
+// wireproxyLogWriter prefixes every line written to it with the profile name
+// before forwarding to the underlying file — so interleaved output from
+// several concurrent wireproxy processes stays attributable in the log.
+type wireproxyLogWriter struct {
+	name string
+	out  *os.File
+}
+
+func (w *wireproxyLogWriter) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(w.out, "[wireproxy:%s] %s\n", w.name, line)
+	}
+	return len(p), nil
+}
+
+// wireproxyStartProcess (re)launches the wireproxy subprocess for `name`,
+// reading its already-saved .conf from disk. Any previous instance is stopped
+// first — wireproxy has no reload signal, so picking up a changed config
+// needs a fresh process, same as the old sidecar's stop+start restart.
+func wireproxyStartProcess(name string) error {
+	wireproxyStopProcess(name)
+
+	confPath := wireproxyConfPath(name)
+	if _, err := os.Stat(confPath); err != nil {
+		return fmt.Errorf("config wireproxy per %q non trovata: %w", name, err)
+	}
+
+	cmd := exec.Command(wireproxyBinPath, "-c", confPath)
+	setSysProcAttr(cmd) // Pdeathsig: SIGTERM on Linux — dies with mycelium even without a graceful shutdown
+	cmd.Stdout = &wireproxyLogWriter{name: name, out: os.Stdout}
+	cmd.Stderr = &wireproxyLogWriter{name: name, out: os.Stderr}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("avvio wireproxy per %q: %w", name, err)
+	}
+
+	p := &wireproxyProc{cmd: cmd, running: true, done: make(chan struct{})}
+	wireproxyRegMu.Lock()
+	wireproxyReg[name] = p
+	wireproxyRegMu.Unlock()
+
+	// Reap the process and flip its state to "not running" the moment it
+	// exits — by itself (crash) or via wireproxyStopProcess's signal — so
+	// WireproxyRunning reflects reality without polling anything. No
+	// auto-restart here on purpose (see package doc comment above).
+	core.SafeGo("managers/wireproxy-wait-"+name, func() {
+		err := cmd.Wait()
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
+		close(p.done)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[wireproxy:%s] processo terminato: %v\n", name, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[wireproxy:%s] processo terminato\n", name)
+		}
+	})
+	return nil
+}
+
+// ApplyWireproxyEgress brings the subprocess for one wireproxy profile into
+// the wanted state: (re)started when enabled and configured, stopped
+// otherwise.
 func ApplyWireproxyEgress(p EgressProfile) error {
-	cn := wireproxyContainerFor(p.Name)
 	if !p.Enabled || !WireproxyConfigured(p.Name) {
-		_ = StopContainer(cn)
+		wireproxyStopProcess(p.Name)
 		return nil
 	}
 	if p.Port < wireproxyPortBase || p.Port > wireproxyPortMax {
 		return fmt.Errorf("uscita %q senza porta assegnata — ri-carica il file .conf", p.Name)
 	}
-	confInside := "/etc/wireproxy/" + sanitizeEgressName(p.Name) + ".conf"
-	if ContainerExists(cn) {
-		return RestartContainer(cn) // stop+start → re-reads the (possibly changed) conf
-	}
-	if err := CreateContainer(ContainerSpec{
-		Name:          cn,
-		Image:         wireproxyImage(),
-		Entrypoint:    wireproxyEntrypoint(),
-		Cmd:           []string{"-c", confInside},
-		Labels:        map[string]string{"xyz.mycelium.managed": "wireproxy", "xyz.mycelium.egress": p.Name},
-		Binds:         []string{wireproxyVolume + ":/etc/wireproxy:ro"},
-		Ports:         map[string]string{"1080/tcp": fmt.Sprintf("127.0.0.1:%d", p.Port)},
-		RestartPolicy: "unless-stopped",
-	}); err != nil {
-		return err
-	}
-	return StartContainer(cn)
+	return wireproxyStartProcess(p.Name)
 }
 
-// WireproxyRunning reports whether the sidecar for this egress is up.
+// WireproxyRunning reports whether the subprocess for this egress is up.
 func WireproxyRunning(name string) bool {
-	return ContainerRunning(wireproxyContainerFor(name))
+	return wireproxyIsRunning(name)
 }
 
-// DeleteWireproxyEgress removes the sidecar and its stored config.
+// DeleteWireproxyEgress stops the subprocess (if any) and removes the stored
+// config.
 func DeleteWireproxyEgress(name string) error {
-	if err := RemoveContainer(wireproxyContainerFor(name)); err != nil {
-		return err
-	}
+	wireproxyStopProcess(name)
+	wireproxyRegMu.Lock()
+	delete(wireproxyReg, name)
+	wireproxyRegMu.Unlock()
 	if err := os.Remove(wireproxyConfPath(name)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -187,8 +283,9 @@ const wireproxyDefaultMTU = 1280
 // normalizeWireguardConf keeps [Interface]/[Peer] (and any comments) verbatim,
 // drops any proxy sections the upload might carry ([Socks5]/[http]/tunnels) so
 // ours is authoritative, forces a conservative MTU if none is set, validates
-// the essentials, and appends our [Socks5].
-func normalizeWireguardConf(raw string) (string, error) {
+// the essentials, and appends our [Socks5] bound to bindAddr (the loopback
+// address:port this profile was assigned — see assignWireproxyPort).
+func normalizeWireguardConf(raw string, bindAddr string) (string, error) {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	dropped := map[string]bool{
 		"socks5": true, "http": true,
@@ -251,5 +348,5 @@ func normalizeWireguardConf(raw string) (string, error) {
 	}
 
 	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
-	return body + "\n\n[Socks5]\nBindAddress = " + wireproxyBindInside + "\n", nil
+	return body + "\n\n[Socks5]\nBindAddress = " + bindAddr + "\n", nil
 }

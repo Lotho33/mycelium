@@ -30,9 +30,18 @@ func SetProxySignKey(master []byte) {
 func ProxySignEnabled() bool { return len(proxySignKey) > 0 }
 
 // proxySigInput is the canonical string signed for a /proxy/* URL: the
-// security-relevant query params in a fixed order, newline-separated. `uid` is
-// deliberately excluded (tracking only, varies per session). Values are read
-// url-decoded, exactly as the serving handler reads them via r.URL.Query().
+// security-relevant query params in a fixed order, newline-separated. `uid`
+// IS included (fixed position, last) — it is the real Pileus profileID and is
+// used server-side as the key into managers.Sessions.Register (one active
+// stream per profile) and as the userID in managers.DB.UpsertProgress
+// ("continue watching"). Leaving it out of the signature let anyone holding a
+// legitimately-signed /proxy/* URL swap `uid` for another profile's id
+// (trivially discoverable via ListProfiles) without invalidating `sig`, and
+// so poison another profile's watch history / session on the same account.
+// Values are read url-decoded, exactly as the serving handler reads them via
+// r.URL.Query(). Newline-joining a fixed list of fields (rather than raw
+// query-string concatenation) means there's no a=1&ab=2 vs a=12&b= ambiguity:
+// each field occupies its own line regardless of its content.
 func proxySigInput(q url.Values) string {
 	return strings.Join([]string{
 		q.Get("data"),
@@ -42,6 +51,7 @@ func proxySigInput(q url.Values) string {
 		q.Get("vpn"),
 		q.Get("egr"),
 		q.Get("sid"),
+		q.Get("uid"),
 	}, "\n")
 }
 

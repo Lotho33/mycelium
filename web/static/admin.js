@@ -56,7 +56,14 @@ function setInstalling(on) {
 }
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
-const esc = str => String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// esc(): escaping SOLO per contesto testo/attributo HTML double-quoted.
+// Include l'apice singolo per difesa in profondità, ma resta comunque
+// SBAGLIATO usarla per costruire un onclick="fn('${...}')": un browser
+// decodifica le entity HTML di un attributo PRIMA di valutarne il contenuto
+// come JS, quindi anche &#39; torna un apice vero e chiude la stringa JS.
+// Il fix corretto per quel contesto è il pattern data-*/listener delegato
+// (vedi loadPileusDevices e buildCard) — mai onclick costruito per stringa.
+const esc = str => String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 function fmtBytes(b) { if (!b||b<=0) return '—'; return b<1048576?(b/1024).toFixed(0)+' KB':(b/1048576).toFixed(1)+' MB'; }
 function fmtUptime(s) {
     if (!s||s<=0) return '—';
@@ -116,6 +123,30 @@ function wipePluginData() {
     );
 }
 
+// ─── Cambio password admin ────────────────────────────────────────────────────
+async function changeAdminPassword(ev) {
+    ev.preventDefault();
+    const curEl = document.getElementById('pw-current');
+    const newEl = document.getElementById('pw-new');
+    const current = curEl.value;
+    const next = newEl.value;
+    if (next.length < 8) { showToast('La nuova password deve essere di almeno 8 caratteri.', 'error'); return; }
+
+    const r = await apiFetch('/admin/password/change', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    if (!r) return;
+    if (r.ok) {
+        curEl.value = '';
+        newEl.value = '';
+        showToast('Password admin aggiornata.', 'success');
+    } else {
+        showToast(await apiErrorMessage(r, 'Cambio password fallito.'), 'error');
+    }
+}
+
 // ─── Side drawer + pages ─────────────────────────────────────────────────────
 const _pages = ['overview','plugins','settings','vpn','challenges','download','logs'];
 const _pageTitles = {
@@ -162,21 +193,13 @@ async function pollResources() {
     if (sysRes?.ok)  { sys = await sysRes.json();  updateSysStatus(sys); }
     if (core && sys) updateAggregateStats(core, sys);
 }
-// updateAggregateStats somma le metriche di core + extractor + redis (i pezzi
-// dello "stack Sistema"). Un servizio senza metriche container disponibili
-// contribuisce 0, non NaN. L'uptime non si somma: è quello del processo core,
-// che è "il servizio" nel suo insieme.
+// updateAggregateStats mostra le metriche del processo core (CPU/RAM di
+// extractor e redis non sono più lette dall'API Docker — vedi ov-*-ok per la
+// loro readiness). Il secondo argomento (system status) non serve più al
+// calcolo ma resta nella firma per compatibilità col chiamante.
 function updateAggregateStats(core, s) {
-    let cpu = core.cpu_percent || 0;
-    let mem = core.mem_bytes || 0;
-    if (s.browser?.container_available) {
-        cpu += s.browser.container_cpu_percent || 0;
-        mem += s.browser.container_mem_bytes || 0;
-    }
-    if (s.redis?.container_available) {
-        cpu += s.redis.container_cpu_percent || 0;
-        mem += s.redis.container_mem_bytes || 0;
-    }
+    const cpu = core.cpu_percent || 0;
+    const mem = core.mem_bytes || 0;
     const set = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
     set('agg-cpu',    cpu.toFixed(1)+'%');
     set('agg-mem',    fmtBytes(mem));
@@ -205,44 +228,25 @@ function setStatDot(id, state, title) {
 
 // updateSysStatus popola la card "Sistema" unica: Core (metriche da
 // /admin/core/resources via updateCoreRes), Extractor (cobweb) e Redis
-// (readiness + risorse container via API Docker). Il dot di testata riassume:
-// verde se tutto ok, rosso se un pezzo che dovrebbe essere su non risponde.
+// (readiness — CPU/RAM container non più lette dall'API Docker). Il dot di
+// testata riassume: verde se tutto ok, rosso se un pezzo che dovrebbe essere
+// su non risponde.
 function updateSysStatus(s) {
     const set = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
-    const notes = [];
 
-    // Extractor (cobweb) — "ok" dal suo /health, risorse via API Docker.
+    // Extractor (cobweb) — "ok" dal suo /health.
     setStatDot('ov-browser-dot', s.browser?.ok ? 'ok' : 'down',
         s.browser?.ok ? 'Pronto (' + (s.browser.engine || '?') + ')' : 'Non raggiungibile');
     set('ov-browser-engine', s.browser?.engine || '—');
-    if (s.browser?.container_available) {
-        set('ov-browser-mem', fmtBytes(s.browser.container_mem_bytes));
-        set('ov-browser-cpu', s.browser.container_cpu_percent!=null ? s.browser.container_cpu_percent.toFixed(1)+'%' : '—');
-    } else {
-        set('ov-browser-mem', '—'); set('ov-browser-cpu', '—');
-        notes.push('metriche container non disponibili (Docker API non raggiungibile)');
-    }
 
-    // Redis — readiness + risorse container via API Docker.
+    // Redis — readiness.
     setStatDot('ov-redis-dot', s.redis?.ok ? 'ok' : 'down');
     set('ov-redis-addr', s.redis?.addr || '—');
-    if (s.redis?.container_available) {
-        set('ov-redis-mem', fmtBytes(s.redis.container_mem_bytes));
-        set('ov-redis-cpu', s.redis.container_cpu_percent!=null ? s.redis.container_cpu_percent.toFixed(1)+'%' : '—');
-    } else {
-        set('ov-redis-mem', '—'); set('ov-redis-cpu', '—');
-    }
 
     // Dot di testata: rosso se extractor o redis non rispondono.
     const allOk = (s.browser?.ok) && (s.redis?.ok);
     setStatDot('sys-dot', allOk ? 'ok' : 'down',
         allOk ? 'Tutti i servizi attivi' : 'Un servizio non risponde');
-
-    const noteEl = document.getElementById('ov-sys-note');
-    if (noteEl) {
-        if (notes.length) { noteEl.textContent = notes.join(' · '); noteEl.classList.remove('hidden'); }
-        else noteEl.classList.add('hidden');
-    }
 }
 // setStatusBox colora un box di stato in base all'esito: null = neutro/caricamento,
 // true = successo (verde), false = errore (rosso). Usato sia per l'upload che
@@ -360,11 +364,22 @@ async function loadChallenges() {
             <span class="text-gray-600">${esc(e.egress)}</span>
             <span class="text-gray-600">vista ${e.hits}× · ultima ${_fmtWhen(e.last_seen)}</span>
             <span class="ml-auto flex gap-2">
-                <button onclick="resolveJarDomain('${esc(e.domain)}')" class="text-amber-400 hover:text-amber-300 transition font-semibold">Risolvi</button>
-                <button onclick="dismissChallenge('${esc(e.domain)}')" class="text-gray-500 hover:text-gray-300 transition">Ignora</button>
+                <button data-domain="${esc(e.domain)}" data-action="resolve" class="challenge-btn text-amber-400 hover:text-amber-300 transition font-semibold">Risolvi</button>
+                <button data-domain="${esc(e.domain)}" data-action="dismiss" class="challenge-btn text-gray-500 hover:text-gray-300 transition">Ignora</button>
             </span>
         </div>`).join('');
 }
+// Listener delegato, agganciato una volta sola: box.innerHTML viene
+// riscritto a ogni loadChallenges(), niente onclick="fn('${domain}')"
+// costruito per concatenazione — domain arriva da cobweb (dominio target
+// di una challenge), non è testo digitato dall'admin.
+document.getElementById('challenges-list')?.addEventListener('click', e => {
+    const btn = e.target.closest('.challenge-btn');
+    if (!btn) return;
+    const domain = btn.dataset.domain;
+    if (btn.dataset.action === 'resolve') resolveJarDomain(domain);
+    else if (btn.dataset.action === 'dismiss') dismissChallenge(domain);
+});
 async function dismissChallenge(domain) {
     const r = await apiFetch(`/admin/vpn/challenges/${encodeURIComponent(domain)}`, { method: 'DELETE' });
     if (r?.ok) loadChallenges();
@@ -402,12 +417,21 @@ async function loadJar() {
             <span class="text-gray-600">${esc(_egressLabel(e.egress))}</span>
             <span class="text-gray-600">${e.cookie_count} cookie · ${exp}</span>
             <span class="ml-auto flex gap-2">
-                <button onclick="resolveJarDomain('${esc(e.domain)}')" class="text-sky-400 hover:text-sky-300 transition">Risolvi</button>
-                <button onclick="deleteJarEntry('${esc(e.domain)}','${esc(e.egress)}')" class="text-gray-500 hover:text-red-400 transition">Elimina</button>
+                <button data-domain="${esc(e.domain)}" data-action="resolve" class="jar-btn text-sky-400 hover:text-sky-300 transition">Risolvi</button>
+                <button data-domain="${esc(e.domain)}" data-egress="${esc(e.egress)}" data-action="delete" class="jar-btn text-gray-500 hover:text-red-400 transition">Elimina</button>
             </span>
         </div>`;
     }).join('');
 }
+// Listener delegato — domain/egress vengono dalla jar di cobweb, non da
+// input testuale dell'admin: mai in un onclick costruito per stringa.
+document.getElementById('jar-list')?.addEventListener('click', e => {
+    const btn = e.target.closest('.jar-btn');
+    if (!btn) return;
+    const domain = btn.dataset.domain;
+    if (btn.dataset.action === 'resolve') resolveJarDomain(domain);
+    else if (btn.dataset.action === 'delete') deleteJarEntry(domain, btn.dataset.egress);
+});
 async function resolveJarDomain(domain) {
     await openManualSession();
     const inp = document.getElementById('vpn-session-url-input');
@@ -454,9 +478,9 @@ async function loadEgress() {
             : isWg ? (p.enabled && p.running ? 'bg-emerald-400' : p.enabled ? 'bg-amber-400 pulse-dot' : 'bg-gray-700')
             : p.enabled ? 'bg-emerald-400' : 'bg-gray-700';
         const right = isDirect ? '<span class="text-gray-700">sempre attiva</span>' : `
-            <button onclick="testEgress('${esc(p.name)}')" class="text-sky-400 hover:text-sky-300 transition">Prova</button>
-            <button onclick="toggleEgress('${esc(p.name)}',${!p.enabled})" class="text-gray-400 hover:text-gray-200 transition">${p.enabled ? 'Disattiva' : 'Attiva'}</button>
-            <button onclick="deleteEgress('${esc(p.name)}')" class="text-gray-500 hover:text-red-400 transition">Elimina</button>`;
+            <button data-name="${esc(p.name)}" data-action="test" class="egress-btn text-sky-400 hover:text-sky-300 transition">Prova</button>
+            <button data-name="${esc(p.name)}" data-action="toggle" data-enabled="${p.enabled ? '1' : '0'}" class="egress-btn text-gray-400 hover:text-gray-200 transition">${p.enabled ? 'Disattiva' : 'Attiva'}</button>
+            <button data-name="${esc(p.name)}" data-action="delete" class="egress-btn text-gray-500 hover:text-red-400 transition">Elimina</button>`;
         const kindTag = p.kind === 'warp' ? 'WARP'
             : isWg ? `WireGuard · :${p.port}${p.enabled && !p.running ? ' · avvio…' : ''}`
             : p.proxy_url ? p.proxy_url : '';
@@ -468,6 +492,19 @@ async function loadEgress() {
         </div>`;
     }).join('');
 }
+// Listener delegato — p.name è il nome scelto dall'admin quando crea
+// l'uscita, ma resta comunque preferibile non passarlo mai per stringa in
+// un onclick (coerenza col resto del file + zero costo).
+document.getElementById('egress-list')?.addEventListener('click', e => {
+    const btn = e.target.closest('.egress-btn');
+    if (!btn) return;
+    const name = btn.dataset.name;
+    switch (btn.dataset.action) {
+        case 'test':   testEgress(name); break;
+        case 'toggle': toggleEgress(name, btn.dataset.enabled !== '1'); break;
+        case 'delete': deleteEgress(name); break;
+    }
+});
 async function addEgress(ev) {
     ev.preventDefault();
     const name = document.getElementById('egress-name').value.trim();
@@ -888,14 +925,14 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
         <div class="space-y-2">
             <div class="flex items-center justify-between">
                 <span class="flex items-center gap-1.5 text-xs text-gray-500">
-                    Live <span id="log-dot-${pid.replace(/\./g,'-')}" class="inline-block w-1.5 h-1.5 rounded-full bg-gray-700"></span>
+                    Live <span id="log-dot-${esc(pid.replace(/\./g,'-'))}" class="inline-block w-1.5 h-1.5 rounded-full bg-gray-700"></span>
                 </span>
                 <div class="flex gap-2">
-                    <button onclick="clearPluginLog('${pid}')" class="text-[10px] text-gray-600 hover:text-gray-400 transition">Pulisci</button>
-                    <button onclick="refreshPluginLogs('${pid}','${logEndpoint}')" class="text-[10px] text-gray-600 hover:text-gray-400 transition">Ricarica</button>
+                    <button data-action="clear-log" class="text-[10px] text-gray-600 hover:text-gray-400 transition">Pulisci</button>
+                    <button data-action="refresh-log" class="text-[10px] text-gray-600 hover:text-gray-400 transition">Ricarica</button>
                 </div>
             </div>
-            <pre id="plugin-log-output-${pid}"
+            <pre id="plugin-log-output-${esc(pid)}"
                 class="panel rounded-lg p-3 text-xs font-mono h-48 overflow-y-auto whitespace-pre-wrap text-gray-500 border border-gray-800/60 leading-relaxed">In attesa di log…</pre>
         </div>`;
 
@@ -916,7 +953,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                             ${esc(flabel)}
                         </label>
                         <input type="checkbox"
-                            id="pluginfield_${pid}_${fkey}"
+                            id="pluginfield_${esc(pid)}_${fkey}"
                             data-bool="1"
                             ${fval === 'true' ? 'checked' : ''}
                             class="w-4 h-4 accent-blue-600 disabled:opacity-30 disabled:cursor-not-allowed">
@@ -928,14 +965,14 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                         ${f.required ? '<span class="text-red-500/70 text-[9px]">*</span>' : ''}
                     </label>
                     <input type="${isPass?'password':ftype==='number'?'number':'text'}"
-                        id="pluginfield_${pid}_${fkey}"
+                        id="pluginfield_${esc(pid)}_${fkey}"
                         value="${isPass?'':esc(fval)}"
                         placeholder="${isPass&&isSet?'••••••••  (già impostato)':esc(f.placeholder||f.Placeholder||'')}"
                         class="w-full panel border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono
                                focus:border-blue-600 focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed transition">
                 </div>`;
             }).join('')}
-            <button onclick="savePluginSettings('${pid}',${isLua},this)"
+            <button data-action="save-settings"
                 class="bg-blue-700 hover:bg-blue-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">
                 Salva${isLua?'':' e riavvia'}
             </button>
@@ -950,7 +987,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                     <span class="text-xs font-mono text-gray-300">${esc(t.function||t.Function)}</span>
                     ${t.cron ? `<span class="ml-2 text-[10px] font-mono text-gray-600">${esc(t.cron)}</span>` : ''}
                 </div>
-                <button onclick="runLuaTask('${pid}','${esc(t.function||t.Function)}')"
+                <button data-action="run-task" data-task="${esc(t.function||t.Function)}"
                     class="bg-gray-800 hover:bg-sky-900/60 text-gray-400 hover:text-sky-300 text-[10px] px-2.5 py-1 rounded-lg transition font-mono">
                     Esegui
                 </button>
@@ -965,11 +1002,11 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             ${availProviders.length === 0 ? `<p class="text-xs text-gray-600">Nessun provider attivo.</p>` :
               availProviders.map(provId => `
             <label class="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" id="bind_${pid}_${provId.replace(/\./g,'__')}" ${currentBound.includes(provId)?'checked':''}
+                <input type="checkbox" id="bind_${esc(pid)}_${provId.replace(/\./g,'__')}" ${currentBound.includes(provId)?'checked':''}
                     class="rounded accent-purple-500">
                 <span class="text-xs font-mono text-gray-300">${esc(provId)}</span>
             </label>`).join('')}
-            <button onclick="saveEnricherBinding('${pid}',this)"
+            <button data-action="save-binding"
                 class="mt-1 bg-purple-700 hover:bg-purple-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">
                 Salva
             </button>
@@ -980,8 +1017,8 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     const hasCatalogs = !isEnricher && (caps.includes('static_catalog') || caps.includes('sections'));
     const catalogsPanelHTML = hasCatalogs ? `
         <div>
-            <div id="catalogs-list-${pid}" class="space-y-1.5 mb-3"><p class="text-xs text-gray-600">Clicca per caricare…</p></div>
-            <button onclick="saveCatalogs('${pid}',this)"
+            <div id="catalogs-list-${esc(pid)}" class="space-y-1.5 mb-3"><p class="text-xs text-gray-600">Clicca per caricare…</p></div>
+            <button data-action="save-catalogs"
                 class="bg-teal-700 hover:bg-teal-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">
                 Salva ordine
             </button>
@@ -992,12 +1029,12 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     const egressPanelHTML = !isLua ? '' : `
         <div class="space-y-2">
             <p class="text-[11px] text-gray-500 mb-2">Uscita di rete per il flusso video di questo plugin. Le uscite si gestiscono in <b>VPN → Uscite di rete</b>.</p>
-            <select id="pluginegress_${pid}"
+            <select id="pluginegress_${esc(pid)}"
                 class="w-full panel border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-200
                        focus:border-blue-600 focus:outline-none transition">
                 ${_egressProfiles.map(p => `<option value="${esc(p.name)}" ${p.name===curEgress?'selected':''} ${(!p.enabled&&p.name!=='direct')?'disabled':''}>${esc(_egressLabel(p.name))}${(!p.enabled&&p.name!=='direct')?' (disattivata)':''}</option>`).join('')}
             </select>
-            <button onclick="savePluginEgress('${pid}',this)"
+            <button data-action="save-egress"
                 class="bg-blue-700 hover:bg-blue-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">Salva</button>
         </div>`;
 
@@ -1019,28 +1056,28 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     // it before turning it on. (isOff computed after rState, below.)
     card.className = `card border ${borderCls} rounded-xl overflow-hidden transition-opacity`;
 
-    const resId     = 'plugin-res-'     + pid.replace(/\./g,'-');
+    const resId     = 'plugin-res-'     + esc(pid.replace(/\./g,'-'));
 
     const stremioBtn = (!isEnricher && isReady && !isLua)
-        ? `<button onclick="showPluginStremioURLs('${pid}','${esc(data.plugin_name||pid)}')"
+        ? `<button data-action="stremio-urls"
                class="text-[10px] text-indigo-400 hover:text-indigo-300 font-mono transition">URL Stremio</button>` : '';
 
     const editBtn = isLua
-        ? `<button onclick="openEditor('${pid}','${esc(data.plugin_name||pid)}')"
+        ? `<button data-action="open-editor"
                class="text-[10px] text-gray-500 hover:text-gray-300 transition">Codice</button>` : '';
 
     // Toggle abilita/disabilita: solo per i plugin non-Lua. I plugin Lua
     // usano il ciclo di vita a stati (luaOps, sotto).
-    const toggleBtn = isLua ? '' : `<button onclick="if(!_installing)togglePluginStatus('${pid}',${!isEnabled})"
+    const toggleBtn = isLua ? '' : `<button data-action="toggle-status"
                class="text-[10px] ${isEnabled?'text-gray-600 hover:text-gray-400':'text-emerald-600 hover:text-emerald-400'} transition">
                ${isEnabled?'Disabilita':'Abilita'}</button>`;
-    const uninstallBtn = `<button onclick="if(!_installing)doUninstallPlugin('${pid}',${isLua})"
+    const uninstallBtn = `<button data-action="uninstall"
                class="text-[10px] text-gray-700 hover:text-red-400 transition" title="Disinstalla">Elimina</button>`;
 
     const gRPCOps = isLua ? '' : isProcess
-        ? `<button onclick="if(!_installing)doStopPlugin('${pid}')"    class="text-[10px] text-gray-600 hover:text-red-400 transition">Stop</button>
-           <button onclick="if(!_installing)doRestartPlugin('${pid}')" class="text-[10px] text-gray-600 hover:text-yellow-400 transition">Riavvia</button>`
-        : `<button onclick="if(!_installing)doRestartPlugin('${pid}',true)" class="text-[10px] text-gray-600 hover:text-emerald-400 transition">Avvia</button>`;
+        ? `<button data-action="stop"    class="text-[10px] text-gray-600 hover:text-red-400 transition">Stop</button>
+           <button data-action="restart" class="text-[10px] text-gray-600 hover:text-yellow-400 transition">Riavvia</button>`
+        : `<button data-action="start" class="text-[10px] text-gray-600 hover:text-emerald-400 transition">Avvia</button>`;
 
     // Lua lifecycle: un solo tasto Avvia/Ferma che cambia stato, + Riavvia
     // (disabilitato se il plugin è fermo o in attesa di configurazione).
@@ -1048,11 +1085,11 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     const isOff = isLua ? (rState === 'stopped') : !isEnabled;
     const luaOps = !isLua ? '' : (() => {
         const startStop = rState === 'running'
-            ? `<button onclick="if(!_installing)luaPluginState('${pid}','stop')"
+            ? `<button data-action="lua-stop"
                    class="text-[10px] text-gray-600 hover:text-red-400 transition">Ferma</button>`
-            : `<button ${rState==='waiting'?'disabled title="Compila i campi obbligatori nelle Impostazioni"':`onclick="if(!_installing)luaPluginState('${pid}','start')"`}
+            : `<button ${rState==='waiting'?'disabled title="Compila i campi obbligatori nelle Impostazioni"':'data-action="lua-start"'}
                    class="text-[10px] ${rState==='waiting'?'text-gray-700 cursor-not-allowed':'text-emerald-600 hover:text-emerald-400'} transition">Avvia</button>`;
-        const restart = `<button ${rState==='running'?`onclick="if(!_installing)luaPluginState('${pid}','restart')"`:'disabled'}
+        const restart = `<button ${rState==='running'?'data-action="lua-restart"':'disabled'}
                    class="text-[10px] ${rState==='running'?'text-gray-600 hover:text-yellow-400':'text-gray-800 cursor-not-allowed'} transition">Riavvia</button>`;
         return startStop + restart;
     })();
@@ -1064,13 +1101,13 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
 
     // Build tab bar HTML
     const tabBarHTML = panelTabs.map((t, i) => `
-        <button id="ptab-${pid}-${t.id}" onclick="switchPluginTab('${pid}','${t.id}')"
+        <button id="ptab-${esc(pid)}-${t.id}" data-action="switch-tab" data-tab="${esc(t.id)}"
             class="px-3 py-1.5 text-[11px] font-semibold transition ${i===0?'text-blue-400 border-b border-blue-500':'text-gray-600 hover:text-gray-400'}">
             ${t.label}
         </button>`).join('');
 
     const panelsHTML = panelTabs.map((t, i) => `
-        <div id="ppanel-${pid}-${t.id}" class="${i>0?'hidden':''}" ${t.id==='log'?`data-is-lua="${isLua}"`:''}>
+        <div id="ppanel-${esc(pid)}-${t.id}" class="${i>0?'hidden':''}" ${t.id==='log'?`data-is-lua="${isLua}"`:''}>
             ${t.html}
         </div>`).join('');
 
@@ -1099,7 +1136,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             </div>
         </div>
         <!-- Expandable drawer -->
-        <div id="drawer-${pid}" class="hidden border-t border-gray-800/60">
+        <div id="drawer-${esc(pid)}" class="hidden border-t border-gray-800/60">
             <!-- Inner tab bar -->
             <div class="flex items-center gap-0 px-2 border-b border-gray-800/40 bg-black/20">
                 ${tabBarHTML}
@@ -1122,6 +1159,36 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             openPluginLog(pid, logEndpoint, logSSEEndpoint);
         } else {
             disconnectPluginLogSSE(pid);
+        }
+    });
+
+    // Un solo listener delegato per TUTTI i bottoni della card (header +
+    // pannelli del drawer) — niente onclick="fn('${pid}')" costruito per
+    // concatenazione: pid è mf.ID del manifest plugin, mai sanificato lato
+    // Go, quindi potenzialmente ostile. pid/isLua/isEnabled/logEndpoint/data
+    // restano disponibili per chiusura, non serve portarli in data-*.
+    card.addEventListener('click', e => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn || !card.contains(btn)) return;
+        switch (btn.dataset.action) {
+            case 'clear-log':    clearPluginLog(pid); break;
+            case 'refresh-log':  refreshPluginLogs(pid, logEndpoint); break;
+            case 'save-settings':  savePluginSettings(pid, isLua, btn); break;
+            case 'run-task':       runLuaTask(pid, btn.dataset.task); break;
+            case 'save-binding':   saveEnricherBinding(pid, btn); break;
+            case 'save-catalogs':  saveCatalogs(pid, btn); break;
+            case 'save-egress':    savePluginEgress(pid, btn); break;
+            case 'switch-tab':     switchPluginTab(pid, btn.dataset.tab); break;
+            case 'stremio-urls':   showPluginStremioURLs(pid, data.plugin_name || pid); break;
+            case 'open-editor':    openEditor(pid, data.plugin_name || pid); break;
+            case 'toggle-status':  if (!_installing) togglePluginStatus(pid, !isEnabled); break;
+            case 'uninstall':      if (!_installing) doUninstallPlugin(pid, isLua); break;
+            case 'stop':           if (!_installing) doStopPlugin(pid); break;
+            case 'restart':        if (!_installing) doRestartPlugin(pid); break;
+            case 'start':          if (!_installing) doRestartPlugin(pid, true); break;
+            case 'lua-start':      if (!_installing) luaPluginState(pid, 'start'); break;
+            case 'lua-stop':       if (!_installing) luaPluginState(pid, 'stop'); break;
+            case 'lua-restart':    if (!_installing) luaPluginState(pid, 'restart'); break;
         }
     });
 
@@ -1528,6 +1595,13 @@ function disconnectLogSSE() {
 function reconnectLogSSE() { connectLogSSE(); }
 
 // ─── Version check ────────────────────────────────────────────────────────────
+// normalizeVersion mirra core.normalizeVersion (Go): toglie un eventuale
+// prefisso "v"/"V" iniziale, così "1.3.2" e "v1.3.2" risultano la stessa
+// versione a prescindere da quale lato (in esecuzione vs. ultima su GitHub)
+// porta il prefisso — i tag git sono sempre "vX.Y.Z", core.Version no.
+function normalizeVersion(s) {
+    return String(s || '').replace(/^[vV]/, '');
+}
 async function checkCoreVersion() {
     const r = await apiFetch('/admin/info');
     if (!r?.ok) return;
@@ -1536,7 +1610,20 @@ async function checkCoreVersion() {
     if (ve && d.version) ve.textContent = d.version;
     const ove = document.getElementById('ov-core-version');
     if (ove && d.version) ove.textContent = d.version;
-    if (!d.latest_version || d.latest_version === d.version) return;
+
+    // App web Pileus: precompila il repo salvato e abilita il bottone di
+    // aggiornamento solo se un repo è configurato (vedi pileus_web_repo in
+    // getAdminInfo). Non tocca il campo se l'admin ci sta scrivendo dentro.
+    const repoInput = document.getElementById('pileus-web-repo');
+    if (repoInput && document.activeElement !== repoInput) repoInput.value = d.pileus_web_repo || '';
+    const pwBtn = document.getElementById('pileus-web-update-btn');
+    if (pwBtn) pwBtn.disabled = !d.pileus_web_repo;
+    const pwStatus = document.getElementById('pileus-web-status');
+    if (pwStatus && !pwStatus.dataset.busy) {
+        pwStatus.textContent = d.pileus_web_repo ? '' : "Configura il repo Pileus qui sopra per abilitare l'aggiornamento.";
+    }
+
+    if (!d.latest_version || normalizeVersion(d.latest_version) === normalizeVersion(d.version)) return;
     document.getElementById('update-banner')?.classList.remove('hidden');
     const vs = document.getElementById('update-version');
     if (vs) vs.textContent = d.latest_version;
@@ -1550,6 +1637,64 @@ async function triggerCoreUpdate() {
     if (d.status === 'up_to_date') { showToast('Già aggiornato.','info'); document.getElementById('update-banner')?.classList.add('hidden'); }
     else if (d.status === 'updating') showToast('Aggiornamento — il servizio si riavvierà.','success');
     else { showToast(d.detail||'Errore.','error'); if(btn){btn.disabled=false;btn.textContent='Aggiorna';} }
+}
+
+// ─── App web Pileus ──────────────────────────────────────────────────────────
+async function savePileusWebRepo(event) {
+    event.preventDefault();
+    const val = document.getElementById('pileus-web-repo').value.trim();
+    const r = await apiFetch('/admin/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pileus_web_repo: val }),
+    });
+    if (r?.ok) { showToast('Repo Pileus salvato.', 'success'); checkCoreVersion(); }
+    else showToast(await apiErrorMessage(r, 'Salvataggio fallito.'), 'error');
+}
+
+// updatePileusWebApp(force) calls POST /admin/pileus-web/update. On a
+// version-mismatch warning (ok:false + warning, no force requested yet) it
+// asks for native confirm() before retrying with force:true — same
+// "explicit confirmation for a risky action" pattern as _dangerPost above,
+// just without the admin-password re-entry (a version mismatch is a
+// warning, not a destructive action).
+async function updatePileusWebApp(force) {
+    const btn = document.getElementById('pileus-web-update-btn');
+    const status = document.getElementById('pileus-web-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Aggiorno…'; }
+    if (status) { status.dataset.busy = '1'; status.textContent = 'Aggiornamento in corso…'; }
+    const r = await apiFetch('/admin/pileus-web/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: !!force }),
+    });
+    if (btn) { btn.disabled = false; btn.textContent = 'Aggiorna app web Pileus'; }
+    if (status) delete status.dataset.busy;
+    if (!r) return;
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        showToast(d.detail || 'Errore aggiornamento.', 'error');
+        if (status) status.textContent = d.detail || 'Errore aggiornamento.';
+        return;
+    }
+    if (d.ok === false && d.warning) {
+        if (window.confirm(d.warning + '\n\nProcedere comunque?')) {
+            await updatePileusWebApp(true);
+        } else if (status) {
+            status.textContent = d.warning;
+        }
+        return;
+    }
+    if (d.ok) {
+        // textContent, mai innerHTML: version/asset arrivano da GitHub via
+        // il repo configurato — non fidati, ma qui non c'è comunque bisogno
+        // di HTML, testContent non li interpreta mai come markup.
+        if (status) status.textContent = `Aggiornata a ${d.version} (${d.asset}).`;
+        showToast(`App web Pileus aggiornata a ${d.version}.`, 'success');
+    } else {
+        showToast(d.detail || 'Errore aggiornamento.', 'error');
+        if (status) status.textContent = d.detail || 'Errore aggiornamento.';
+    }
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────

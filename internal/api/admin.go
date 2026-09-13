@@ -3,9 +3,10 @@
 // admin_auth_pages.go (login/logout/dashboard HTML), admin_log.go (in-memory
 // log buffer + SSE stream), admin_clients.go (hub API client management),
 // admin_wipe.go (destructive reset actions), admin_system.go (settings/
-// status/info/self-update). One 1000+-line file with every concern mixed in
-// used to make this harder to navigate than it needed to be — the split is
-// purely a code move, no behaviour or package boundary changed.
+// status/info/self-update), admin_password.go (admin password change). One
+// 1000+-line file with every concern mixed in used to make this harder to
+// navigate than it needed to be — the split is purely a code move, no
+// behaviour or package boundary changed.
 package api
 
 import "net/http"
@@ -29,9 +30,13 @@ func AdminRoutes(mux *http.ServeMux) {
 	// Lua plugin management lives under /admin/lua-plugins/* (RegisterLuaAdminRoutes).
 
 	mux.HandleFunc("POST /admin/settings/save", auth(saveSettings))
+	mux.HandleFunc("POST /admin/password/change", auth(changeAdminPasswordHandler))
 	mux.HandleFunc("POST /admin/cache/clear", auth(clearCacheHandler))
-	mux.HandleFunc("POST /admin/profiles/wipe", auth(wipeProfilesHandler))
-	mux.HandleFunc("POST /admin/plugins/wipe-data", auth(wipePluginDataHandler))
+	// Rate limited (wipeLimiter, same 5/min budget as /admin/login): both
+	// re-check the admin password in the body, so a stolen session cookie
+	// without the password could otherwise be brute-forced with no limit.
+	mux.HandleFunc("POST /admin/profiles/wipe", rateLimitMiddleware(wipeLimiter, auth(wipeProfilesHandler)))
+	mux.HandleFunc("POST /admin/plugins/wipe-data", rateLimitMiddleware(wipeLimiter, auth(wipePluginDataHandler)))
 	mux.HandleFunc("GET /admin/core/resources", auth(getCoreResources))
 	mux.HandleFunc("GET /admin/plugins/info", auth(getPluginsInfo))
 	mux.HandleFunc("GET /admin/enricher-bindings", auth(getEnricherBindings))
@@ -59,4 +64,8 @@ func AdminRoutes(mux *http.ServeMux) {
 
 	// Pileus device management — list / revoke / restore a paired device
 	RegisterPileusDeviceRoutes(mux)
+
+	// Pileus web-app updater — pull the latest Flutter web build from a
+	// configurable repo into data/pileus-web/ (served at /app)
+	RegisterPileusWebRoutes(mux)
 }

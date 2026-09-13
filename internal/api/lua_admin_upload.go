@@ -31,8 +31,29 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pluginName := strings.TrimSuffix(filepath.Base(header.Filename), ".zip")
-	pluginName = sanitizeName(pluginName)
+	pluginName, err = sanitizeName(pluginName)
+	if err != nil {
+		http.Error(w, "nome file non valido", http.StatusBadRequest)
+		return
+	}
+	// Belt-and-braces on top of sanitizeName: never let an empty, ".", or
+	// ".." name reach the path below, and make sure the resulting directory
+	// is a direct child of plugins/ — not plugins/ itself and not something
+	// one level up or down from it. This is what actually stopped the
+	// "....zip" bug: sanitizeName("..") == "" before this fix, and
+	// AppPath("plugins", "") resolves to plugins/ itself, so every file in
+	// the archive silently overwrote whatever plugin already lived there.
+	if pluginName == "" || pluginName == "." || pluginName == ".." {
+		http.Error(w, "nome plugin non valido", http.StatusBadRequest)
+		return
+	}
 	destDir := core.AppPath("plugins", pluginName)
+	pluginsRoot := filepath.Clean(core.AppPath("plugins"))
+	destDirClean := filepath.Clean(destDir)
+	if destDirClean == pluginsRoot || filepath.Dir(destDirClean) != pluginsRoot {
+		http.Error(w, "nome plugin non valido", http.StatusBadRequest)
+		return
+	}
 
 	// Write ZIP to temp file so zip.OpenReader can seek.
 	tmp, err := os.CreateTemp("", "lua_upload_*.zip")
@@ -84,78 +105,13 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	extractAbs := filepath.Clean(destDir) + string(os.PathSeparator)
-
-	// Detect a single top-level folder wrapping every entry (common when the
-	// archive was made by compressing the plugin directory itself). Only strip
-	// it when EVERY non-empty entry shares that first path segment — otherwise
-	// leave paths as-is.
-	stripPrefix := ""
-	for _, f := range zr.File {
-		name := strings.TrimPrefix(filepath.ToSlash(f.Name), "./")
-		if name == "" || name == "/" {
-			continue
-		}
-		j := strings.IndexByte(name, '/')
-		if j < 0 {
-			// a file sits at the archive root → no common wrapper folder
-			stripPrefix = ""
-			break
-		}
-		seg := name[:j+1] // "<dir>/"
-		if stripPrefix == "" {
-			stripPrefix = seg
-		} else if stripPrefix != seg {
-			stripPrefix = ""
-			break
-		}
-	}
-
 	// maxTotalExtractedSize limita la somma su tutto l'archivio — il cap
 	// per-file (10 MiB) da solo non impedisce a uno zip con molti file
-	// piccoli di riempire comunque il disco.
+	// piccoli di riempire comunque il disco. Logica di estrazione (zip-slip,
+	// prefisso comune, cap) condivisa con l'updater dell'app web Pileus — vedi
+	// zip_extract.go.
 	const maxTotalExtractedSize = 200 << 20 // 200 MiB
-	var totalExtracted int64
-	aborted := false
-
-	for _, f := range zr.File {
-		if aborted {
-			break
-		}
-		rel := filepath.ToSlash(f.Name)
-		rel = strings.TrimPrefix(rel, stripPrefix)
-		if rel == "" {
-			continue
-		}
-		fpath := filepath.Join(destDir, filepath.FromSlash(rel))
-		if !strings.HasPrefix(filepath.Clean(fpath)+string(os.PathSeparator), extractAbs) {
-			log.Printf("[lua/upload] path traversal bloccato: %s", f.Name)
-			continue
-		}
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, 0755)
-			continue
-		}
-		if totalExtracted+int64(f.UncompressedSize64) > maxTotalExtractedSize {
-			log.Printf("[lua/upload] archivio oltre il limite totale (%d MiB), estrazione interrotta", maxTotalExtractedSize>>20)
-			aborted = true
-			break
-		}
-		os.MkdirAll(filepath.Dir(fpath), 0755)
-		out, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			out.Close()
-			continue
-		}
-		n, _ := io.Copy(out, io.LimitReader(rc, 10<<20))
-		totalExtracted += n
-		out.Close()
-		rc.Close()
-	}
+	aborted, _ := extractZipSafe(&zr.Reader, destDir, 10<<20, maxTotalExtractedSize, "[lua/upload]")
 
 	if aborted {
 		os.RemoveAll(destDir)

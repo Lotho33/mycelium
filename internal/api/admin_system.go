@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -18,6 +19,11 @@ import (
 
 // serverStartTime tracks when the server process started, for uptime display.
 var serverStartTime = time.Now()
+
+// semverLikeRe matches the "vX.Y.Z" / "X.Y.Z" shape of GitHub release tags —
+// see coreUpdate, which validates core.LatestVersion() against it before
+// passing the value to exec.Command.
+var semverLikeRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
 func saveSettings(w http.ResponseWriter, r *http.Request) {
 	var payload map[string]any
@@ -108,6 +114,12 @@ func getPluginsInfo(w http.ResponseWriter, r *http.Request) {
 			"capabilities":     mf.Exposes.Capabilities,
 			"egress":           engine.LuaPlugins.PluginEgress(mf.ID),
 			"runtime_status":   map[string]string{"label": runtimeStatus.Label, "detail": runtimeStatus.Detail},
+			// discarded_states: how many times an entrypoint timeout has forced
+			// this plugin's Lua pool to discard-and-replace a state (see
+			// engine.LuaPlugin.discardedStates). A single occurrence is expected
+			// and isolated by design; a number that keeps climbing flags a
+			// stuck task/entrypoint leaking a goroutine + LState per occurrence.
+			"discarded_states": engine.LuaPlugins.DiscardedStates(mf.ID),
 		}
 	}
 
@@ -126,7 +138,7 @@ func getEnricherBindings(w http.ResponseWriter, r *http.Request) {
 // getSystemStatus godoc
 //
 //	@Summary		Stato servizi
-//	@Description	Stato di Core, Extractor (cobweb) e Redis con statistiche RAM/CPU dove disponibili
+//	@Description	Stato di Core, Extractor (cobweb) e Redis
 //	@Tags			Admin
 //	@Produce		json
 //	@Success		200	{object}	map[string]any
@@ -134,19 +146,14 @@ func getEnricherBindings(w http.ResponseWriter, r *http.Request) {
 func getSystemStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Redis — risorse dall'API Docker (container_name: redis, fisso in
-	// entrambi i compose): è un container sidecar, non un sottoprocesso, /proc
-	// non basta.
 	redisOk := managers.Redis != nil
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	redisStats := managers.GetContainerStats("redis")
 
-	// Extractor: cobweb, un container a parte — CPU/RAM dall'API Docker
-	// (stesso meccanismo di redis), readiness/engine dal suo /health.
-	cobwebStats := managers.GetContainerStats("cobweb")
+	// Extractor: cobweb, un container a parte — readiness/engine dal suo
+	// /health.
 	var browserOk bool
 	var browserEngine string
 	if managers.BrowserClient != nil {
@@ -157,20 +164,12 @@ func getSystemStatus(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"redis": map[string]any{
-			"ok":                        redisOk,
-			"addr":                      redisAddr,
-			"container_available":       redisStats.Available,
-			"container_cpu_percent":     redisStats.CPUPercent,
-			"container_mem_bytes":       redisStats.MemBytes,
-			"container_mem_limit_bytes": redisStats.MemLimit,
+			"ok":   redisOk,
+			"addr": redisAddr,
 		},
 		"browser": map[string]any{
-			"ok":                        browserOk,
-			"engine":                    browserEngine,
-			"container_available":       cobwebStats.Available,
-			"container_cpu_percent":     cobwebStats.CPUPercent,
-			"container_mem_bytes":       cobwebStats.MemBytes,
-			"container_mem_limit_bytes": cobwebStats.MemLimit,
+			"ok":     browserOk,
+			"engine": browserEngine,
 		},
 	})
 }
@@ -243,6 +242,11 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		"server_host":     effectiveServerHost(),
 		"server_host_env": os.Getenv("MYCELIUM_SERVER_HOST") != "",
 		"in_docker":       os.Getenv("MYCELIUM_DOCKER") == "1",
+		// Repo GitHub ("owner/repo") del build web di Pileus, usato da POST
+		// /admin/pileus-web/update — surfaced qui così la dashboard può
+		// precompilare il campo e abilitare/disabilitare il bottone di
+		// aggiornamento senza un endpoint GET dedicato.
+		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", "Lotho33/pileus"),
 		// Upstream HLS-proxy path: "cobweb" (default — relayed through the
 		// cobweb sidecar's /v1/fetch) unless MYCELIUM_HTTP_PROFILE=standard
 		// pins a plain net/http stack.
@@ -264,8 +268,20 @@ func coreUpdate(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"detail": "versione GitHub non ancora disponibile, riprovare tra qualche secondo"})
 		return
 	}
-	if latest == core.Version {
+	if core.SameVersion(latest, core.Version) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "up_to_date", "version": core.Version})
+		return
+	}
+
+	// latest arriva da core.LatestVersion() (l'API di GitHub) e finisce come
+	// argomento in exec.Command sotto: va validata come una versione
+	// semver-like PRIMA di raggiungere lo script privilegiato, altrimenti una
+	// risposta GitHub anomala/compromessa potrebbe iniettare argomenti o path
+	// arbitrari nello script di update eseguito come root.
+	if !semverLikeRe.MatchString(latest) {
+		log.Printf("[core] update rifiutato: formato versione non valido da GitHub: %q", latest)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"detail": "formato versione non valido, aggiornamento annullato"})
 		return
 	}
 

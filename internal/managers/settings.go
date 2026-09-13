@@ -86,7 +86,14 @@ var (
 	allowedKeyPrefixes = []string{
 		"server_port",
 		"server_host", // IP/hostname reale della macchina per gli URL proxy restituiti al player (vedi media_handler.go ResolveStream)
-		"master_admin_hash",
+		// master_admin_hash NON è qui di proposito: era scrivibile verbatim (nessun
+		// bcrypt, nessuna verifica della password attuale) tramite l'endpoint
+		// generico POST /admin/settings/save — bastava il cookie di sessione
+		// (rubabile via XSS/dispositivo condiviso) per piantare un hash a scelta
+		// e ottenere un accesso admin persistente che sopravviveva a un cambio
+		// password legittimo. Va scritta solo dal setup one-shot (setup.go) e da
+		// POST /admin/password/change (admin_password.go), entrambi via
+		// SaveInternal — mai tramite questo path generico.
 		"tmdb_bearer_token",
 		"sync_interval_hours",
 		"domain_interval_hours",
@@ -95,10 +102,13 @@ var (
 		"mycelium.",         // per-plugin settings: {pluginID}_{key}
 		"lua:",              // Lua plugin global settings: lua:{pluginID}:global:{key}
 		"pileus_",           // Pileus device auth settings: pileus_master_pin_hash, etc.
-		"vpn_proxy_url",     // stato on/off del routing VPN, ripristinato al boot
-		"http_profile",      // profilo fetch upstream: "standard" (default, net/http) | "browser" (profilo TLS/H2 mainstream per compatibilità CDN)
-		"prebuffer_",        // pre-buffer del flusso HLS: prebuffer_enabled / _segments_vod / _segments_live / _max_wait_ms / _max_bytes
-		"egress_profiles",   // JSON: registry delle uscite di rete (vedi egress.go)
+		// (pileus_web_repo — "owner/repo" del repo GitHub del build web di
+		// Pileus, usato da POST /admin/pileus-web/update — rientra già in
+		// questo prefisso, nessuna voce a parte necessaria)
+		"vpn_proxy_url",   // stato on/off del routing VPN, ripristinato al boot
+		"http_profile",    // profilo fetch upstream: "standard" (default, net/http) | "browser" (profilo TLS/H2 mainstream per compatibilità CDN)
+		"prebuffer_",      // pre-buffer del flusso HLS: prebuffer_enabled / _segments_vod / _segments_live / _max_wait_ms / _max_bytes
+		"egress_profiles", // JSON: registry delle uscite di rete (vedi egress.go)
 	}
 	allowedPrefixesMu sync.RWMutex
 )
@@ -128,7 +138,16 @@ func (s *SettingsManager) Save(newData map[string]any) error {
 			return fmt.Errorf("chiave di configurazione non consentita: %q", k)
 		}
 	}
+	return s.SaveInternal(newData)
+}
 
+// SaveInternal scrive newData esattamente come Save, ma SENZA il controllo
+// isAllowedKey — per i pochi path server-side fidati che devono scrivere
+// chiavi non esposte alla superficie generica /admin/settings/save (oggi:
+// master_admin_hash, dal setup one-shot e da POST /admin/password/change).
+// Non collegare mai questa funzione a un endpoint che accetta chiavi/valori
+// arbitrari dal chiamante.
+func (s *SettingsManager) SaveInternal(newData map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
