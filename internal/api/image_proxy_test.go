@@ -84,9 +84,12 @@ func TestImgFetchEncode_HappyPath(t *testing.T) {
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodGet, "/img", nil)
-	out, srcLen, srcFmt, err := imgFetchEncode(req, srv.URL+"/poster.png")
+	out, srcLen, srcFmt, raw, _, err := imgFetchEncode(req, srv.URL+"/poster.png")
 	if err != nil {
 		t.Fatalf("imgFetchEncode: %v", err)
+	}
+	if raw != nil {
+		t.Error("rawBody should be nil on the happy path — only set alongside a decode error")
 	}
 	if srcFmt != "png" {
 		t.Errorf("srcFmt = %q, want png", srcFmt)
@@ -111,25 +114,41 @@ func TestImgFetchEncode_UpstreamErrorStatus(t *testing.T) {
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodGet, "/img", nil)
-	if _, _, _, err := imgFetchEncode(req, srv.URL+"/missing.png"); err == nil {
+	if _, _, _, raw, _, err := imgFetchEncode(req, srv.URL+"/missing.png"); err == nil {
 		t.Fatal("expected an error for a 404 upstream")
+	} else if raw != nil {
+		t.Error("rawBody should be nil when the upstream fetch itself failed — nothing was read")
 	}
 }
 
-func TestImgFetchEncode_UnknownFormatFailsClosed(t *testing.T) {
+// Renamed from ...FailsClosed: since the CORS/black-poster fix (2026-09-14)
+// a decode failure no longer means "give up" for imgFetchEncode's caller —
+// the raw bytes it already fetched come back too so ImageProxy can serve
+// them same-origin instead of 302-redirecting a browser client to a foreign
+// host that likely doesn't set Access-Control-Allow-Origin. This test is
+// about imgFetchEncode's own contract; TestImageProxy_DecodeFailurePassesRawBytesThrough
+// below checks the actual HTTP response ImageProxy builds from it.
+func TestImgFetchEncode_UnknownFormatReturnsRawBytes(t *testing.T) {
 	withPlainImgClient(t)
+	const body = "this is not an image"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		w.Write([]byte("this is not an image")) //nolint:errcheck
+		w.Write([]byte(body)) //nolint:errcheck
 	}))
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodGet, "/img", nil)
-	_, srcLen, _, err := imgFetchEncode(req, srv.URL+"/garbage.png")
+	_, srcLen, _, raw, rawCT, err := imgFetchEncode(req, srv.URL+"/garbage.png")
 	if err == nil {
 		t.Fatal("expected a decode error for a non-image body")
 	}
 	if srcLen == 0 {
 		t.Error("srcLen should still report the bytes read even on a decode failure")
+	}
+	if string(raw) != body {
+		t.Errorf("rawBody = %q, want %q — caller needs these to pass through", raw, body)
+	}
+	if rawCT != "image/png" {
+		t.Errorf("rawContentType = %q, want the upstream's own Content-Type", rawCT)
 	}
 }

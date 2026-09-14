@@ -151,8 +151,37 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, srcLen, srcFmt, err := imgFetchEncode(r, upstream)
+	out, srcLen, srcFmt, raw, rawCT, err := imgFetchEncode(r, upstream)
 	if err != nil {
+		if raw != nil {
+			// The upstream fetch itself succeeded — we're holding valid
+			// bytes, just couldn't re-encode them (animated WebP/GIF, AVIF,
+			// any format image.Decode doesn't handle). A 302 to a foreign
+			// host is a real problem for a *browser* client specifically:
+			// unlike a native client, it enforces CORS on the request that
+			// redirect sends it off to make on its own, and most upstream
+			// image hosts don't set Access-Control-Allow-Origin — the
+			// request gets blocked and the poster stays permanently black
+			// (reported 2026-09-14: every plugin except one whose images
+			// happen to already be same-origin). Serving the same bytes
+			// ourselves, same-origin, costs nothing extra — we already paid
+			// for the fetch — and sidesteps that failure mode entirely.
+			log.Printf("[img] passthrough-inline (%v): %s", err, imgShortURL(upstream))
+			ct := rawCT
+			if ct == "" {
+				ct = "application/octet-stream"
+			}
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+			_, _ = w.Write(raw)
+			return
+		}
+		// Nothing to serve ourselves — the upstream fetch itself failed
+		// (network error, timeout, non-2xx). A redirect is the only option
+		// left; it just won't help a browser client any more than retrying
+		// the same failed source directly would.
 		log.Printf("[img] passthrough (%v): %s", err, imgShortURL(upstream))
 		http.Redirect(w, r, upstream, http.StatusFound) // fail open
 		return
@@ -199,32 +228,40 @@ func imgServeHeaders(w http.ResponseWriter) {
 // always gets a format it handles and any alpha channel is kept), applies the
 // safety cap, and encodes WebP. Also returns the source byte length and
 // decoded format name for logging.
-func imgFetchEncode(r *http.Request, upstream string) (out []byte, srcLen int, srcFmt string, err error) {
+//
+// rawBody/rawContentType are only set when the upstream fetch itself
+// succeeded but re-encoding failed after that (an unknown/animated format —
+// avif, animated webp/gif — image.Decode doesn't handle): the caller can
+// serve those bytes back verbatim, same-origin, instead of redirecting to a
+// foreign host a browser client's own CORS policy may then refuse to fetch.
+// Left nil when the fetch itself failed — there's nothing to hand back.
+func imgFetchEncode(r *http.Request, upstream string) (out []byte, srcLen int, srcFmt string, rawBody []byte, rawContentType string, err error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream, nil)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", nil, "", err
 	}
 	req.Header.Set("User-Agent", proxyUserAgent)
 	req.Header.Set("Accept", "image/webp,image/jpeg,image/png,*/*")
 
 	resp, err := imgClient.Do(req)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, 0, "", fmt.Errorf("upstream %d", resp.StatusCode)
+		return nil, 0, "", nil, "", fmt.Errorf("upstream %d", resp.StatusCode)
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, imgSrcReadLimit))
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", nil, "", err
 	}
 	srcLen = len(raw)
+	rawContentType = resp.Header.Get("Content-Type")
 
 	src, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return nil, srcLen, "", err // unknown/animated format (avif, animated webp) → caller redirects
+		return nil, srcLen, "", raw, rawContentType, err // unknown/animated format → caller passes raw through
 	}
 	srcFmt = format
 
@@ -234,9 +271,9 @@ func imgFetchEncode(r *http.Request, upstream string) (out []byte, srcLen int, s
 	// Method 4 = the library's balanced speed/size default (0 fastest … 6
 	// smallest); encoding runs synchronously on the cache-miss request path.
 	if err := webp.Encode(&b, dst, webp.Options{Quality: imgWebPQuality, Method: 4}); err != nil {
-		return nil, srcLen, srcFmt, err
+		return nil, srcLen, srcFmt, raw, rawContentType, err
 	}
-	return b.Bytes(), srcLen, srcFmt, nil
+	return b.Bytes(), srcLen, srcFmt, nil, "", nil
 }
 
 // imgNormalize converts src to *image.NRGBA at its own resolution, or scales
