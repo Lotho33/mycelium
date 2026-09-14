@@ -30,30 +30,7 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pluginName := strings.TrimSuffix(filepath.Base(header.Filename), ".zip")
-	pluginName, err = sanitizeName(pluginName)
-	if err != nil {
-		http.Error(w, "nome file non valido", http.StatusBadRequest)
-		return
-	}
-	// Belt-and-braces on top of sanitizeName: never let an empty, ".", or
-	// ".." name reach the path below, and make sure the resulting directory
-	// is a direct child of plugins/ — not plugins/ itself and not something
-	// one level up or down from it. This is what actually stopped the
-	// "....zip" bug: sanitizeName("..") == "" before this fix, and
-	// AppPath("plugins", "") resolves to plugins/ itself, so every file in
-	// the archive silently overwrote whatever plugin already lived there.
-	if pluginName == "" || pluginName == "." || pluginName == ".." {
-		http.Error(w, "nome plugin non valido", http.StatusBadRequest)
-		return
-	}
-	destDir := core.AppPath("plugins", pluginName)
 	pluginsRoot := filepath.Clean(core.AppPath("plugins"))
-	destDirClean := filepath.Clean(destDir)
-	if destDirClean == pluginsRoot || filepath.Dir(destDirClean) != pluginsRoot {
-		http.Error(w, "nome plugin non valido", http.StatusBadRequest)
-		return
-	}
 
 	// Write ZIP to temp file so zip.OpenReader can seek.
 	tmp, err := os.CreateTemp("", "lua_upload_*.zip")
@@ -94,16 +71,21 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If already loaded, unload first (safe hot-swap).
-	// We'll discover the ID after extraction; for now just remove the old dir if same name.
-	if engine.LuaPlugins.Has(pluginName) {
-		engine.LuaPlugins.UnloadPlugin(pluginName)
-	}
-
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		http.Error(w, "errore creazione directory", http.StatusInternalServerError)
+	// Extract to a staging directory first — the final destination directory
+	// is derived from the *declared id in manifest.yaml*, not from the ZIP's
+	// filename. This is what makes "upload a ZIP to update an existing
+	// plugin" actually reliable: before this, destDir came straight from
+	// header.Filename (see git history), so re-uploading an updated
+	// "animeunity_v2.zip" for the already-installed "animeunity" plugin would
+	// have created a *second*, separate plugin instead of updating the first
+	// — silently, with no error. Staging first means the real id is known
+	// before any existing installation is touched.
+	stagingDir, err := os.MkdirTemp(pluginsRoot, ".staging-*")
+	if err != nil {
+		http.Error(w, "errore creazione staging", http.StatusInternalServerError)
 		return
 	}
+	defer os.RemoveAll(stagingDir) // no-op once renamed into place below
 
 	// maxTotalExtractedSize limita la somma su tutto l'archivio — il cap
 	// per-file (10 MiB) da solo non impedisce a uno zip con molti file
@@ -111,11 +93,51 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	// prefisso comune, cap) condivisa con l'updater dell'app web Pileus — vedi
 	// zip_extract.go.
 	const maxTotalExtractedSize = 200 << 20 // 200 MiB
-	aborted, _ := extractZipSafe(&zr.Reader, destDir, 10<<20, maxTotalExtractedSize, "[lua/upload]")
-
+	aborted, _ := extractZipSafe(&zr.Reader, stagingDir, 10<<20, maxTotalExtractedSize, "[lua/upload]")
 	if aborted {
-		os.RemoveAll(destDir)
 		http.Error(w, "archivio troppo grande una volta estratto", http.StatusBadRequest)
+		return
+	}
+
+	mf, err := readLuaManifest(stagingDir)
+	if err != nil {
+		http.Error(w, "manifest.yaml non valido: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// readLuaManifest already validates mf.ID against the same charset
+	// whitelist used to close the XSS gap in the plugin-id-in-dashboard fix
+	// (^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$) — no need to re-derive/sanitize
+	// it here, just use it as the single source of truth for the directory
+	// name (sanitizeName is still used elsewhere, e.g. for editor filenames).
+	pluginName := mf.ID
+	destDir := core.AppPath("plugins", pluginName)
+	destDirClean := filepath.Clean(destDir)
+	if destDirClean == pluginsRoot || filepath.Dir(destDirClean) != pluginsRoot {
+		http.Error(w, "id plugin non valido", http.StatusBadRequest)
+		return
+	}
+
+	isUpdate := engine.LuaPlugins.Has(pluginName)
+	if isUpdate {
+		// Safe hot-swap: stop the old pool/watchers before the directory
+		// underneath them changes. UnloadPlugin never deletes files — only
+		// the engine's in-memory registration — so anything the old plugin
+		// wrote at runtime (Redis-backed cache, on-disk JSON caches such as
+		// catalog_cache.json/fribb_index.json) survives untouched: the merge
+		// below only overwrites files that are actually present in the new
+		// ZIP, it never wipes destDir first. A plugin update ZIP built
+		// without bundling those runtime cache files keeps them intact
+		// across the update — building one WITH stale cache files bundled
+		// would instead overwrite live data with whatever was in the ZIP.
+		engine.LuaPlugins.UnloadPlugin(pluginName)
+	}
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		http.Error(w, "errore creazione directory", http.StatusInternalServerError)
+		return
+	}
+	if err := mergeDirInto(stagingDir, destDir); err != nil {
+		http.Error(w, "errore installazione file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -124,13 +146,65 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[lua/upload] plugin installato: %s", pluginName)
+	verb := "installato"
+	if isUpdate {
+		verb = "aggiornato"
+	}
+	log.Printf("[lua/upload] plugin %s: %s", verb, pluginName)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"ok":      "true",
-		"message": "Plugin Lua installato e caricato.",
+		"message": "Plugin Lua " + verb + " e caricato.",
 		"id":      pluginName,
+		"update":  boolToString(isUpdate),
 	})
+}
+
+func boolToString(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// mergeDirInto moves every entry from src (a staging extraction directory)
+// into dst, overwriting same-named files/directories in dst but leaving any
+// pre-existing dst entry that src doesn't have completely untouched — the
+// property an update relies on to preserve runtime cache files silently
+// (see the comment above the isUpdate branch in uploadLuaPlugin). src is
+// consumed (entries are renamed away, not copied) since it's a throwaway
+// staging directory the caller removes afterward regardless.
+func mergeDirInto(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		from := filepath.Join(src, e.Name())
+		to := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := os.MkdirAll(to, 0755); err != nil {
+				return err
+			}
+			if err := mergeDirInto(from, to); err != nil {
+				return err
+			}
+			continue
+		}
+		// Same filesystem (both under plugins/), so Rename is an atomic
+		// same-volume move — but fall back to a copy+remove if it ever isn't
+		// (e.g. a future deployment mounts plugins/ across two volumes).
+		if err := os.Rename(from, to); err != nil {
+			data, rerr := os.ReadFile(from)
+			if rerr != nil {
+				return rerr
+			}
+			if werr := os.WriteFile(to, data, 0644); werr != nil {
+				return werr
+			}
+		}
+	}
+	return nil
 }
 
 // ─── uninstall ────────────────────────────────────────────────────────────────

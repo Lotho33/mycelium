@@ -123,6 +123,21 @@ function wipePluginData() {
     );
 }
 
+// Scoped counterpart of wipePluginData() above — one plugin's cache
+// (Redis mycelium:plugin:<id>:cache:* + its own on-disk cache files), not
+// every plugin's. name is only ever shown inside a native confirm()/prompt()
+// dialog here, never written into the DOM — no HTML-escaping needed for it.
+function doWipePluginData(pid, name) {
+    _dangerPost(
+        `/admin/lua-plugins/wipe-data/${encodeURIComponent(pid)}`,
+        `Cancellare la cache/i dati di "${name}" (chiavi Redis del plugin + file cache su disco)? Il plugin resta installato e configurato — solo i dati raccolti/scaricati vengono cancellati. Irreversibile.`,
+        d => {
+            const extra = d.redis_error ? ` — errore Redis: ${d.redis_error}` : '';
+            return `Dati di "${name}" cancellati: ${d.redis_keys ?? 0} chiavi Redis, ${d.cache_files ?? 0} file cache${extra}.`;
+        },
+    );
+}
+
 // ─── Cambio password admin ────────────────────────────────────────────────────
 async function changeAdminPassword(ev) {
     ev.preventDefault();
@@ -1073,6 +1088,11 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                ${isEnabled?'Disabilita':'Abilita'}</button>`;
     const uninstallBtn = `<button data-action="uninstall"
                class="text-[10px] text-gray-700 hover:text-red-400 transition" title="Disinstalla">Elimina</button>`;
+    // Solo Lua: gli altri (gRPC nativo) non hanno cache/mycelium.cache.* da
+    // cancellare in questo modo. Distinto da "Elimina" (disinstalla il
+    // plugin) — questo cancella solo i suoi dati, il plugin resta installato.
+    const wipeDataBtn = isLua ? `<button data-action="wipe-data"
+               class="text-[10px] text-gray-700 hover:text-amber-400 transition" title="Cancella cache/dati di questo plugin (Redis + file su disco), senza disinstallarlo">Cancella dati</button>` : '';
 
     const gRPCOps = isLua ? '' : isProcess
         ? `<button data-action="stop"    class="text-[10px] text-gray-600 hover:text-red-400 transition">Stop</button>
@@ -1132,7 +1152,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             </div>
             <!-- Actions -->
             <div class="flex items-center gap-x-2.5 gap-y-1 shrink-0 flex-wrap justify-end ml-auto">
-                ${gRPCOps}${luaOps}${stremioBtn}${editBtn}${toggleBtn}${uninstallBtn}
+                ${gRPCOps}${luaOps}${stremioBtn}${editBtn}${toggleBtn}${wipeDataBtn}${uninstallBtn}
             </div>
         </div>
         <!-- Expandable drawer -->
@@ -1183,6 +1203,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             case 'open-editor':    openEditor(pid, data.plugin_name || pid); break;
             case 'toggle-status':  if (!_installing) togglePluginStatus(pid, !isEnabled); break;
             case 'uninstall':      if (!_installing) doUninstallPlugin(pid, isLua); break;
+            case 'wipe-data':      if (!_installing) doWipePluginData(pid, data.plugin_name || pid); break;
             case 'stop':           if (!_installing) doStopPlugin(pid); break;
             case 'restart':        if (!_installing) doRestartPlugin(pid); break;
             case 'start':          if (!_installing) doRestartPlugin(pid, true); break;

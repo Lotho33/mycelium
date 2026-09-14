@@ -332,7 +332,7 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	// the plugin narrates what it's doing. Best-effort — a failed send here just
 	// means the update is dropped, it doesn't abort the resolve.
 	//
-	// ctx.Err() guard: on a Lua-call timeout (30s, see callWithTimeout in
+	// ctx.Err() guard: on a Lua-call timeout (90s, see callWithTimeout in
 	// lua_plugin.go), the goroutine actually running the Lua call is NOT
 	// stopped — Go can't force-kill a goroutine — it keeps running in the
 	// background against a discarded LState while this RPC handler already

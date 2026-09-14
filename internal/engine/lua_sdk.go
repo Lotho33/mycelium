@@ -192,7 +192,7 @@ func RegisterSDK(L *lua.LState, opts SDKOpts, scope *callScope) {
 	// milliseconds, capped at maxSleepMillis and cut short the moment the
 	// current entrypoint's context is done (its normal deadline, or an early
 	// cancellation). Without this, a plugin calling mycelium.sleep(hugeNumber)
-	// from a function that the 30s entrypoint timeout later abandons
+	// from a function that the 90s entrypoint timeout later abandons
 	// (callWithTimeout in lua_plugin.go never stops the goroutine, it just
 	// stops waiting on it) would keep that goroutine — and the *lua.LState it
 	// holds, discarded from the pool but not GC-able while still referenced —

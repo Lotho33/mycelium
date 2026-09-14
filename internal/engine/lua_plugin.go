@@ -140,9 +140,10 @@ type LuaManifestTask struct {
 	// waiting for the next @every 2m tick. Surfaced to the client as
 	// CatalogDef.live_refreshable.
 	LiveRefresh bool `yaml:"live_refresh"`
-	// TimeoutSec overrides the default 30s entrypoint budget for THIS task
-	// (cron or manual "Esegui"). For legitimately long one-shots like a full
-	// catalog scrape that can't finish in 30s. Capped at 15 min. 0 = default.
+	// TimeoutSec overrides the default 90s entrypoint budget (see
+	// defaultEntrypointTimeout) for THIS task (cron or manual "Esegui"). For
+	// legitimately long one-shots like a full catalog scrape that can't
+	// finish in 90s. Capped at 15 min. 0 = default.
 	TimeoutSec int `yaml:"timeout_seconds"`
 }
 
@@ -1035,7 +1036,24 @@ func (m *LuaPluginManager) warmupCatalogCounts(p *LuaPlugin) {
 
 // defaultEntrypointTimeout is the budget for a plugin call unless a task in
 // the manifest overrides it with timeout_seconds.
-const defaultEntrypointTimeout = 30 * time.Second
+//
+// Note this is ALSO the effective timeout for every entrypoints: mapping
+// (search, browse, get_details, streams, resolve/resolve_stream, ...) —
+// those are never tasks, so entrypointTimeout below can never find a match
+// for them and always falls through to this constant. Audited 2026-09-14:
+// resolve_stream in the bundled vix.movie/vix.series/animeunity plugins
+// makes several sequential network calls (page fetch, optional
+// browser.sniff, and for animeunity a domain-discovery step when not yet
+// cached), each individually capped at ~30s by the underlying HTTP client,
+// but whose SUM easily exceeds a 30s entrypoint budget covering all of
+// them together. Worst case measured: ~90s "hot" (domain cached) for all
+// three plugins, ~180s "cold" for animeunity's very first resolve after
+// boot. 90s here comfortably covers every hot worst-case; the rare cold
+// animeunity case is a known, accepted limit — not solved here, since
+// chasing it would need extra logic (e.g. a longer budget only for a
+// first-ever resolve) disproportionate to how rarely it happens. Revisit
+// with a targeted fix if it turns out to matter in practice.
+const defaultEntrypointTimeout = 90 * time.Second
 
 // entrypointTimeout is the ctx budget for calling ep (alias-resolved to
 // fnName): a task's manifest timeout_seconds when set (capped at 15 min),
@@ -1056,8 +1074,8 @@ func entrypointTimeout(mf LuaManifest, ep, fnName string) time.Duration {
 	return defaultEntrypointTimeout
 }
 
-// callWithTimeout runs L.CallByParam bounded by ctx — the 30s timeout used
-// by CallEntrypoint/callEntrypointJSON previously only bounded acquiring a
+// callWithTimeout runs L.CallByParam bounded by ctx — the entrypoint timeout
+// used by CallEntrypoint/callEntrypointJSON previously only bounded acquiring a
 // free LState from the pool, NOT the Lua call itself: L.CallByParam is a
 // synchronous Go call with no cancellation hook, so a plugin function that
 // hangs (an SDK network call missing its own timeout, a degenerate loop, a

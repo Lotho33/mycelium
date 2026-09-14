@@ -124,6 +124,22 @@ func GuardedDialContext(base func(ctx context.Context, network, addr string) (ne
 	}
 }
 
+// checkURLNotSSRFTimeout bounds the DNS lookup CheckURLNotSSRF does on every
+// cobweb-relayed request. Without this, a hostname whose resolution is merely
+// slow (not erroring — a nameserver on the path mycelium's own resolver takes
+// can sit there for a long time before the OS resolver itself gives up)
+// stalls the *player's* request for exactly as long, indistinguishable
+// client-side from the stream simply never loading: no bufferingStart, no
+// error, the request just never completes. This bit a real title within
+// hours of this check shipping (2026-09-14) — mycelium resolves straight,
+// but cobweb (the actual fetch) may reach the same CDN host through a
+// different network path (VPN/egress), so a host cobweb has no trouble
+// reaching can still be slow or unreachable from mycelium's own resolver.
+// 3s is generous for a real DNS answer and short enough that a stuck lookup
+// here reads as a normal upstream hiccup to the retry loop in proxy.go
+// instead of an indefinite hang.
+const checkURLNotSSRFTimeout = 3 * time.Second
+
 // CheckURLNotSSRF resolves rawURL's host and rejects it with an error if any
 // resolved IP is blocked by BlockedProxyIP. Unlike GuardedDialContext, it does
 // not dial anything — it's for the cobweb relay path, which doesn't dial the
@@ -132,16 +148,45 @@ func GuardedDialContext(base func(ctx context.Context, network, addr string) (ne
 // the same Go-side SSRF check the direct dial path already has, independent of
 // whatever cobweb does or doesn't enforce itself.
 //
+// ctx should be the inbound request's context (RoundTrip's req.Context()) so
+// a client that has already gone away aborts this lookup immediately instead
+// of it running to completion regardless; it's additionally capped at
+// checkURLNotSSRFTimeout no matter what ctx's own deadline is (or isn't) —
+// see that constant's doc.
+//
 // Same TOCTOU caveat as GuardedDialContext: the name is resolved once here and
 // again by cobweb when it actually fetches, so a DNS-rebinding attacker can
 // still slip a blocked address past this check. That's a separate, already
 // tracked gap — this function only closes the "no check at all" hole.
 //
-// A hostname that fails to resolve here is not treated as blocked: there is
-// nothing to check it against, and cobweb's own fetch (which resolves again,
-// possibly through a different path — its own DNS, a proxy) will surface the
-// real failure if the name truly doesn't resolve.
-func CheckURLNotSSRF(rawURL string) error {
+// Applied uniformly regardless of the plugin's egress (direct vs. WARP) —
+// raised and settled 2026-09-14, after the timeout fix above. WARP does NOT
+// meaningfully change the risk this guards against for the categories
+// BlockedProxyIP always blocks (loopback, link-local, cloud-metadata,
+// multicast): those address classes don't route through a WireGuard tunnel
+// in the first place — a CONNECT to 127.0.0.1 asked of the WARP/wireproxy
+// sidecar resolves to loopback *of whatever process handles it*, and since
+// wireproxy now runs as mycelium's own subprocess (same network namespace,
+// see the 2026-09-14 Docker-socket removal), that's mycelium's own host, not
+// some address inside the VPN provider's network. So skipping this check for
+// WARP-routed requests would not actually shrink that risk. The other option
+// considered — resolving through the same WARP path cobweb will use, instead
+// of mycelium's own resolver, to remove the perspective mismatch entirely —
+// was rejected: those same reserved address ranges don't vary by resolver
+// for a legitimate domain, the one attack that WOULD exploit the mismatch
+// (a domain doing deliberate split-horizon DNS to dodge this check) is the
+// same class of sophistication as the already-accepted TOCTOU gap above, and
+// implementing it means DNS over the egress SOCKS5 proxy or a new
+// resolve-only cobweb endpoint — disproportionate to a still-narrow residual
+// risk. Revisit only if a concrete exploit path through this mismatch shows
+// up, not preemptively.
+//
+// A hostname that fails to resolve here — including timing out against
+// checkURLNotSSRFTimeout — is not treated as blocked: there is nothing to
+// check it against, and cobweb's own fetch (which resolves again, possibly
+// through a different path — its own DNS, a proxy) will surface the real
+// failure if the name truly doesn't resolve there either.
+func CheckURLNotSSRF(ctx context.Context, rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("proxy: invalid URL %q: %w", rawURL, err)
@@ -156,7 +201,9 @@ func CheckURLNotSSRF(rawURL string) error {
 		}
 		return nil
 	}
-	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	lookupCtx, cancel := context.WithTimeout(ctx, checkURLNotSSRFTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
 	if err != nil {
 		return nil
 	}

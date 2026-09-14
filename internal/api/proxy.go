@@ -30,6 +30,26 @@ var proxyDebug = os.Getenv("MYCELIUM_DEBUG") == "1"
 // debugging only — with it set the HLS proxy is an open relay again.
 var proxyAllowUnsigned = os.Getenv("MYCELIUM_PROXY_ALLOW_UNSIGNED") == "1"
 
+// segmentRetryBudget is the overall time budget for ProxySegment's whole
+// retry loop (all maxAttempts attempts combined), not per attempt. Each
+// attempt is already capped by the segment client's own Timeout (60s,
+// getSegmentClient/vpnClients), but that's per-attempt: a CDN that's merely
+// slow on every attempt — never failing outright, just crawling toward its
+// own 60s timeout each time — could otherwise cost up to maxAttempts×60s
+// plus backoff (worst case ~4-4.5 minutes) before the handler gives up,
+// which the user experiences as a frozen player.
+//
+// 45s is chosen to comfortably fit one legitimate fetch plus a couple of
+// quick retries (a real segment fetch, even over a slow CDN, normally
+// completes in a few seconds) while staying well under the previous
+// multi-minute worst case — long enough not to abort streams that are
+// merely a bit slow, short enough that a stuck segment fails fast instead of
+// hanging the player for minutes.
+//
+// A var (not a const) so tests can shrink it instead of waiting out real
+// time; production code never reassigns it.
+var segmentRetryBudget = 45 * time.Second
+
 // requireProxySig rejects a /proxy/* request whose query carries no valid HMAC
 // (minted by media_handler.go / the playlist rewriter). Returns true if the
 // caller should stop. No-op when MYCELIUM_PROXY_ALLOW_UNSIGNED=1 or when no
@@ -460,6 +480,21 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	// failure, edge briefly down, a rate-limit 403 that clears after a
 	// backoff) — not a mid-stream truncation after bytes have already
 	// started flowing, which is a separate failure mode.
+	//
+	// Each individual attempt is already bounded by the segment client's own
+	// Timeout (60s, getSegmentClient/vpnClients) — but that's per-attempt,
+	// not per-request: a CDN that's merely slow on every attempt (never
+	// failing outright, just crawling toward its own 60s timeout each time)
+	// could otherwise burn up to maxAttempts×60s plus backoff — worst case
+	// ~4-4.5 minutes — before this handler finally gives up with a 502,
+	// which reads to the user as a frozen player. budgetCtx wraps the whole
+	// loop in one shared deadline so a single slow attempt gets cut off
+	// early once the overall budget is spent, and the loop stops retrying
+	// altogether past that point instead of letting every attempt separately
+	// run down its own 60s allowance.
+	budgetCtx, cancel := context.WithTimeout(r.Context(), segmentRetryBudget)
+	defer cancel()
+
 	const maxAttempts = 4
 	var resp *http.Response
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -470,8 +505,11 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Annulla il download CDN se il client (player) chiude la connessione.
-		req = req.WithContext(r.Context())
+		// Annulla il download CDN se il client (player) chiude la connessione
+		// o se il budget complessivo del retry loop è scaduto. budgetCtx
+		// deriva da r.Context(), quindi la disconnessione del client lo
+		// annulla comunque — nessuna divergenza tra i due Done().
+		req = req.WithContext(budgetCtx)
 
 		var doErr error
 		resp, doErr = segClient.Do(req)
@@ -482,6 +520,15 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 				// questo segmento era lento/irraggiungibile — vale la pena tracciarlo,
 				// a differenza di una disconnessione tardiva (utente ha chiuso il player).
 				log.Printf("[proxy/segment] client disconnected after %s waiting on upstream (no response yet) url=%s", time.Since(start).Round(time.Millisecond), logURL(realURL))
+				return
+			}
+			if budgetCtx.Err() != nil {
+				// Client ancora connesso ma il budget complessivo del retry
+				// loop è scaduto (CDN lento su ogni tentativo, mai un fallimento
+				// netto): niente altri tentativi, ognuno fallirebbe comunque
+				// all'istante con lo stesso context già scaduto.
+				log.Printf("[proxy/segment] retry budget (%s) exhausted after %s url=%s", segmentRetryBudget, time.Since(start).Round(time.Millisecond), logURL(realURL))
+				http.Error(w, "upstream timeout", http.StatusBadGateway)
 				return
 			}
 			if attempt < maxAttempts {
@@ -495,13 +542,23 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			// Same challenge signal ProxyPlaylist records on a non-2xx status
+			// (see there) — segments can be individually challenged even when
+			// the playlist itself wasn't, and until now that never surfaced
+			// here, so an operator only ever saw it in raw logs, never in the
+			// dashboard's pending-challenges list.
+			noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
 			resp.Body.Close()
 			if attempt < maxAttempts {
 				d := segRetryBackoff(attempt, resp.StatusCode)
 				log.Printf("[proxy/segment] upstream %d (attempt %d/%d, wait %s) url=%s", resp.StatusCode, attempt, maxAttempts, d, logURL(realURL))
 				select {
 				case <-time.After(d):
-				case <-r.Context().Done():
+				case <-budgetCtx.Done():
+					// Copre sia la disconnessione del client (budgetCtx deriva
+					// da r.Context()) sia lo scadere del budget complessivo:
+					// in entrambi i casi non ha senso attendere il resto del
+					// backoff per poi ritentare comunque.
 					return
 				}
 				continue
@@ -573,6 +630,12 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 				preview = " body[:400]=" + strconv.Quote(string(sniff[:n]))
 			}
 			log.Printf("[proxy/segment] content-type=%q no media signature — rejecting url=%s%s", ct, logURL(realURL), preview)
+			// This is the more important of the two call sites: a CDN
+			// challenge is very often served as plain 200 OK with an
+			// html/js body (Cf-Mitigated set regardless of status), so it
+			// never trips the non-2xx branch above — this is the only place
+			// a segment-level challenge like that gets recorded at all.
+			noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
 			http.Error(w, "non-video segment", http.StatusBadGateway)
 			return
 		}
@@ -638,6 +701,10 @@ func ProxyKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Annulla il fetch della chiave se il client (player) chiude la connessione,
+	// come già fa ProxySegment — senza questo il fetch prosegue comunque fino
+	// al timeout del client (15s) anche a player disconnesso.
+	req = req.WithContext(r.Context())
 
 	keyClient, clErr := upstreamPlaylistClient(useVPN, egr)
 	if clErr != nil {
@@ -656,6 +723,10 @@ func ProxyKey(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Same challenge signal as ProxyPlaylist/ProxySegment (see either) —
+		// the key fetch is a third, independent CDN request that can be
+		// challenged on its own.
+		noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
 		log.Printf("[proxy/key] upstream %d url=%s", resp.StatusCode, logURL(realURL))
 		http.Error(w, fmt.Sprintf("upstream %d", resp.StatusCode), http.StatusBadGateway)
 		return

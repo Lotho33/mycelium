@@ -151,7 +151,7 @@ func TestCheckURLNotSSRFBlocksInternal(t *testing.T) {
 		"http://169.254.169.254/latest/meta-data/",
 		"http://[fe80::1]/",
 	} {
-		if err := CheckURLNotSSRF(raw); err == nil {
+		if err := CheckURLNotSSRF(context.Background(), raw); err == nil {
 			t.Errorf("CheckURLNotSSRF(%s) = nil, want error", raw)
 		}
 	}
@@ -162,17 +162,17 @@ func TestCheckURLNotSSRFAllowsPublicAndPrivateByDefault(t *testing.T) {
 		"https://93.184.216.34/",  // example.com's IP, literal
 		"http://192.168.1.10/hls", // RFC1918, allowed by default (LAN Jellyfin/Plex)
 	} {
-		if err := CheckURLNotSSRF(raw); err != nil {
+		if err := CheckURLNotSSRF(context.Background(), raw); err != nil {
 			t.Errorf("CheckURLNotSSRF(%s) errored: %v", raw, err)
 		}
 	}
 }
 
 func TestCheckURLNotSSRFInvalidURL(t *testing.T) {
-	if err := CheckURLNotSSRF("http://[::1"); err == nil {
+	if err := CheckURLNotSSRF(context.Background(), "http://[::1"); err == nil {
 		t.Error("CheckURLNotSSRF with a malformed URL should error")
 	}
-	if err := CheckURLNotSSRF("not-a-url-at-all"); err == nil {
+	if err := CheckURLNotSSRF(context.Background(), "not-a-url-at-all"); err == nil {
 		// A bare string with no scheme parses to a URL with an empty host —
 		// must be rejected too (empty host is not something safe to hand off).
 		t.Error("CheckURLNotSSRF with no host should error")

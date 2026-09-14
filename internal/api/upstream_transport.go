@@ -118,8 +118,11 @@ func (t *cobwebRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response,
 	// Defence in depth: cobweb (a separate, non-auditable-from-here Rust
 	// sidecar) does its own fetch of req.URL on mycelium's behalf. Refuse to
 	// even hand it a target that resolves to a blocked address, independent of
-	// whatever SSRF guard cobweb itself may or may not have.
-	if err := core.CheckURLNotSSRF(req.URL.String()); err != nil {
+	// whatever SSRF guard cobweb itself may or may not have. req.Context() so
+	// this both dies with the request and is capped by
+	// core.checkURLNotSSRFTimeout regardless — see that doc comment for why
+	// the bound matters here specifically.
+	if err := core.CheckURLNotSSRF(req.Context(), req.URL.String()); err != nil {
 		return nil, fmt.Errorf("cobweb relay: %w", err)
 	}
 
