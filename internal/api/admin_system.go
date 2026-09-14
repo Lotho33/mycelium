@@ -229,12 +229,19 @@ func effectiveServerHost() string {
 
 func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(serverStartTime)
+	latest := core.LatestVersion()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"uptime_seconds": int64(uptime.Seconds()),
 		"version":        core.Version,
-		"latest_version": core.LatestVersion(),
-		"start_time":     serverStartTime.Format(time.RFC3339),
+		"latest_version": latest,
+		// Calcolato lato Go (unica fonte di verità per l'ordine delle versioni)
+		// così la dashboard non deve reimplementare il confronto in JS: il
+		// banner "aggiornamento disponibile" va mostrato SOLO quando latest è
+		// realmente più recente di core.Version, non semplicemente diverso —
+		// vedi IsNewerVersion.
+		"update_available": core.IsNewerVersion(latest, core.Version),
+		"start_time":       serverStartTime.Format(time.RFC3339),
 		// Indirizzo/hostname reale con cui i client raggiungono il server —
 		// usato per costruire gli URL del proxy HLS restituiti al player.
 		// Vuoto = autodetect (network_mode: host / bare-metal). In bridge mode
@@ -268,20 +275,30 @@ func coreUpdate(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"detail": "versione GitHub non ancora disponibile, riprovare tra qualche secondo"})
 		return
 	}
-	if core.SameVersion(latest, core.Version) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "up_to_date", "version": core.Version})
-		return
-	}
-
 	// latest arriva da core.LatestVersion() (l'API di GitHub) e finisce come
 	// argomento in exec.Command sotto: va validata come una versione
-	// semver-like PRIMA di raggiungere lo script privilegiato, altrimenti una
-	// risposta GitHub anomala/compromessa potrebbe iniettare argomenti o path
-	// arbitrari nello script di update eseguito come root.
+	// semver-like PRIMA di qualunque altro uso, altrimenti una risposta GitHub
+	// anomala/compromessa potrebbe sia iniettare argomenti o path arbitrari
+	// nello script di update eseguito come root, sia — dato che
+	// IsNewerVersion è fail-safe e ritorna false su input non parsabile —
+	// essere scambiata per "già aggiornati" dal controllo sotto invece di
+	// essere rifiutata. Questo check resta quindi PRIMA del confronto di
+	// versione, non dopo.
 	if !semverLikeRe.MatchString(latest) {
 		log.Printf("[core] update rifiutato: formato versione non valido da GitHub: %q", latest)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"detail": "formato versione non valido, aggiornamento annullato"})
+		return
+	}
+
+	// "Già aggiornati" copre sia il caso di uguaglianza sia il caso in cui il
+	// binario in esecuzione è già AVANTI rispetto all'ultima release pubblicata
+	// su GitHub (es. build più recente deployata prima ancora che il tag/release
+	// corrispondente venisse pubblicato) — SameVersion (uguaglianza di stringa)
+	// non copriva questo secondo caso e proponeva comunque un "aggiornamento"
+	// verso una versione più vecchia.
+	if !core.IsNewerVersion(latest, core.Version) {
+		json.NewEncoder(w).Encode(map[string]string{"status": "up_to_date", "version": core.Version})
 		return
 	}
 

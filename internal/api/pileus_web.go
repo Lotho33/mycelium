@@ -94,7 +94,11 @@ func updatePileusWebApp(w http.ResponseWriter, r *http.Request) {
 	// "" significa "non ancora recuperata", trattato come "sconosciuto" — né
 	// bloccante né dichiarato up-to-date.
 	latestCore := core.LatestVersion()
-	myceliumUpToDate := latestCore == "" || core.SameVersion(latestCore, core.Version)
+	// !IsNewerVersion copre sia "stessa versione" sia "mycelium è già avanti
+	// rispetto all'ultima release pubblicata" — SameVersion (uguaglianza di
+	// stringa) trattava quest'ultimo caso come "non aggiornato" e bloccava
+	// l'update dell'app web dietro il gate di compatibilità senza motivo.
+	myceliumUpToDate := latestCore == "" || !core.IsNewerVersion(latestCore, core.Version)
 	if !myceliumUpToDate && !body.Force {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":                  false,

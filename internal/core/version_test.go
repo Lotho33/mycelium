@@ -49,6 +49,67 @@ func TestSameVersion(t *testing.T) {
 	}
 }
 
+// TestIsNewerVersion is the regression test for the real dashboard bug:
+// SameVersion (string equality) treated ANY difference as "update available",
+// including the running binary already being AHEAD of the latest published
+// GitHub release — offering a backwards "update" to an older version.
+// IsNewerVersion must report true only when candidate is strictly newer.
+func TestIsNewerVersion(t *testing.T) {
+	cases := []struct {
+		candidate, current string
+		want               bool
+	}{
+		// Exact scenario reported by the user: running v1.3.3, GitHub still
+		// serving v1.3.2 (e.g. build deployed before the matching release was
+		// published) — 1.3.2 is NOT newer than 1.3.3, so no banner/update.
+		{"v1.3.2", "1.3.3", false},
+		// Normal case: a real update is available.
+		{"1.3.3", "1.3.2", true},
+		// Identical after normalization → not "newer", they're the same.
+		{"1.3.2", "1.3.2", false},
+		{"v1.3.2", "1.3.2", false},
+		{"1.3.2", "v1.3.2", false},
+		// Shorter formats: missing components treated as 0.
+		{"1.4", "1.3.9", true},
+		{"1.3", "1.3.0", false},
+		{"2", "1.9.9", true},
+		{"1.3.0", "1.3", false},
+		// Malformed input on either side must never report "newer" — fail-safe.
+		{"not-a-version", "1.3.2", false},
+		{"1.3.2", "not-a-version", false},
+		{"1.x.2", "1.3.2", false},
+		{"", "1.3.2", false},
+		{"1.3.2", "", false},
+		{"1..2", "1.0.2", false},
+	}
+	for _, c := range cases {
+		if got := IsNewerVersion(c.candidate, c.current); got != c.want {
+			t.Errorf("IsNewerVersion(%q, %q) = %v, want %v", c.candidate, c.current, got, c.want)
+		}
+	}
+}
+
+// TestCompareVersions covers the -1/0/1 ordering IsNewerVersion derives from.
+func TestCompareVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"1.3.2", "1.3.3", -1},
+		{"1.3.3", "1.3.2", 1},
+		{"1.3.2", "1.3.2", 0},
+		{"v1.3.2", "1.3.2", 0},
+		{"2.0.0", "1.9.9", 1},
+		{"1.9.9", "2.0.0", -1},
+		{"bogus", "1.0.0", 0}, // malformed → treated as "equal", never a direction
+	}
+	for _, c := range cases {
+		if got := CompareVersions(c.a, c.b); got != c.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 // TestLatestVersionOf_ParsesTagAndPicksAsset points LatestVersionOf at a
 // fake GitHub API (httptest) serving a release with several assets — a
 // source-code archive, a TV-flavor build and the mobile web build — and

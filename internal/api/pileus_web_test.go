@@ -193,6 +193,46 @@ func TestUpdatePileusWebApp_CompatGateBlocksWithoutForce(t *testing.T) {
 	}
 }
 
+// TestUpdatePileusWebApp_CompatGateAllowsWhenMyceliumAheadOfLatest replicates
+// the reported dashboard bug in this second call site: the compatibility gate
+// used to treat mycelium's core.Version as "not up to date" whenever it
+// merely DIFFERED from the cached latestCore — including core.Version being
+// AHEAD of it (e.g. a newer mycelium build deployed before its matching
+// GitHub release was published). That must NOT block the Pileus web-app
+// update: mycelium_up_to_date must read true and, without even needing
+// force, installation must proceed.
+func TestUpdatePileusWebApp_CompatGateAllowsWhenMyceliumAheadOfLatest(t *testing.T) {
+	setPileusWebRepo(t, "Lotho33/pileus")
+	withVersions(t, "1.3.3", "v1.3.2") // core.Version AHEAD of mycelium's own latestCore
+	startFakeGitHubRelease(t, "Lotho33/pileus", "v2.0.0", buildTestWebZip(t, "<html>new build</html>"))
+
+	destDir := core.AppPath("data", "pileus-web")
+	os.RemoveAll(destDir)
+	t.Cleanup(func() { os.RemoveAll(destDir); os.RemoveAll(destDir + ".bak") })
+
+	rec := callUpdatePileusWebApp(t, map[string]any{}) // no force needed
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s; want 200", rec.Code, rec.Body.String())
+	}
+	var d struct {
+		OK               bool   `json:"ok"`
+		MyceliumUpToDate bool   `json:"mycelium_up_to_date"`
+		Version          string `json:"version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
+	}
+	if !d.MyceliumUpToDate {
+		t.Fatalf("mycelium_up_to_date = false, want true — running ahead of the latest published mycelium release must count as up to date")
+	}
+	if !d.OK {
+		t.Fatalf("ok = false, body=%s; want true — the gate must not have blocked this", rec.Body.String())
+	}
+	if d.Version != "v2.0.0" {
+		t.Fatalf("version = %q, want %q", d.Version, "v2.0.0")
+	}
+}
+
 // TestUpdatePileusWebApp_ForceProceedsAndInstalls: with force:true the
 // mismatch is only a warning — the update still runs, against a fake GitHub
 // release/asset server (no real network dependency).

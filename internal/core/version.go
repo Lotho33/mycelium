@@ -3,7 +3,9 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,11 +32,76 @@ func SameVersion(a, b string) bool {
 	return normalizeVersion(a) == normalizeVersion(b)
 }
 
+// parseVersionParts splits a normalized "major.minor.patch"-shaped version
+// string into up to 3 integer components. Missing trailing components (e.g.
+// "1.3" has no patch) are treated as 0. ok is false if any present component
+// fails to parse as a non-negative integer — callers must treat that as "we
+// don't know the order", never silently fall back to 0 for a malformed part.
+func parseVersionParts(s string) (parts [3]int, ok bool) {
+	fields := strings.SplitN(s, ".", 3)
+	for i, f := range fields {
+		if f == "" {
+			return parts, false
+		}
+		n, err := strconv.Atoi(f)
+		if err != nil || n < 0 {
+			return parts, false
+		}
+		parts[i] = n
+	}
+	return parts, true
+}
+
+// CompareVersions compares two "major.minor.patch"-shaped version strings
+// (an optional leading "v"/"V" on either side is ignored, and a missing
+// minor/patch component is treated as 0), returning -1 if a < b, 0 if they
+// denote the same release, and 1 if a > b.
+//
+// If either string fails to parse (non-numeric component, empty field, …),
+// CompareVersions returns 0 and logs a warning — the fail-safe contract lives
+// in IsNewerVersion, which never reports "newer" for a comparison it can't
+// make sense of; a bare 0 here would otherwise read as "same version" to any
+// other caller, which is the correct conservative default too.
+func CompareVersions(a, b string) int {
+	an, aOK := parseVersionParts(normalizeVersion(a))
+	bn, bOK := parseVersionParts(normalizeVersion(b))
+	if !aOK || !bOK {
+		log.Printf("[core] CompareVersions: formato versione non riconosciuto (a=%q b=%q), tratto come uguali", a, b)
+		return 0
+	}
+	for i := 0; i < 3; i++ {
+		if an[i] != bn[i] {
+			if an[i] < bn[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// IsNewerVersion reports whether candidate is a strictly newer release than
+// current (both "major.minor.patch"-shaped, "v"-prefix optional either side).
+// It's the fix for a real dashboard bug: comparing versions with SameVersion
+// (string equality) meant ANY difference — including the running binary
+// already being AHEAD of the latest published GitHub release, e.g. because a
+// newer build was deployed before its matching tag/release went out — was
+// treated as "not up to date" and offered as an update, even backwards
+// (proposing to "update" to an older version than the one already running).
+//
+// Fail-safe by construction: if either string doesn't parse as a version,
+// this returns false rather than risk offering a bogus update — better to
+// silently not propose an update than to propose a wrong one.
+func IsNewerVersion(candidate, current string) bool {
+	return CompareVersions(candidate, current) > 0
+}
+
 var (
-	latestMu       sync.Mutex
-	latestVersion  string
-	latestFetched  time.Time
-	latestFetching bool
+	latestMu           sync.Mutex
+	latestVersion      string
+	latestFetched      time.Time
+	latestFetching     bool
+	latestAutoFetchOff bool
 )
 
 // LatestVersion returns the latest published release tag from GitHub.
@@ -43,7 +110,7 @@ var (
 func LatestVersion() string {
 	latestMu.Lock()
 	defer latestMu.Unlock()
-	if time.Since(latestFetched) >= time.Hour && !latestFetching {
+	if !latestAutoFetchOff && time.Since(latestFetched) >= time.Hour && !latestFetching {
 		latestFetching = true
 		go func() {
 			// Always clears latestFetching, even if fetchGitHubLatestTag panics —
@@ -104,6 +171,25 @@ func SetLatestVersionForTest(v string) {
 	latestMu.Lock()
 	latestVersion = v
 	latestFetched = time.Now()
+	latestMu.Unlock()
+}
+
+// DisableAutoFetchForTest permanently stops LatestVersion from ever spawning
+// its background GitHub-fetch goroutine, for the remainder of the test
+// binary's life. Call it once, before any test runs (e.g. from a TestMain) —
+// not per-test. Without this, whichever test happens to be the first to call
+// LatestVersion() in the whole binary (directly, or indirectly through any
+// handler that calls it, e.g. getAdminInfo/coreUpdate) kicks off a REAL
+// network request to api.github.com; that goroutine can complete at any later
+// point and overwrite latestVersion out from under an unrelated test that
+// called SetLatestVersionForTest for its own scenario in the meantime — a
+// real, observed flake (a "latest" value seeded for one test getting
+// silently replaced by whatever mycelium-core's actual current release is,
+// mid-test). Disabling the fetch entirely removes the race at its root
+// instead of trying to out-time it.
+func DisableAutoFetchForTest() {
+	latestMu.Lock()
+	latestAutoFetchOff = true
 	latestMu.Unlock()
 }
 

@@ -111,6 +111,76 @@ func TestCoreUpdate_UpToDateIgnoresPrefix(t *testing.T) {
 	}
 }
 
+// TestCoreUpdate_UpToDateWhenAheadOfLatest replicates the exact production
+// bug reported by the user: the running binary (core.Version) is AHEAD of
+// the latest release GitHub currently reports (e.g. a newer build was
+// deployed before its matching tag/release was published) — v1.3.3 running,
+// GitHub still serving v1.3.2. The old `core.SameVersion` check treated any
+// difference as "not up to date" and fell through into attempting an update
+// (which, in this test environment with no mycelium-update script, would
+// surface as a 500 rather than the up_to_date short-circuit asserted below).
+// With core.IsNewerVersion, "latest is not newer than current" — including
+// current being ahead — must short-circuit to up_to_date instead.
+func TestCoreUpdate_UpToDateWhenAheadOfLatest(t *testing.T) {
+	withVersions(t, "1.3.3", "v1.3.2")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/core/update", nil)
+	rec := httptest.NewRecorder()
+	coreUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s; want 200 (up_to_date, returned before any update attempt)", rec.Code, rec.Body.String())
+	}
+	var d struct {
+		Status  string `json:"status"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
+	}
+	if d.Status != "up_to_date" {
+		t.Fatalf("status field = %q, want %q — running ahead of the latest published release must not trigger a (backwards) update attempt", d.Status, "up_to_date")
+	}
+	if d.Version != "1.3.3" {
+		t.Fatalf("version field = %q, want %q", d.Version, "1.3.3")
+	}
+}
+
+// TestAdminInfo_UpdateAvailableField covers the new update_available field
+// getAdminInfo exposes so the dashboard doesn't have to reimplement the
+// version-order comparison in JavaScript: it must be true only when latest is
+// genuinely newer, and false both when equal and when core.Version is ahead
+// of the latest published release (the reported bug's exact scenario).
+func TestAdminInfo_UpdateAvailableField(t *testing.T) {
+	cases := []struct {
+		name, version, latest string
+		want                  bool
+	}{
+		{"genuinely newer release", "1.3.2", "v1.3.3", true},
+		{"same release, different prefix", "1.3.2", "v1.3.2", false},
+		{"running ahead of latest — the reported bug", "1.3.3", "v1.3.2", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withVersions(t, c.version, c.latest)
+
+			req := httptest.NewRequest(http.MethodGet, "/admin/info", nil)
+			rec := httptest.NewRecorder()
+			getAdminInfo(rec, req)
+
+			var d struct {
+				UpdateAvailable bool `json:"update_available"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+				t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
+			}
+			if d.UpdateAvailable != c.want {
+				t.Fatalf("update_available = %v, want %v (version=%q latest=%q)", d.UpdateAvailable, c.want, c.version, c.latest)
+			}
+		})
+	}
+}
+
 // TestCoreUpdate_RejectsMalformedLatestVersion is the regression test for the
 // audit finding: core.LatestVersion() (the GitHub API response) used to flow
 // unvalidated into exec.Command(updateScript, latest). A malformed value —

@@ -1595,13 +1595,11 @@ function disconnectLogSSE() {
 function reconnectLogSSE() { connectLogSSE(); }
 
 // ─── Version check ────────────────────────────────────────────────────────────
-// normalizeVersion mirra core.normalizeVersion (Go): toglie un eventuale
-// prefisso "v"/"V" iniziale, così "1.3.2" e "v1.3.2" risultano la stessa
-// versione a prescindere da quale lato (in esecuzione vs. ultima su GitHub)
-// porta il prefisso — i tag git sono sempre "vX.Y.Z", core.Version no.
-function normalizeVersion(s) {
-    return String(s || '').replace(/^[vV]/, '');
-}
+// Il confronto "latest è davvero più recente di version" vive lato Go
+// (core.IsNewerVersion, esposto qui come d.update_available) — non
+// reimplementato in JS, per evitare che i due lati divergano su casi limite
+// (prefisso "v", formati con meno componenti, versioni malformate, o il
+// binario in esecuzione già avanti rispetto all'ultima release pubblicata).
 async function checkCoreVersion() {
     const r = await apiFetch('/admin/info');
     if (!r?.ok) return;
@@ -1623,7 +1621,7 @@ async function checkCoreVersion() {
         pwStatus.textContent = d.pileus_web_repo ? '' : "Configura il repo Pileus qui sopra per abilitare l'aggiornamento.";
     }
 
-    if (!d.latest_version || normalizeVersion(d.latest_version) === normalizeVersion(d.version)) return;
+    if (!d.latest_version || !d.update_available) return;
     document.getElementById('update-banner')?.classList.remove('hidden');
     const vs = document.getElementById('update-version');
     if (vs) vs.textContent = d.latest_version;

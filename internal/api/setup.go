@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"mycelium/internal/core"
@@ -57,9 +58,15 @@ func SetupRoutes(mux *http.ServeMux) {
 	serveWebApp(mux, "/app-tv", core.AppPath("data", "pileus-web-tv"))
 }
 
+// baseHrefRe matches a Flutter-generated <base href="..."> tag (single or
+// double quotes) so it can be rewritten to the actual mount prefix — see
+// serveIndexHTML.
+var baseHrefRe = regexp.MustCompile(`(?i)<base\s+href\s*=\s*(?:"[^"]*"|'[^']*')`)
+
 // serveWebApp wires prefix ("/app") + prefix+"/" as an SPA static server rooted
 // at dir, serving index.html for unknown paths (client-side routing).
 func serveWebApp(mux *http.ServeMux, prefix, dir string) {
+	indexPath := filepath.Join(dir, "index.html")
 	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, prefix+"/", http.StatusMovedPermanently)
 	})
@@ -71,7 +78,20 @@ func serveWebApp(mux *http.ServeMux, prefix, dir string) {
 		// Serve index.html for unknown paths (SPA routing).
 		fullPath := filepath.Join(dir, filepath.Clean(path))
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			fullPath = filepath.Join(dir, "index.html")
+			fullPath = indexPath
+		}
+		if fullPath == indexPath {
+			// `flutter build web` bakes <base href="/"> into index.html by
+			// default, and every asset tag in it (flutter_bootstrap.js,
+			// hls.min.js, manifest.json, ...) is a bare relative path. With
+			// base href "/" those resolve against the domain root instead of
+			// this mount's prefix, so the browser 404s on GET /hls.min.js
+			// instead of GET {prefix}/hls.min.js. mycelium — not the Pileus
+			// build — owns the mount prefix, so it rewrites the tag here
+			// rather than requiring a --base-href=/app/ build flag that
+			// would hardcode this one deployment's path into the bundle.
+			serveIndexHTML(w, r, indexPath, prefix)
+			return
 		}
 		// http.ServeFile with the *original* request (not a path-rewritten
 		// clone): Go's serveFile 301-redirects any request whose URL.Path ends
@@ -80,6 +100,22 @@ func serveWebApp(mux *http.ServeMux, prefix, dir string) {
 		// "/index.html". r.URL.Path is left untouched here so that never fires.
 		http.ServeFile(w, r, fullPath)
 	})
+}
+
+// serveIndexHTML serves indexPath with its <base href> rewritten to prefix.
+// It reads and rewrites the file per request rather than caching the result:
+// index.html is a few KB, so the extra work is negligible next to serving the
+// multi-MB Flutter bundle it bootstraps, and a cache would need explicit
+// invalidation on /admin/pileus-web/update.
+func serveIndexHTML(w http.ResponseWriter, r *http.Request, indexPath, prefix string) {
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	data = baseHrefRe.ReplaceAll(data, []byte(`<base href="`+prefix+`/"`))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
 }
 
 func installUI(w http.ResponseWriter, r *http.Request) {
