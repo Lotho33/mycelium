@@ -361,6 +361,16 @@ func (m *LuaPluginManager) TriggerLiveRefresh(pluginID string) (ok bool, message
 	if !found {
 		return false, "plugin non caricato"
 	}
+	// Same guard as run()/warmupCatalogCounts/lookupBackend/resolveCatalogDefs:
+	// unlike the cron scheduler (which re-checks IsOperational per tick before
+	// running a task), this entrypoint is reachable on-demand from Pileus
+	// ("aggiorna ora" pull-to-refresh) — without this check a stopped plugin
+	// still ran its live_refresh task for real on request. No bundled plugin
+	// declares live_refresh today, so this was a dormant gap rather than an
+	// observed one.
+	if !m.IsOperational(pluginID) {
+		return false, "plugin non attivo"
+	}
 
 	var tasks []LuaManifestTask
 	for _, t := range p.Manifest.Tasks {
@@ -945,6 +955,17 @@ func (m *LuaPluginManager) runTasks(p *LuaPlugin) {
 // list on error or if the entrypoint is absent.
 func (m *LuaPluginManager) resolveCatalogDefs(p *LuaPlugin) []LuaCatalogDef {
 	if _, ok := p.Manifest.Entrypoints[EPGetCatalogList]; !ok {
+		return p.Manifest.Exposes.Catalogs
+	}
+	// Same guard as run()/warmupCatalogCounts/lookupBackend: a stopped plugin
+	// must not have its Lua invoked just because ListPlugins (media_handler.go)
+	// resolves every loaded plugin's catalog defs before filtering by
+	// IsOperational — without this, a plugin that declares catalog_list keeps
+	// getting real entrypoint calls (and whatever network/log activity that
+	// entails) on every ListPlugins refresh even while "fermo" in the
+	// dashboard. No bundled plugin declares catalog_list today, so this was
+	// a dormant gap rather than an observed one.
+	if !m.IsOperational(p.Manifest.ID) {
 		return p.Manifest.Exposes.Catalogs
 	}
 	raw, err := m.CallEntrypointJSON(p.Manifest.ID, EPGetCatalogList, nil, "")
