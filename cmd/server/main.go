@@ -294,13 +294,56 @@ func main() {
 		log.Fatalf("[server] listen :%s: %v", port, err)
 	}
 	log.Printf("[server] listening on :%s", port)
-	log.Println("🏁 Mycelium pronto.")
 
 	go func() {
 		if err := srv.Serve(lis); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[server] fatal: %v", err)
 		}
 	}()
+
+	// Optional second listener, same mux, over HTTPS — off by default,
+	// purely additive: :8000 keeps serving plain HTTP exactly as before for
+	// every existing native client (Pileus TV/mobile/desktop talk gRPC on a
+	// separate port anyway and don't care). This exists for one reason: a
+	// browser's PWA "Aggiungi a schermata Home" install prompt requires a
+	// secure context — Chrome/Android has no LAN exception — and until now
+	// the web bundle was only ever reachable over :8000 plain HTTP, so the
+	// prompt could never appear (reported 2026-09-18). Reuses the exact same
+	// self-signed cert as the gRPC port (GenerateOrLoadTLSCert is keyed by a
+	// fixed setting name, so a second call here returns the same persisted
+	// cert, not a new one) — one certificate to trust for the whole app, not
+	// two. A browser will still show its own "not secure"/self-signed
+	// interstitial on first visit; the user has to click through it once,
+	// same as accepting any self-signed cert.
+	var httpsSrv *http.Server
+	if managers.Settings.GetString("server_https", "false") == "true" {
+		httpsPort := managers.Settings.GetString("server_https_port", "8443")
+		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.Save)
+		if err != nil {
+			log.Printf("[server] HTTPS disabilitato: generazione certificato fallita: %v", err)
+		} else {
+			httpsLis, err := net.Listen("tcp", ":"+httpsPort)
+			if err != nil {
+				log.Printf("[server] listen HTTPS :%s: %v", httpsPort, err)
+			} else {
+				httpsSrv = &http.Server{
+					Addr:              ":" + httpsPort,
+					Handler:           corsMiddleware(mux),
+					ReadHeaderTimeout: 10 * time.Second,
+					IdleTimeout:       120 * time.Second,
+					TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
+				}
+				log.Printf("[server] listening on :%s (HTTPS, certificato self-signed)", httpsPort)
+				go func() {
+					if err := httpsSrv.ServeTLS(httpsLis, "", ""); err != nil && err != http.ErrServerClosed {
+						log.Printf("[server] HTTPS fatal: %v", err)
+					}
+				}()
+			}
+		}
+	}
+
+	log.Println("🏁 Mycelium pronto.")
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -314,6 +357,12 @@ func main() {
 	srv.SetKeepAlivesEnabled(false)
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("[server] shutdown error: %v", err)
+	}
+	if httpsSrv != nil {
+		httpsSrv.SetKeepAlivesEnabled(false)
+		if err := httpsSrv.Shutdown(ctx); err != nil {
+			log.Printf("[server] HTTPS shutdown error: %v", err)
+		}
 	}
 
 	// GracefulStop sends HTTP/2 GOAWAY to connected clients (the Pileus frontend

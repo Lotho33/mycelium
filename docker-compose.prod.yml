@@ -105,7 +105,7 @@ services:
       # vedi la nota in cima al file); i plugin restano comunque su "direct"
       # finché non si sceglie "warp" dalla dashboard. Override in .env per un
       # proxy diverso, o stringa vuota per non seminare nulla.
-      - VPN_PROXY_URL=${VPN_PROXY_URL:-socks5://127.0.0.1:1080}
+      - VPN_PROXY_URL=${VPN_PROXY_URL-socks5://127.0.0.1:1080}
       - MYCELIUM_DOCKER=1
       # Sync image-bundled plugins into the plugins volume on start.
       - MYCELIUM_PLUGIN_SYNC=1

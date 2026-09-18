@@ -118,16 +118,49 @@ func serveIndexHTML(w http.ResponseWriter, r *http.Request, indexPath, prefix st
 	w.Write(data)
 }
 
+// pileusWebVersionInfo mirrors the handful of fields `flutter build web`
+// writes into version.json at the root of its output — see
+// https://docs.flutter.dev (the file also carries app_name/package_name,
+// not needed here).
+type pileusWebVersionInfo struct {
+	Version     string `json:"version"`
+	BuildNumber string `json:"build_number"`
+}
+
+// pileusWebVersion reads the Pileus build's own version.json (dropped there
+// by `flutter build web`, see serveWebApp's doc comment) so /install can show
+// which version is currently served at /app/ — there's no way to read the
+// version already cached by an instance a visitor installed earlier from a
+// fresh, non-standalone page load, so this reports "what you'd get", not
+// "what you have". ok is false if no build has been deployed yet (dev/fresh
+// install) or the file doesn't parse — callers must treat that as "unknown",
+// not as version "".
+func pileusWebVersion() (info pileusWebVersionInfo, ok bool) {
+	data, err := os.ReadFile(core.AppPath("data", "pileus-web", "version.json"))
+	if err != nil {
+		return pileusWebVersionInfo{}, false
+	}
+	if err := json.Unmarshal(data, &info); err != nil || info.Version == "" {
+		return pileusWebVersionInfo{}, false
+	}
+	return info, true
+}
+
 func installUI(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles(filepath.Join(core.BasePath, "web", "templates", "install.html"))
 	if err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
+	data := map[string]any{}
+	if info, ok := pileusWebVersion(); ok {
+		data["PileusVersion"] = info.Version
+		data["PileusBuild"] = info.BuildNumber
+	}
 	// Execute can fail mid-write (e.g. a bad field reference) after headers are
 	// already sent, when http.Error is no longer an option — log it so a
 	// truncated page shows up somewhere instead of silently.
-	if err := tmpl.Execute(w, nil); err != nil {
+	if err := tmpl.Execute(w, data); err != nil {
 		log.Printf("[install] template execute: %v", err)
 	}
 }

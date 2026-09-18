@@ -9,18 +9,14 @@
 # and the compose network is private to this stack.
 bind           = "0.0.0.0"
 port           = 8191
-browser_engine = "chromium"  # full pipeline — mycelium's manual VNC solve needs it
+browser_engine = "chromium"
 max_contexts   = 2
-idle_shutdown_secs = 300
 
 [browser]
-xvfb       = true    # headed under Xvfb — required for the noVNC manual solve
 no_sandbox = true    # container runs as a non-root user, but under an isolated PID/mount ns anyway
 
 [jar]
-path             = "/data/jar"
-default_ttl_secs = 2700
-fail_streak      = 3
+path = "/data/jar"
 
 # cobweb requires at least one [egress.*] entry. `direct` is enough for the
 # drop-in setup: mycelium forwards a raw proxy_url (VPN_PROXY_URL) per request
@@ -29,6 +25,12 @@ fail_streak      = 3
 # named egress instead.
 [egress.direct]
 proxy = ""
+
+# idle_shutdown_secs / jar_default_ttl_secs / jar_fail_streak are runtime
+# state now (GET/PATCH /v1/settings), not static config — see
+# config.example.toml in the cobweb repo. state_path persists them.
+[settings]
+state_path = "/data/settings.json"
 
 [log]
 level = "info"
