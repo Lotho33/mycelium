@@ -1,0 +1,91 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to (re)build, e.g. v1.3.0"
+        required: true
+
+permissions:
+  contents: write # create the GitHub Release
+  packages: write # push to GHCR
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Version from tag
+        id: v
+        run: |
+          ref="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+
+      # GHCR (like every Docker registry) requires an all-lowercase repository
+      # path; github.repository preserves the account's actual casing
+      # ("Lotho33/mycelium"), which Docker rejects outright. metadata-action
+      # would normalise it for the tags it emits, but the release notes below
+      # also interpolate the image name verbatim in a `docker pull` line —
+      # compute the lowercase form once so every use of it is correct.
+      - name: Lowercase image name
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3 # arm64 leg is emulated
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.img.outputs.name }}
+          tags: |
+            type=raw,value=${{ steps.v.outputs.version }}
+            type=raw,value=latest
+
+      # Pure Go + a plain debian:bookworm-slim runtime (CGO_ENABLED=0, no native
+      # TLS toolchain to cross-compile like cobweb's BoringSSL) — the arm64 leg
+      # is cheap even emulated under QEMU, unlike a cgo-heavy build.
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Container image:
+
+            ```
+            docker pull ${{ steps.img.outputs.name }}:${{ steps.v.outputs.version }}
+            ```
+
+            Also tagged `${{ steps.img.outputs.name }}:latest`. Platforms: `linux/amd64`, `linux/arm64`.
+
+            The companion browser service (SSRF-mitigating, chromium/wreq-based
+            HTTP fetcher) is a separate repo: https://github.com/Lotho33/cobweb

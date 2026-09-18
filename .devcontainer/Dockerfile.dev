@@ -1,0 +1,25 @@
+FROM golang:1.26-bookworm
+
+# No WebKit/Playwright deps here anymore — the browser/extractor engine is
+# cobweb (github.com/Lotho33/cobweb), which runs as its OWN devcontainer
+# (~/Dev/Rust/cobweb) or a standalone container on the host, reached via
+# COBWEB_ADDR=http://host.docker.internal:8191 (docker-compose.dev.yml).
+# mycelium-core only ever talks to it over HTTP (internal/managers/browser_client.go).
+
+# protobuf toolchain — for regenerating third_party/stipes-sdk/sdk/gen/* after
+# editing a .proto (see scripts/regen-proto.sh). Versions pinned to the stamps
+# already in the generated files so a regen produces no spurious diff:
+#   protoc             v3.21.12   ← bookworm's protobuf-compiler
+#   protoc-gen-go       v1.36.12
+#   protoc-gen-go-grpc  v1.6.2
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12 \
+    && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
+# The workspace is a bind mount owned by the host user while the container
+# runs as root — git 2.35+ then refuses to operate on it ("dubious
+# ownership"), which breaks `go build`'s VCS stamping with "exit status 128".
+# Done in the image (not postCreateCommand) so it survives --skip-post-create.
+RUN git config --global --add safe.directory '*'

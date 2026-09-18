@@ -1,0 +1,34 @@
+# cobweb configuration for the mycelium-core stack (docker-compose.yml /
+# .devcontainer/docker-compose.dev.yml mount this at /config/config.toml).
+# See the cobweb repo for the full option reference.
+
+[server]
+# cobweb now defaults to loopback-only (its API is unauthenticated). Here it
+# must listen on all interfaces so the `mycelium` container can reach it across
+# the compose network — safe because the port is never published to the host
+# and the compose network is private to this stack.
+bind           = "0.0.0.0"
+port           = 8191
+browser_engine = "chromium"  # full pipeline — mycelium's manual VNC solve needs it
+max_contexts   = 2
+idle_shutdown_secs = 300
+
+[browser]
+xvfb       = true    # headed under Xvfb — required for the noVNC manual solve
+no_sandbox = true    # container runs as a non-root user, but under an isolated PID/mount ns anyway
+
+[jar]
+path             = "/data/jar"
+default_ttl_secs = 2700
+fail_streak      = 3
+
+# cobweb requires at least one [egress.*] entry. `direct` is enough for the
+# drop-in setup: mycelium forwards a raw proxy_url (VPN_PROXY_URL) per request
+# rather than a named egress, and cobweb keys its cookie jar on the proxy
+# host:port. Add named profiles here only if you switch mycelium to send a
+# named egress instead.
+[egress.direct]
+proxy = ""
+
+[log]
+level = "info"

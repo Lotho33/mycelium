@@ -1,0 +1,166 @@
+# Home-server stack — pulls a prebuilt mycelium image from a registry instead
+# of building from source, and lets Watchtower auto-update on every new
+# release tag. Point MYCELIUM_IMAGE at your registry in a .env next to this
+# file (default: ghcr.io/lotho33/mycelium).
+#
+# Counterpart of docker-compose.yml (the dev-box file that builds from source).
+# Deploy:
+#   docker login <your-registry>          # once, as the compose user
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Optional companion services (a browser-automation sidecar, a VPN egress
+# like microwarp, and anything else a given deployment wants) are NOT
+# defined here — add them via a second, local-only compose file merged at
+# deploy time:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.private.yml up -d
+# mycelium runs fine without any of them; plugins that need a browser sidecar
+# simply fail closed for those calls, and without a VPN egress configured
+# every plugin without direct_egress: true fails closed on its network calls
+# too (by design — see internal/managers/egress.go), rather than leaking
+# direct silently. Pick an exit from the dashboard → Impostazioni → VPN →
+# "Uscite di rete" once one is running.
+#
+# ── network_mode: host ──────────────────────────────────────────────────────
+# mycelium/redis run on the host's network namespace, NOT a bridge:
+#   * the Pileus LAN discovery (UDP broadcast on :51900) only works this way —
+#     Docker does not deliver broadcast packets to a bridged container's
+#     published ports;
+#   * ResolveStream can then autodetect the host's real IP for the video
+#     proxy URLs (peer.LocalAddr) — no server_host to set by hand.
+# Trade-off: the services bind their ports directly on the host (no `ports:`
+# mapping) and talk to each other over 127.0.0.1. Fine on a dedicated CT/VM.
+# redis binds loopback-only. A bridged VPN-egress container (e.g. microwarp,
+# in the private overlay) stays bridged on purpose: with host networking its
+# WireGuard tunnel would hijack the whole host's default route.
+#
+# Rollback / pin: set MYCELIUM_TAG=1.4.2 in a .env next to this file, `up -d`,
+# and comment out that service's Watchtower label.
+# See docs/deploy-selfhosted.md for the full walk-through.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    network_mode: host
+    mem_limit: 64m
+    memswap_limit: 64m
+    command: redis-server --bind 127.0.0.1 --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "set", "__healthcheck__", "1", "EX", "10"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mycelium:
+    image: ${MYCELIUM_IMAGE:-ghcr.io/lotho33/mycelium}:${MYCELIUM_TAG:-latest}
+    container_name: mycelium
+    restart: unless-stopped
+    network_mode: host
+    # 400m OOM-killava al boot (caricamento plugin + warmup cataloghi, per
+    # giunta amplificato dalle tempeste di retry se la rete plugin fallisce).
+    # 768m dà margine; GOMEMLIMIT sotto lascia respirare il GC.
+    mem_limit: 768m
+    memswap_limit: 768m
+    labels:
+      # Watchtower only touches containers carrying this label. Comment it out
+      # to freeze mycelium on its current tag.
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # Named volume, NOT a bind mount of the repo: bundled plugins now ship
+      # inside the image and the entrypoint (MYCELIUM_PLUGIN_SYNC=1) copies
+      # them in on every start, so a Watchtower image update delivers plugin
+      # changes on its own — no `git pull` on the host. The volume still
+      # persists dashboard-uploaded plugins and the per-plugin runtime caches.
+      - mycelium_plugins:/app/plugins
+      # WireGuard egress configs (Fase C) live under data/wireproxy/, part of
+      # this same bind mount — no separate volume needed, wireproxy now runs
+      # as a subprocess of mycelium itself (see internal/managers/wireproxy.go)
+      # and reads the .conf straight off this filesystem. Nothing in mycelium
+      # needs /var/run/docker.sock any more — the old wireproxy-<name> sidecars
+      # (and the socket mount they required, root-equivalent on the host) are
+      # gone.
+      - ./data:/app/data
+    environment:
+      - MYCELIUM_BASE=/app
+      - REDIS_ADDR=127.0.0.1:6379
+      # Optional companion service address (see the note near the top of
+      # this file) — set here, or via the private overlay compose file, if
+      # you run one. Unset: plugins that need it fail closed for those calls.
+      - COBWEB_ADDR=${COBWEB_ADDR:-}
+      # Host/IP the clients use to reach this server — for the video proxy
+      # URLs. Empty: autodetected from the gRPC connection (works with
+      # network_mode: host). Set it (here or the dashboard) only in bridge
+      # mode or behind a reverse proxy.
+      - MYCELIUM_SERVER_HOST=${MYCELIUM_SERVER_HOST-}
+      # Seed dell'uscita "warp" nel registry egress (vedi internal/managers/
+      # egress.go, InitEgressDefaults) — punta a una VPN-egress in stile
+      # microwarp, se ne hai una in esecuzione (overlay privato o standalone,
+      # vedi la nota in cima al file); i plugin restano comunque su "direct"
+      # finché non si sceglie "warp" dalla dashboard. Override in .env per un
+      # proxy diverso, o stringa vuota per non seminare nulla.
+      - VPN_PROXY_URL=${VPN_PROXY_URL:-socks5://127.0.0.1:1080}
+      - MYCELIUM_DOCKER=1
+      # Sync image-bundled plugins into the plugins volume on start.
+      - MYCELIUM_PLUGIN_SYNC=1
+      # Resolve+dial upstream CDNs over IPv6 first (A fallback). This host's
+      # IPv4 egress is CGNAT'd onto a shared range with a poor reputation that
+      # some CDNs reject; the same fetch over its clean public IPv6 goes
+      # through. Drop this line on a deployment with a clean dedicated IPv4 /
+      # no IPv6.
+      - MYCELIUM_EGRESS_IPV6=1
+      - TZ=Europe/Rome
+      - GOMEMLIMIT=600MiB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # Userspace WireGuard → SOCKS5 (Fase C). There is NO service here at all,
+  # not even a dynamic one: for each WireGuard .conf the operator drags onto
+  # the dashboard (Impostazioni → VPN → Uscite di rete), mycelium launches its
+  # own `wireproxy` binary (bundled in this image, see Dockerfile) as a plain
+  # child process — no container, no Docker socket — binding its SOCKS5
+  # listener directly on 127.0.0.1:1081..1099. enable/disable/delete from the
+  # dashboard drive each one; a server restart re-applies them
+  # (ReapplyWireproxyAtBoot), since a subprocess dies with mycelium itself.
+  # No cap_add needed — wireproxy is pure userspace, no kernel WireGuard.
+
+  # Polls the registry (GHCR by default) every 5 min and recreates any container
+  # carrying `com.centurylinklabs.watchtower.enable=true` when its image tag
+  # has a newer digest. Cleans up superseded image layers.
+  #
+  # Registry auth: reads the host's Docker credentials — run
+  # `docker login <your-registry>` once on this host before starting.
+  # containrrr/watchtower is unmaintained; its client speaks Docker API 1.25,
+  # which modern daemons (>= 1.40) reject — DOCKER_API_VERSION pins a version
+  # both accept. If it breaks on a newer daemon, swap for the maintained fork
+  # `nickfedor/watchtower:latest` (drop-in, same env) and drop the pin.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    environment:
+      - DOCKER_API_VERSION=1.40
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_ROLLING_RESTART=true
+      - TZ=Europe/Rome
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # host Docker credentials (from `docker login <your-registry>`).
+      # Override with DOCKER_CONFIG_JSON in .env if the path differs.
+      - ${DOCKER_CONFIG_JSON:-${HOME}/.docker/config.json}:/config.json:ro
+
+volumes:
+  redis_data:
+  mycelium_plugins:

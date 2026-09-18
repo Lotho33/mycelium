@@ -1,0 +1,435 @@
+package managers
+
+import (
+	"database/sql"
+	"log"
+	"mycelium/internal/core"
+	"os"
+	"strings"
+
+	_ "modernc.org/sqlite"
+)
+
+var dbFile = core.AppPath("data", "mycelium.db")
+
+type DBManager struct {
+	db *sql.DB
+}
+
+var DB *DBManager
+
+// NewDBManager wraps an already-open *sql.DB as a DBManager. InitDB always
+// opens the same fixed on-disk path (dbFile is resolved once, at package
+// load), so it can't hand tests an isolated database — this lets a test build
+// its own (e.g. an in-memory sqlite handle with just the tables it needs) and
+// point managers.DB at it without touching the real db file.
+func NewDBManager(db *sql.DB) *DBManager {
+	return &DBManager{db: db}
+}
+
+// InitDB apre la connessione e crea le tabelle.
+func InitDB() error {
+	os.MkdirAll(core.AppPath("data"), 0755)
+
+	db, err := sql.Open("sqlite", dbFile)
+	if err != nil {
+		return err
+	}
+
+	// Imposta configurazioni SQLite
+	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		log.Printf("⚠️ PRAGMA journal_mode=WAL non applicato: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA synchronous=NORMAL;"); err != nil {
+		log.Printf("⚠️ PRAGMA synchronous=NORMAL non applicato: %v", err)
+	}
+	// Senza busy_timeout, SQLite fallisce SUBITO con "database is locked"
+	// quando due connessioni del pool scrivono nello stesso istante (es.
+	// dashboard che salva un'impostazione mentre un task Lua scrive
+	// watch_history) invece di attendere che il writer in corso finisca — WAL
+	// permette lettori concorrenti ma resta un solo writer alla volta. 5s
+	// copre ampiamente le scritture di questo processo (nessuna transazione
+	// è mai così lunga).
+	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		log.Printf("⚠️ PRAGMA busy_timeout non applicato: %v", err)
+	}
+
+	// Creazione Tabelle
+	schema := `
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT
+	);
+	CREATE TABLE IF NOT EXISTS watch_history (
+		client_id TEXT,
+		provider_id TEXT,
+		playable_id TEXT,
+		title TEXT,
+		poster TEXT,
+		progress_time REAL,
+		total_time REAL,
+		is_completed BOOLEAN,
+		last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (client_id, provider_id, playable_id)
+	);
+	CREATE TABLE IF NOT EXISTS clients (
+		client_id TEXT PRIMARY KEY,
+		secret_key TEXT NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS pileus_devices (
+		device_id   TEXT PRIMARY KEY,
+		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE TABLE IF NOT EXISTS pileus_profiles (
+		profile_id  TEXT PRIMARY KEY,
+		device_id   TEXT NOT NULL REFERENCES pileus_devices(device_id) ON DELETE CASCADE,
+		name        TEXT NOT NULL,
+		avatar_url  TEXT NOT NULL DEFAULT '',
+		is_child    BOOLEAN NOT NULL DEFAULT 0, -- dead column: no child-profile concept, no code reads it (removed 2026-09-16)
+		pin_hash    TEXT,   -- dead column: parental PIN feature removed 2026-09-06, no code reads it
+		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Migrations (idempotent — SQLite's "duplicate column" error, returned
+	// when a previous boot already applied the ALTER, is expected and
+	// ignored; anything else is logged rather than swallowed).
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN navigation_context TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE pileus_devices ADD COLUMN label TEXT NOT NULL DEFAULT ''`)
+	// revoked_at: NULL = active. Set to kill every existing JWT for a device
+	// without deleting its profiles (FK ON DELETE CASCADE) — the auth
+	// interceptor rejects a token whose device row is missing or revoked.
+	// Cleared again on a successful re-pairing (AuthorizeDevice).
+	runMigration(db, `ALTER TABLE pileus_devices ADD COLUMN revoked_at TIMESTAMP`)
+	// rating/genres/plot/year: continue-watching card metadata beyond title/poster.
+	// genres is comma-joined (SQLite has no array type), same convention the
+	// Flutter client already uses when displaying a joined genre list.
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN rating REAL NOT NULL DEFAULT 0`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN genres TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN plot TEXT NOT NULL DEFAULT ''`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN year INTEGER NOT NULL DEFAULT 0`)
+	// Per-profile client preferences (subtitle style, audio/sub language, …).
+	// Opaque JSON blob — the Pileus client owns the schema; the server only
+	// stores and echoes it. Profiles are server-wide, so this follows the
+	// person across every device paired to the server.
+	runMigration(db, `ALTER TABLE pileus_profiles ADD COLUMN preferences TEXT NOT NULL DEFAULT '{}'`)
+	// logo_url: a proper show/movie logo (wordmark), not the plain-text title
+	// card continue watching fell back to before this — no client ever sent
+	// one (there was no column to put it in), so postProgress now derives it
+	// itself in the background via the plugin's own get_details (every
+	// provider already returns logo_url there for its catalog, see
+	// animeunity/vix.series/vix.movie) instead of waiting on a client change.
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN logo_url TEXT NOT NULL DEFAULT ''`)
+
+	log.Println("🗄️ Database inizializzato (mycelium.db).")
+	DB = &DBManager{db: db}
+	return nil
+}
+
+// isDuplicateColumnError reports whether err is SQLite's "duplicate column
+// name" error — returned by an `ALTER TABLE ... ADD COLUMN` when a previous
+// boot already applied that migration. modernc.org/sqlite (the driver used
+// here, v1.48.2) reports it as e.g.:
+//
+//	SQL logic error: duplicate column name: parent_id (1)
+//
+// Matched case-insensitively on the "duplicate column" substring (verified
+// against the driver directly) rather than the full message, since the
+// column name varies per call site.
+func isDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column")
+}
+
+// runMigration executes an idempotent schema migration (typically an ALTER
+// TABLE ADD COLUMN). A "duplicate column" error means a previous boot already
+// applied it — expected, ignored. Any other error (full disk, corrupt DB,
+// constraint violation, …) is logged instead of being silently swallowed; it
+// does not fail InitDB, since a single migration hiccup shouldn't block boot.
+func runMigration(db *sql.DB, query string) {
+	if _, err := db.Exec(query); err != nil && !isDuplicateColumnError(err) {
+		log.Printf("⚠️ migrazione DB fallita (%q): %v", query, err)
+	}
+}
+
+// AddClient salva un nuovo dispositivo [cite: 2]
+func (m *DBManager) AddClient(clientID, secretKey string) error {
+	query := "INSERT INTO clients (client_id, secret_key) VALUES (?, ?)"
+	_, err := m.db.Exec(query, clientID, secretKey)
+	return err
+}
+
+// GetClients recupera la lista per la dashboard [cite: 2]
+func (m *DBManager) GetClients() ([]map[string]string, error) {
+	rows, err := m.db.Query("SELECT client_id FROM clients")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			results = append(results, map[string]string{"client_id": id})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// GetAllClientSecrets returns every clientID → secretKey pair.
+// Used to validate Stremio addon tokens without an extra DB column.
+func (m *DBManager) GetAllClientSecrets() (map[string]string, error) {
+	rows, err := m.db.Query("SELECT client_id, secret_key FROM clients")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, secret string
+		if err := rows.Scan(&id, &secret); err == nil {
+			out[id] = secret
+		}
+	}
+	return out, rows.Err()
+}
+
+// GetClientSecret recupera la chiave segreta per generare il token HMAC
+func (m *DBManager) GetClientSecret(clientID string) (string, error) {
+	var secret string
+	err := m.db.QueryRow("SELECT secret_key FROM clients WHERE client_id = ?", clientID).Scan(&secret)
+	return secret, err
+}
+
+// RemoveClient elimina fisicamente il dispositivo dal database
+func (m *DBManager) RemoveClient(clientID string) error {
+	_, err := m.db.Exec("DELETE FROM clients WHERE client_id = ?", clientID)
+	return err
+}
+
+// GetSetting recupera un'impostazione
+func (m *DBManager) GetSetting(key string) (string, error) {
+	var value string
+	err := m.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil // Nessun risultato, non è un vero errore fatale
+	}
+	return value, err
+}
+
+// SetSetting effettua l'Upsert di un'impostazione
+func (m *DBManager) SetSetting(key, value string) error {
+	query := `
+		INSERT INTO settings (key, value) 
+		VALUES (?, ?) 
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`
+	_, err := m.db.Exec(query, key, value)
+	return err
+}
+
+// UpsertProgress aggiorna la cronologia.
+// Se parentID non è vuoto, rimuove la entry precedente della stessa serie prima di inserire.
+func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, navigationContext, title, poster string, currentTime, totalTime float64, rating float64, genres []string, plot string, year int32) error {
+	isCompleted := 0
+	if totalTime > 0 && (currentTime/totalTime) > 0.90 {
+		isCompleted = 1
+	}
+	genresJoined := strings.Join(genres, ",")
+
+	query := `
+		INSERT INTO watch_history
+		(client_id, provider_id, playable_id, parent_id, navigation_context, title, poster, progress_time, total_time, is_completed, rating, genres, plot, year, last_updated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(client_id, provider_id, playable_id) DO UPDATE SET
+			parent_id          = excluded.parent_id,
+			-- keep-if-empty, same as title/poster below: a position-only
+			-- heartbeat (or a play path that doesn't know the series name)
+			-- must not blank an already-stored navigation_context.
+			navigation_context = CASE WHEN excluded.navigation_context != '' THEN excluded.navigation_context ELSE navigation_context END,
+			title              = CASE WHEN excluded.title  != '' THEN excluded.title  ELSE title  END,
+			poster             = CASE WHEN excluded.poster != '' THEN excluded.poster ELSE poster END,
+			progress_time      = excluded.progress_time,
+			total_time         = CASE WHEN excluded.total_time > 0 THEN excluded.total_time ELSE total_time END,
+			is_completed       = excluded.is_completed,
+			rating             = CASE WHEN excluded.rating > 0 THEN excluded.rating ELSE rating END,
+			genres             = CASE WHEN excluded.genres != '' THEN excluded.genres ELSE genres END,
+			plot               = CASE WHEN excluded.plot   != '' THEN excluded.plot   ELSE plot   END,
+			year               = CASE WHEN excluded.year   > 0   THEN excluded.year   ELSE year   END,
+			last_updated       = CURRENT_TIMESTAMP
+	`
+	// When parentID is set, the stale sibling row (same series, different
+	// episode) must disappear atomically with the new row's insert/update:
+	// a concurrent GetContinueWatching, or a crash between the two
+	// statements, must never observe the series with neither row present.
+	if parentID == "" {
+		_, err := m.db.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year)
+		return err
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op once Commit succeeds
+
+	if _, err := tx.Exec(
+		`DELETE FROM watch_history WHERE client_id=? AND provider_id=? AND parent_id=? AND playable_id!=?`,
+		clientID, providerID, parentID, playableID,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type WatchHistoryEntry struct {
+	ProviderID        string   `json:"provider_id"`
+	PlayableID        string   `json:"playable_id"`
+	ParentId          string   `json:"parent_id,omitempty"`
+	NavigationContext string   `json:"navigation_context,omitempty"`
+	Title             string   `json:"title"`
+	Poster            string   `json:"poster"`
+	LogoURL           string   `json:"logo_url,omitempty"`
+	ProgressTime      float64  `json:"progress_time"`
+	TotalTime         float64  `json:"total_time"`
+	LastUpdated       string   `json:"last_updated"`
+	Rating            float64  `json:"rating"`
+	Genres            []string `json:"genres,omitempty"`
+	Plot              string   `json:"plot,omitempty"`
+	Year              int32    `json:"year,omitempty"`
+}
+
+// WatchHistoryLogoTarget identifies which rows NeedsLogo/UpdateWatchHistoryLogo
+// touch — every row for this client+provider sharing parentID (playableID
+// itself when parentID is empty, e.g. a movie with no series parent).
+type WatchHistoryLogoTarget struct {
+	ClientID   string
+	ProviderID string
+	ParentID   string
+	PlayableID string
+}
+
+// NeedsLogo reports whether the given show/movie's watch_history row(s)
+// don't have a logo_url yet — postProgress checks this before kicking off a
+// background fetch, so a title only ever triggers one (per client+show),
+// not one per playback-position heartbeat.
+func (m *DBManager) NeedsLogo(t WatchHistoryLogoTarget) (bool, error) {
+	var logo string
+	var err error
+	if t.ParentID != "" {
+		err = m.db.QueryRow(
+			`SELECT logo_url FROM watch_history WHERE client_id=? AND provider_id=? AND parent_id=? LIMIT 1`,
+			t.ClientID, t.ProviderID, t.ParentID,
+		).Scan(&logo)
+	} else {
+		err = m.db.QueryRow(
+			`SELECT logo_url FROM watch_history WHERE client_id=? AND provider_id=? AND playable_id=? LIMIT 1`,
+			t.ClientID, t.ProviderID, t.PlayableID,
+		).Scan(&logo)
+	}
+	if err != nil {
+		return false, err
+	}
+	return logo == "", nil
+}
+
+// UpdateWatchHistoryLogo sets logo_url on every row matching t that doesn't
+// already have one — same parent_id/playable_id targeting as NeedsLogo.
+func (m *DBManager) UpdateWatchHistoryLogo(t WatchHistoryLogoTarget, logoURL string) error {
+	if t.ParentID != "" {
+		_, err := m.db.Exec(
+			`UPDATE watch_history SET logo_url=? WHERE client_id=? AND provider_id=? AND parent_id=? AND logo_url=''`,
+			logoURL, t.ClientID, t.ProviderID, t.ParentID,
+		)
+		return err
+	}
+	_, err := m.db.Exec(
+		`UPDATE watch_history SET logo_url=? WHERE client_id=? AND provider_id=? AND playable_id=? AND logo_url=''`,
+		logoURL, t.ClientID, t.ProviderID, t.PlayableID,
+	)
+	return err
+}
+
+// DeleteProgress removes a single watch_history entry for a client.
+func (m *DBManager) DeleteProgress(clientID, providerID, playableID string) error {
+	_, err := m.db.Exec(
+		"DELETE FROM watch_history WHERE client_id = ? AND provider_id = ? AND playable_id = ?",
+		clientID, providerID, playableID,
+	)
+	return err
+}
+
+// GetContinueWatching returns in-progress (non-completed) items for a client,
+// most recently watched first, capped at limit.
+// If parentID is non-empty, filters to items with that parent_id.
+func (m *DBManager) GetContinueWatching(clientID string, limit int, parentID ...string) ([]WatchHistoryEntry, error) {
+	filter := ""
+	args := []any{clientID}
+	if len(parentID) > 0 && parentID[0] != "" {
+		filter = " AND parent_id = ?"
+		args = append(args, parentID[0])
+	}
+	args = append(args, limit)
+
+	// No minimum position/percent threshold on purpose: a title should show
+	// up in Continue Watching the moment it's opened, not only once some
+	// amount of it has actually played. is_completed (flipped at >90% in
+	// UpsertProgress) is what drops it back out once it's finished.
+	rows, err := m.db.Query(`
+		SELECT provider_id, playable_id, parent_id, navigation_context, title, poster, logo_url, progress_time, total_time, last_updated, rating, genres, plot, year
+		FROM watch_history
+		WHERE client_id = ? AND is_completed = 0
+		`+filter+`
+		ORDER BY last_updated DESC
+		LIMIT ?
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []WatchHistoryEntry
+	for rows.Next() {
+		var e WatchHistoryEntry
+		var genresJoined string
+		if err := rows.Scan(&e.ProviderID, &e.PlayableID, &e.ParentId, &e.NavigationContext, &e.Title, &e.Poster, &e.LogoURL, &e.ProgressTime, &e.TotalTime, &e.LastUpdated, &e.Rating, &genresJoined, &e.Plot, &e.Year); err != nil {
+			return nil, err
+		}
+		if genresJoined != "" {
+			e.Genres = strings.Split(genresJoined, ",")
+		}
+		results = append(results, e)
+	}
+	return results, rows.Err()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Raw SQL passthrough — used by internal packages (e.g. pileus handlers)
+// that need direct DB access without adding high-level methods here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (m *DBManager) Exec(query string, args ...any) (sql.Result, error) {
+	return m.db.Exec(query, args...)
+}
+
+func (m *DBManager) Query(query string, args ...any) (*sql.Rows, error) {
+	return m.db.Query(query, args...)
+}
+
+func (m *DBManager) QueryRow(query string, args ...any) *sql.Row {
+	return m.db.QueryRow(query, args...)
+}

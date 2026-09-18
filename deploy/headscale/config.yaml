@@ -1,0 +1,74 @@
+# Headscale config — targets the ~0.23 schema. Before first boot, replace:
+#   <HEADSCALE_DOMAIN>   → same value as HEADSCALE_DOMAIN in .env
+#   <VPS_PUBLIC_IP>      → this VPS's public IPv4 (for the embedded DERP map)
+#
+# Full reference (all keys, defaults, comments):
+# https://github.com/juanfont/headscale/blob/main/config-example.yaml
+# Diff this file against that one if you pin a different headscale version
+# and `headscale serve` complains about unknown/missing keys.
+
+server_url: https://<HEADSCALE_DOMAIN>
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 0.0.0.0:50443
+grpc_allow_insecure: false
+
+private_key_path: /var/lib/headscale/private.key
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+# Tailnet address space handed out to nodes. Defaults are fine for a small
+# friend group — plenty of headroom below the /10.
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+# Embedded DERP relay: only used as fallback when direct WireGuard
+# hole-punching between two nodes fails (e.g. both behind restrictive NAT
+# at the same moment). Keeping our own instead of pulling Tailscale's public
+# DERP map means the friend group's traffic never has to transit a
+# third-party relay even in the worst case.
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "mycelium-mesh"
+    region_name: "mycelium mesh (self-hosted)"
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+    ipv4: "<VPS_PUBLIC_IP>"
+    ipv6: ""
+  urls: []             # do not also pull the public Tailscale DERP map
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 24h
+
+disable_check_updates: false
+ephemeral_node_inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+log:
+  level: info
+
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+dns:
+  magic_dns: true
+  base_domain: mesh.internal
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 1.0.0.1
+  search_domains: []
+  extra_records: []
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"

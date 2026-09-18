@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package mycelium;
+
+option go_package = "github.com/Lotho33/stipes-sdk/sdk/gen;gen";
+
+import "media.proto";
+
+// ─────────────────────────────────────────
+// Provider service (plugin → core)
+// Plugins implement this service; core calls it.
+// CatalogItem is defined in media.proto (shared type).
+// ───────��─────────────────────────────────
+
+message InitRequest {
+  map<string, string> settings = 1;
+}
+message InitResponse {
+  bool   ok    = 1;
+  string error = 2;
+}
+
+message SetupRequest  {}
+message SetupResponse {
+  bool   ready = 1;
+  string error = 2;
+  repeated string capabilities = 3;
+}
+
+message SyncCatalogRequest  {}
+message SyncCatalogResponse {
+  bool   ok    = 1;
+  string error = 2;
+}
+
+message TickRequest  { string job_id = 1; }
+message TickResponse { bool ok = 1; string error = 2; }
+
+message Section {
+  string id                        = 1;
+  string label                     = 2;
+  string icon                      = 3;
+  string media_type                = 4;
+  repeated CatalogItem preview_items = 5;
+}
+message GetSectionsRequest  {}
+message GetSectionsResponse { repeated Section sections = 1; }
+
+message ProviderSearchRequest {
+  string query = 1;
+  int32  page  = 2;
+  int32  year  = 3;
+  string genre = 4;
+}
+message ProviderSearchResponse {
+  repeated CatalogItem items = 1;
+}
+
+message ProviderBrowseRequest {
+  string directory_id = 1;
+  int32  page         = 2;
+}
+message ProviderBrowseResponse {
+  repeated CatalogItem items = 1;
+}
+
+message ProviderResolveRequest {
+  string playable_id = 1;
+}
+message ProviderResolveResponse {
+  string stream_url              = 1;
+  map<string, string> headers    = 2;
+  bool  is_live                  = 3;
+  bool  is_resumable             = 4;
+  bool  use_inputstream          = 5;
+  map<string, string> metadata   = 6;
+}
+
+message GetMetaRequest  { string item_id = 1; }
+message GetMetaResponse { CatalogItem item  = 1; }
+
+service Provider {
+  rpc Init        (InitRequest)              returns (InitResponse);
+  rpc Setup       (SetupRequest)             returns (SetupResponse);
+  rpc SyncCatalog (SyncCatalogRequest)       returns (SyncCatalogResponse);
+  rpc Tick        (TickRequest)              returns (TickResponse);
+  rpc GetSections (GetSectionsRequest)       returns (GetSectionsResponse);
+  rpc Search      (ProviderSearchRequest)    returns (ProviderSearchResponse);
+  rpc Browse      (ProviderBrowseRequest)    returns (ProviderBrowseResponse);
+  rpc Resolve     (ProviderResolveRequest)   returns (ProviderResolveResponse);
+  rpc GetMeta     (GetMetaRequest)           returns (GetMetaResponse);
+}
+
+// ─────────────────────────���───────────────
+// Enricher service
+// ─────────────────────────────────────────
+
+message EnrichRequest {
+  repeated CatalogItem items = 1;
+}
+message EnrichResponse {
+  repeated CatalogItem items = 1;
+}
+
+service Enricher {
+  rpc Init   (InitRequest)   returns (InitResponse);
+  rpc Setup  (SetupRequest)  returns (SetupResponse);
+  rpc Enrich (EnrichRequest) returns (EnrichResponse);
+}
+
+// ─────────────���───────────────────────────
+// BrowserService (core → plugin, plugin is client)
+// ─────────────────────────────────────────
+
+message NavigateRequest {
+  string url        = 1;
+  string wait_for   = 2;
+  int64  timeout_ms = 3;
+  // proxy_url: empty = direct connection; otherwise a full proxy URL
+  // ("socks5://host:port" or "http://host:port") the browser context routes
+  // all its traffic through for this call.
+  string proxy_url  = 4;
+}
+message NavigateResponse {
+  string html      = 1;
+  string final_url = 2;
+}
+
+message EvalRequest {
+  string url        = 1;
+  string js         = 2;
+  int64  timeout_ms = 3;
+  string proxy_url  = 4; // see NavigateRequest.proxy_url
+}
+message EvalResponse {
+  string result = 1;
+}
+
+message BrowserCookie {
+  string name   = 1;
+  string value  = 2;
+  string domain = 3;
+  string path   = 4;
+}
+
+message GetCookiesRequest {
+  string url = 1;
+}
+message GetCookiesResponse {
+  repeated BrowserCookie cookies = 1;
+}
+
+message WaitInterceptRequest {
+  string trigger_url = 1;
+  string url_pattern = 2;
+  int64  timeout_ms  = 3;
+  string proxy_url   = 4; // see NavigateRequest.proxy_url
+}
+message WaitInterceptResponse {
+  string              intercepted_url = 1;
+  map<string, string> headers         = 2;
+}
+
+message ScreenshotRequest {
+  string url        = 1;
+  bool   full_page  = 2;
+  int64  timeout_ms = 3;
+}
+message ScreenshotResponse {
+  bytes data = 1;
+}
+
+message HealthRequest {}
+message HealthResponse {
+  bool   ready  = 1; // false while the engine is still starting up
+  string engine = 2; // "webkit" | "chromium" | "firefox"
+}
+
+service BrowserService {
+  rpc Navigate      (NavigateRequest)      returns (NavigateResponse);
+  rpc Eval          (EvalRequest)          returns (EvalResponse);
+  rpc GetCookies    (GetCookiesRequest)    returns (GetCookiesResponse);
+  rpc WaitIntercept (WaitInterceptRequest) returns (WaitInterceptResponse);
+  rpc Screenshot    (ScreenshotRequest)    returns (ScreenshotResponse);
+  rpc Health        (HealthRequest)        returns (HealthResponse);
+}

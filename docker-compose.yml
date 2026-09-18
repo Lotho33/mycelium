@@ -1,0 +1,113 @@
+services:
+  redis:
+    image: redis:7-alpine
+    # Nome fisso: la dashboard admin lo usa per interrogare l'API Docker
+    # (internal/managers/docker_stats.go) e leggerne CPU/RAM — senza un nome
+    # esplicito dipenderebbe dal project name di compose (es. "mycelium-core-redis-1"),
+    # non prevedibile lato Go.
+    container_name: redis
+    restart: unless-stopped
+    # Hard cap + memswap_limit uguale a mem_limit = niente swap per questo
+    # container (su host poco potenti lo swap è spesso su storage lento,
+    # meglio un riavvio pulito che un degrado silenzioso).
+    mem_limit: 64m
+    memswap_limit: 64m
+    command: redis-server --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "set", "__healthcheck__", "1", "EX", "10"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # Optional companion services (a browser-automation sidecar for JS/anti-bot
+  # challenges, and anything else a given deployment wants) are NOT defined
+  # in this file — add them via a second, local-only compose file merged at
+  # deploy time:
+  #   docker compose -f docker-compose.yml -f docker-compose.private.yml up -d
+  # mycelium runs fine without any of them; plugins that need one simply fail
+  # closed for the calls that do (see internal/managers/browser_client.go).
+
+  mycelium:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: dev
+    image: mycelium:latest
+    container_name: mycelium
+    restart: unless-stopped
+    # 400m copre l'heap Go (soft-capped a 350 MiB via GOMEMLIMIT, vedi sotto)
+    # più l'overhead runtime — niente più browser qui, gira nel container
+    # cobweb a parte. memswap_limit = mem_limit disabilita lo swap: su host
+    # poco potenti preferiamo un riavvio pulito (restart: unless-stopped) a
+    # un degrado silenzioso per swap thrashing.
+    mem_limit: 400m
+    memswap_limit: 400m
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+      - "8000:8000"
+      # Discovery LAN per Pileus (internal/api/discovery.go) — risponditore
+      # UDP, non un servizio TCP: Pileus manda un broadcast, mycelium
+      # risponde con IP/porte/fingerprint TLS, così l'app trova il server da
+      # sola invece di richiedere l'IP a mano. Sostituisce il vecchio mDNS
+      # via Avahi (mai realmente funzionante in Docker).
+      - "51900:51900/udp"
+    volumes:
+      - ./plugins:/app/plugins
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - MYCELIUM_BASE=/app
+      - REDIS_ADDR=redis:6379
+      # Optional companion service address (see the note above services:
+      # above) — set here, or via the private overlay compose file, if you
+      # run one. Unset: plugins that need it fail closed for those calls.
+      - COBWEB_ADDR=${COBWEB_ADDR:-}
+      # VPN proxy for plugin traffic — every plugin by default, except those that
+      # declare direct_egress: true (which can still opt in per-request with _proxy=true).
+      # Leave empty to run without a VPN. No VPN egress container is defined
+      # in this file (see the note above services:) — run one standalone
+      # (e.g. a WireGuard-to-SOCKS5 sidecar) and point this at it.
+      #
+      # host.docker.internal, NOT a container-to-container address — verificato
+      # dal vivo il 2026-08-18: una connessione diretta container-a-container
+      # sulla rete bridge Docker verso un proxy VPN basato su WireGuard può
+      # andare in timeout (SYN inviato, nessuna risposta), quasi certamente
+      # routing asimmetrico nel policy-routing WireGuard (fwmark + tabelle di
+      # routing multiple) che non gestisce bene traffico da un altro peer
+      # sulla stessa subnet bridge. La stessa identica richiesta funziona
+      # invece passando per la porta pubblicata sull'host (172.17.0.1, già
+      # raggiungibile qui sotto via extra_hosts) — il traffico NAT'ato del
+      # port-forward evidentemente non incappa nello stesso problema.
+      - VPN_PROXY_URL=socks5://host.docker.internal:1080
+      - MYCELIUM_DOCKER=1
+      - TZ=Europe/Rome
+      # Soft heap cap per il GC di Go (vedi cmd/server/main.go: applyMemoryLimit).
+      # Impostato qui esplicitamente per renderlo visibile/regolabile senza
+      # ricompilare; deve restare sotto mem_limit per lasciare margine
+      # all'overhead non-heap.
+      - GOMEMLIMIT=350MiB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # VPN egress (microwarp, or anything else) is NOT defined in this file
+  # either, same "bring your own" reasoning as the companion services note
+  # above — add it via the private overlay compose file, or run it
+  # standalone and point VPN_PROXY_URL above at it. Without one configured,
+  # every plugin without direct_egress: true fails closed on its network
+  # calls (by design — see internal/managers/egress.go) rather than
+  # silently leaking direct.
+
+volumes:
+  redis_data:

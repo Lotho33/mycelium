@@ -1,0 +1,36 @@
+// Headscale ACL policy — HuJSON (JSON + comments). Reference:
+// https://headscale.net/stable/ref/acls/
+//
+// Default posture: every node in the mesh is a mycelium node (tag:mycelium)
+// and can only reach other mycelium nodes on the port mycelium actually
+// listens on (8000/tcp, see cmd/server/main.go — server_port). Nothing else
+// is open by default: no SSH, no arbitrary LAN access, no blanket
+// node-to-node trust. Widen this deliberately as later phases need more
+// (e.g. a dedicated internal port for the sibling-node mesh RPC, once that
+// exists — add it here rather than opening the whole node).
+{
+  "tagOwners": {
+    // Only these users may tag a node "tag:mycelium" — i.e. only accounts
+    // you (the operator) create can mint a node that joins the trusted
+    // group. Add each friend's headscale username here as you invite them,
+    // or keep it to a single admin user who re-tags nodes after review.
+    "tag:mycelium": ["admin"],
+  },
+
+  "groups": {
+    "group:friends": [],
+  },
+
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:mycelium"],
+      "dst": ["tag:mycelium:8000"],
+    },
+    // Loosen this if/when Phase 2 (sibling-node registry) needs a second
+    // port for internal mesh RPC, e.g.:
+    // { "action": "accept", "src": ["tag:mycelium"], "dst": ["tag:mycelium:8500"] },
+  ],
+
+  "ssh": [],
+}

@@ -1,0 +1,26 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/main ./cmd/server"
+  bin = "./tmp/main"
+  delay = 1000
+  exclude_dir = ["tmp", "vendor", "web", "plugins"]
+  include_ext = ["go"]
+  # send_interrupt=true + kill_delay>0: air manda SIGTERM e aspetta prima del
+  # SIGKILL, così il graceful shutdown del server (vedi cmd/server/main.go) può
+  # chiudere con un HTTP/2 GOAWAY le connessioni gRPC aperte (es. l'app
+  # frontend) invece di tranciarle con un RST — altrimenti il client vede un
+  # errore secco ("connection forcefully terminated") a ogni save durante lo
+  # sviluppo, invece di una disconnessione pulita.
+  kill_delay = "2s"
+  rerun = false
+  rerun_delay = 500
+  send_interrupt = true
+
+[log]
+  main_only = false
+  time = false
+
+[misc]
+  clean_on_exit = false

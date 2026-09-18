@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Installa Pileus</title>
+
+    <!-- PWA: abilita "Aggiungi alla schermata Home" su iOS -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Pileus">
+    <meta name="theme-color" content="#0a0d12">
+
+    <link rel="manifest" href="/manifest.json">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: #0a0d12;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .card {
+            background: #141820;
+            border: 1px solid #1e2530;
+        }
+        .step-number {
+            background: linear-gradient(135deg, #7c6af7, #5a4fd4);
+            min-width: 2rem;
+            height: 2rem;
+        }
+        .icon-share {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            vertical-align: middle;
+        }
+        @supports (padding-top: env(safe-area-inset-top)) {
+            .safe-top { padding-top: env(safe-area-inset-top); }
+            .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        }
+        #installed-banner {
+            display: none;
+            background: #14532d;
+            border: 1px solid #16a34a;
+        }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen safe-top safe-bottom">
+
+<div class="max-w-md mx-auto px-5 py-10">
+
+    <!-- Header -->
+    <div class="text-center mb-10">
+        <div class="w-20 h-20 mx-auto mb-5 rounded-2xl flex items-center justify-center"
+             style="background: linear-gradient(135deg, #7c6af7 0%, #5a4fd4 100%);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" width="44" height="44">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                <path d="M2 17l10 5 10-5"/>
+                <path d="M2 12l10 5 10-5"/>
+            </svg>
+        </div>
+        <h1 class="text-3xl font-bold text-white tracking-tight">Pileus</h1>
+        <p class="text-gray-400 mt-2 text-base">Installa l'app su iPhone senza App Store</p>
+    </div>
+
+    <!-- Banner già installata (rilevato da display-mode) -->
+    <div id="installed-banner" class="card rounded-2xl p-4 mb-6 text-center">
+        <p class="text-green-400 font-semibold">App già installata sulla schermata Home</p>
+        <p class="text-gray-400 text-sm mt-1">Puoi aprirla direttamente da li.</p>
+    </div>
+
+    <!-- Istruzioni -->
+    <div class="card rounded-2xl p-6 mb-6">
+        <h2 class="text-white font-semibold text-lg mb-5">Come installare</h2>
+
+        <div class="space-y-5">
+            <!-- Step 1 -->
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">1</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">Apri l'app in Safari</p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Vai su
+                        <a href="/app/" class="text-purple-400 underline break-all" id="app-link">/app/</a>
+                        in Safari di Apple. L'installazione funziona solo con Safari —
+                        se stai usando un altro browser, copia il link e aprilo in Safari.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">2</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">
+                        Tocca il tasto Condividi
+                        <svg class="icon-share" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/>
+                            <polyline points="16 6 12 2 8 6"/>
+                            <line x1="12" y1="2" x2="12" y2="15"/>
+                        </svg>
+                    </p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Si trova nella barra in basso di Safari (il quadrato con la freccia su).
+                    </p>
+                </div>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">3</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">Scorri e tocca "Aggiungi a schermata Home"</p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Nella lista delle azioni, scorri verso il basso e cerca l'opzione con l'icona
+                        del quadrato con un +.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Step 4 -->
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">4</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">Tocca "Aggiungi" in alto a destra</p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        L'icona di Pileus apparirà sulla tua schermata Home.
+                        Aprila come qualsiasi altra app.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info box -->
+    <div class="rounded-2xl p-4" style="background: rgba(124,106,247,0.08); border: 1px solid rgba(124,106,247,0.2);">
+        <p class="text-purple-300 text-sm">
+            Una volta installata, l'app si avvia senza la barra di Safari e funziona in
+            modalita schermo intero, come un'app nativa.
+        </p>
+    </div>
+
+</div>
+
+<script>
+    // Mostra URL completo nel link all'app
+    const appLink = document.getElementById('app-link');
+    if (appLink) {
+        const url = window.location.origin + '/app/';
+        appLink.href = url;
+        appLink.textContent = url;
+    }
+    // Mostra il banner se l'app e gia in esecuzione come PWA installata
+    if (window.navigator.standalone === true) {
+        document.getElementById('installed-banner').style.display = 'block';
+    }
+</script>
+
+</body>
+</html>

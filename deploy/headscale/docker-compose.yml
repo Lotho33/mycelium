@@ -1,0 +1,78 @@
+# Headscale control-plane stack — Fase 1 della mesh multi-nodo mycelium.
+#
+# Runs on a small public VPS, NOT on the home server (which sits behind
+# Starlink CGNAT and can't accept inbound connections). This is the
+# coordination point only: it exchanges WireGuard keys and helps peers find
+# each other, it does not sit in the data path. Once two mycelium nodes are
+# connected, their traffic (image caching delegation, etc. — later phases)
+# goes peer-to-peer directly; the embedded DERP relay below is only a
+# fallback for when direct hole-punching fails.
+#
+# Each mycelium node (yours included) joins with the official Tailscale
+# client, pointed at this server via `tailscale up --login-server=https://<domain>`.
+# Headscale itself has no client of its own — see docs/deploy-headscale.md.
+#
+# Requirements before `docker compose up -d`:
+#   - a domain name (A/AAAA record) pointing at this VPS's public IP
+#     (needed for both Caddy's automatic TLS cert and headscale's server_url)
+#   - ports 80/tcp, 443/tcp and 3478/udp open on the VPS firewall
+#   - .env filled in from .env.example
+#   - config.yaml edited: replace the <HEADSCALE_DOMAIN> / <VPS_PUBLIC_IP>
+#     placeholders (Docker Compose env substitution does NOT reach into a
+#     bind-mounted config file, so this one edit is manual)
+#
+# Deploy:
+#   cp .env.example .env && edit it
+#   edit config.yaml (see placeholders above)
+#   docker compose up -d
+#   docker compose exec headscale headscale users create <name>
+#   docker compose exec headscale headscale preauthkeys create --user <name> --reusable --expiration 24h
+#
+# See docs/deploy-headscale.md for the full walkthrough (joining nodes,
+# testing connectivity, rotating pre-auth keys).
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: headscale-caddy
+    restart: unless-stopped
+    network_mode: host   # simplest way to bind 80/443 directly and terminate TLS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - HEADSCALE_DOMAIN=${HEADSCALE_DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL}
+    depends_on:
+      - headscale
+
+  headscale:
+    # Pin to whatever version you've actually tested — check
+    # https://github.com/juanfont/headscale/releases before first deploy,
+    # the config schema below targets the ~0.23 line and may need small
+    # adjustments on a newer release (diff against that release's
+    # config-example.yaml if `headscale serve` refuses to start).
+    image: headscale/headscale:${HEADSCALE_TAG:-0.23.0}
+    container_name: headscale
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "127.0.0.1:8080:8080"    # HTTP — only Caddy talks to this, not public
+      - "0.0.0.0:3478:3478/udp"  # embedded DERP STUN — must be reachable
+                                  # directly, Caddy can't proxy UDP
+    volumes:
+      - ./config.yaml:/etc/headscale/config.yaml:ro
+      - ./policy.hujson:/etc/headscale/policy.hujson:ro
+      - headscale_data:/var/lib/headscale
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  headscale_data:
+  caddy_data:
+  caddy_config:
