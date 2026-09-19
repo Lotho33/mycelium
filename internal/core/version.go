@@ -13,7 +13,7 @@ import (
 
 // Version is the running core version.
 // Override at build time: go build -ldflags "-X mycelium/internal/core.Version=v1.2.3"
-var Version = "1.4.4"
+var Version = "1.4.5"
 
 const githubReleaseAPI = "https://api.github.com/repos/Lotho33/mycelium/releases/latest"
 
