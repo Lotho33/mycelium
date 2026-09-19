@@ -159,3 +159,34 @@ func TestCobwebRoundTripper_KeepsUAWithClearanceCookie(t *testing.T) {
 		t.Errorf("UA should be kept when cf_clearance present: %v", hdrs)
 	}
 }
+
+// A UA pinned via the X-Force-User-Agent sentinel must survive the cobweb relay
+// (which otherwise drops it), and the internal marker must not leak to cobweb.
+func TestCobwebRoundTripper_KeepsPinnedUA(t *testing.T) {
+	var gotBody map[string]any
+	cobweb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+	}))
+	defer cobweb.Close()
+	t.Setenv("COBWEB_ADDR", cobweb.URL)
+
+	xhdr := b64url(`{"X-Force-User-Agent":"PinnedUA/1.0"}`)
+	req, err := buildProxyRequest("GET", "https://cdn.example/a.m3u8", "https://player.example/", "", xhdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := (&cobwebRoundTripper{}).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	hdrs, _ := gotBody["headers"].(map[string]any)
+	if hdrs["User-Agent"] != "PinnedUA/1.0" {
+		t.Errorf("pinned UA lost in relay: %v", hdrs["User-Agent"])
+	}
+	if _, leaked := hdrs[pinUAHeader]; leaked {
+		t.Errorf("internal marker leaked to cobweb: %v", hdrs)
+	}
+}

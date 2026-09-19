@@ -51,6 +51,18 @@ func stdTransport(opts utlsTransportOpts) *nethttp.Transport {
 	}
 }
 
+// stripPinUA removes the internal pinUAHeader marker before a request goes
+// out on the plain net/http path (which keeps the UA as-is anyway).
+type stripPinUA struct{ rt nethttp.RoundTripper }
+
+func (s stripPinUA) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	if req.Header.Get(pinUAHeader) != "" {
+		req = req.Clone(req.Context())
+		req.Header.Del(pinUAHeader)
+	}
+	return s.rt.RoundTrip(req)
+}
+
 // newUTLSTransport builds the transport for direct (non-proxied) upstream
 // fetches. cobweb sidecar by default; plain net/http (DNS via core.CFDialContext)
 // only when MYCELIUM_HTTP_PROFILE=standard.
@@ -60,7 +72,7 @@ func newUTLSTransport(opts utlsTransportOpts) nethttp.RoundTripper {
 		// SSRF guard on the direct path only: the proxy path (below) and the
 		// cobweb path resolve the target themselves, so the check lives there.
 		t.DialContext = core.GuardedDialContext(core.CFDialContext)
-		return t
+		return stripPinUA{t}
 	}
 	return &cobwebRoundTripper{}
 }
@@ -73,7 +85,7 @@ func newUTLSProxyTransport(proxyURL string, opts utlsTransportOpts) nethttp.Roun
 	if httpProfileStandard() {
 		t := stdTransport(opts)
 		t.DialContext = core.ProxyDialer(proxyURL)
-		return t
+		return stripPinUA{t}
 	}
 	return &cobwebRoundTripper{proxyURL: proxyURL}
 }
@@ -130,12 +142,12 @@ func (t *cobwebRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response,
 	// is riding along — it's bound to that UA. Otherwise drop it (and its
 	// client-hints) so cobweb's wreq profile supplies a set consistent with
 	// its own TLS fingerprint.
-	keepUA := strings.Contains(req.Header.Get("Cookie"), "cf_clearance")
+	keepUA := strings.Contains(req.Header.Get("Cookie"), "cf_clearance") || req.Header.Get(pinUAHeader) != ""
 
 	hdr := make(map[string]string, len(req.Header))
 	for k, vs := range req.Header {
 		lk := strings.ToLower(k)
-		if len(vs) == 0 || cobwebDropHeaders[lk] {
+		if len(vs) == 0 || cobwebDropHeaders[lk] || lk == strings.ToLower(pinUAHeader) {
 			continue
 		}
 		if !keepUA && (lk == "user-agent" || strings.HasPrefix(lk, "sec-ch-ua")) {

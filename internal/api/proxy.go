@@ -263,15 +263,34 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			// blocked on, which surfaced as "Failed to reload playlist 0" /
 			// "parse_playlist error Invalid data found" a few seconds into
 			// every live stream.
-			fetchCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			req = req.WithContext(fetchCtx)
-			resp, err := plClient.Do(req)
-			if err != nil {
-				return nil, err
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			//
+			// A live origin can answer a playlist reload with a transient
+			// 404/5xx (encoder restart, on-demand pull warming up). One such
+			// blip used to end playback for good, so retry those briefly;
+			// 401/403 (likely an expired token) fall straight through to the
+			// re-resolve path instead.
+			const maxPlaylistAttempts = 3
+			for attempt := 1; ; attempt++ {
+				req, err := buildProxyRequest(http.MethodGet, realURL, realOrigin, cookiesRaw, xhdrRaw)
+				if err != nil {
+					return nil, err
+				}
+				if proxyDebug {
+					log.Printf("[proxy/playlist] sending headers=%v", req.Header)
+				}
+				fetchCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				req = req.WithContext(fetchCtx)
+				resp, err := plClient.Do(req)
+				if err != nil {
+					cancel()
+					return nil, err
+				}
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					b, rerr := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					cancel()
+					return b, rerr
+				}
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 				bodyStr := strings.TrimSpace(string(body))
 				if len(bodyStr) > 200 {
@@ -282,9 +301,15 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[proxy/playlist] upstream %d headers=%v", resp.StatusCode, resp.Header)
 				}
 				noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
-				return nil, fmt.Errorf("upstream %d", resp.StatusCode)
+				status := resp.StatusCode
+				resp.Body.Close()
+				cancel()
+				transient := status == http.StatusNotFound || status >= 500
+				if !transient || attempt >= maxPlaylistAttempts {
+					return nil, fmt.Errorf("upstream %d", status)
+				}
+				time.Sleep(time.Duration(attempt) * 700 * time.Millisecond)
 			}
-			return io.ReadAll(resp.Body)
 		})
 		if shared {
 			log.Printf("[proxy/playlist] shared fetch for %s", logURL(realURL))

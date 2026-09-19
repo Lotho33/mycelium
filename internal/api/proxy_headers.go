@@ -149,6 +149,10 @@ func sameRegistrableDomain(a, b string) bool {
 	return x != "" && x == last2(b)
 }
 
+// pinUAHeader is an internal marker (never sent upstream) telling the transport
+// to keep the request's User-Agent instead of substituting its own profile.
+const pinUAHeader = "X-Mycelium-Pin-UA"
+
 // buildProxyRequest costruisce una richiesta HTTP verso il CDN upstream.
 // Parte sempre da un baseline Chrome coerente (setBrowserBaselineHeaders), poi
 // sovrascrive con gli header REALI catturati dal sniffer (xhdrRaw, base64url
@@ -166,6 +170,10 @@ func buildProxyRequest(method, targetURL, origin, cookiesRaw, xhdrRaw string) (*
 	// Prima dell'overlay xhdr, così un sec-fetch-site realmente catturato vince.
 	applyFetchMetadata(req, origin)
 
+	// pinnedUA: set only via the X-Force-User-Agent sentinel below — a plain
+	// "User-Agent" in xhdr (e.g. one captured by mycelium.browser.sniff) is
+	// deliberately NOT enough, see the UA policy comment below.
+	pinnedUA := false
 	if xhdrRaw != "" {
 		if decoded := proxyB64Decode(xhdrRaw); decoded != "" {
 			var hdrs map[string]string
@@ -173,6 +181,11 @@ func buildProxyRequest(method, targetURL, origin, cookiesRaw, xhdrRaw string) (*
 				for k, v := range hdrs {
 					// net/http gestisce accept-encoding da sé (vedi setBrowserBaselineHeaders).
 					if strings.EqualFold(k, "accept-encoding") {
+						continue
+					}
+					if strings.EqualFold(k, "x-force-user-agent") {
+						req.Header.Set("user-agent", v)
+						pinnedUA = true
 						continue
 					}
 					req.Header.Set(k, v)
@@ -202,8 +215,26 @@ func buildProxyRequest(method, targetURL, origin, cookiesRaw, xhdrRaw string) (*
 	//     was issued to the browser that solved the check, bound to THAT
 	//     user-agent; re-presenting it with a different UA gets it rejected and
 	//     the check re-served. So keep the captured (session) UA.
-	if !strings.Contains(cookieStr, "cf_clearance") {
+	//   - SAME reasoning when resolve_stream sets the X-Force-User-Agent
+	//     sentinel (pinnedUA, above): some upstreams bind a stream token to
+	//     the exact UA that requested it — not only via a Cloudflare-style
+	//     cookie — and overwriting it here breaks that token, a real case
+	//     found live (2026-09-19, a Telegram mini-app backend issuing
+	//     UA-bound HLS tokens). This is a SEPARATE, explicit signal from a
+	//     plain "User-Agent" in xhdr: a mycelium.browser.sniff capture also
+	//     carries one, and TestBuildProxyRequest_ForcesProfileUA exists
+	//     precisely because that captured UA must NOT be trusted (it can name
+	//     a newer browser build than compatUA's fingerprint, which is
+	//     internally inconsistent) — only a plugin that deliberately asks for
+	//     the sentinel is presumed to mean it.
+	if !strings.Contains(cookieStr, "cf_clearance") && !pinnedUA {
 		req.Header.Set("user-agent", compatUA)
+	}
+	if pinnedUA {
+		// Consumed (and stripped) by the upstream transports: the cobweb relay
+		// otherwise drops the UA so its own profile supplies one, which would
+		// undo the pin.
+		req.Header.Set(pinUAHeader, "1")
 	}
 
 	// Tiene i client-hint coerenti con lo UA finale.

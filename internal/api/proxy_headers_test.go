@@ -77,6 +77,31 @@ func TestBuildProxyRequest_KeepsUAWithCfClearance(t *testing.T) {
 	}
 }
 
+// A plain "user-agent" in xhdr (e.g. a mycelium.browser.sniff capture) is NOT
+// enough to skip the compatUA override — see
+// TestBuildProxyRequest_ForcesProfileUA. Only the explicit
+// X-Force-User-Agent sentinel does, for a plugin's resolve_stream that
+// deliberately needs its exact UA preserved (e.g. an upstream binding a
+// stream token to it) without a Cloudflare-style cookie in play.
+func TestBuildProxyRequest_KeepsUAWithForceSentinel(t *testing.T) {
+	const pinnedUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+	xhdr := b64url(`{"X-Force-User-Agent":"` + pinnedUA + `"}`)
+
+	req, err := buildProxyRequest("GET", "https://stream.example/playlist/1", "https://stream.example/embed/1", "", xhdr)
+	if err != nil {
+		t.Fatalf("buildProxyRequest: %v", err)
+	}
+	if got := req.Header.Get("user-agent"); got != pinnedUA {
+		t.Errorf("UA = %q, want the pinned UA kept (X-Force-User-Agent present)", got)
+	}
+	if req.Header.Get("x-force-user-agent") != "" {
+		t.Errorf("x-force-user-agent sentinel leaked into the outgoing request headers")
+	}
+	if got := req.Header.Get("sec-ch-ua-platform"); got != `"Windows"` {
+		t.Errorf("sec-ch-ua-platform = %q, want \"Windows\" to follow the pinned UA", got)
+	}
+}
+
 // A cross-site fetch (segment host differs from the embed's registrable domain)
 // keeps Sec-Fetch-Site: cross-site and an explicit Origin.
 func TestBuildProxyRequest_CrossSiteKeepsOrigin(t *testing.T) {
