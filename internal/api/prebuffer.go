@@ -142,6 +142,7 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 
 	// ── 2. segment list ────────────────────────────────────────────────────
 	targets := segmentURLs(mediaURL, mediaBody, opts.MaxSegments)
+	encrypted := playlistEncrypted(mediaBody)
 	total := len(targets)
 	if total == 0 {
 		res.Err = errors.New("no segments in playlist")
@@ -179,7 +180,7 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 			res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 			break
 		}
-		body, ferr := fetchSegment(ctx, segClient, segURL, opts)
+		body, ferr := fetchSegment(ctx, segClient, segURL, opts, encrypted)
 		if ferr != nil {
 			if ctx.Err() != nil {
 				res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
@@ -257,7 +258,7 @@ func fetchBody(ctx context.Context, client *http.Client, targetURL string, opts 
 // fetchSegment fetches one media segment and returns its bytes already
 // normalized (image-wrapper header stripped) so ProxySegment can serve a warm
 // hit verbatim.
-func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts managers.PrefetchOptions) ([]byte, error) {
+func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts managers.PrefetchOptions, encrypted bool) ([]byte, error) {
 	req, err := prefetchReq(ctx, http.MethodGet, segURL, opts)
 	if err != nil {
 		return nil, err
@@ -269,6 +270,18 @@ func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts 
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("upstream %d", resp.StatusCode)
+	}
+	if encrypted {
+		// Ciphertext: cache verbatim (ProxySegment serves it the same way, see
+		// its `enc=1` path), refusing only an obvious text page.
+		body, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
+		if err != nil {
+			return nil, err
+		}
+		if looksLikeTextPage(body) {
+			return nil, fmt.Errorf("encrypted segment is a text page (content-type %q)", resp.Header.Get("Content-Type"))
+		}
+		return body, nil
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/") || ct == "" {
@@ -484,4 +497,34 @@ func sniffMediaStart(r io.Reader) (buf []byte, off int, mediaCT string, err erro
 		}
 	}
 	return buf, -1, "", nil
+}
+
+// keyLineEncrypts reports whether an #EXT-X-KEY line turns encryption on for
+// the segments that follow (METHOD=NONE turns it off).
+func keyLineEncrypts(line string) bool {
+	return strings.HasPrefix(line, "#EXT-X-KEY") && !strings.Contains(strings.ToUpper(line), "METHOD=NONE")
+}
+
+// playlistEncrypted reports whether a media playlist declares an active
+// #EXT-X-KEY anywhere.
+func playlistEncrypted(body []byte) bool {
+	for _, line := range strings.Split(string(body), "\n") {
+		if keyLineEncrypts(strings.TrimSpace(line)) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeTextPage reports whether the start of b is an HTML/XML/JSON
+// document rather than binary data — what a CDN error or challenge page looks
+// like. AES ciphertext (uniformly random) essentially never starts this way.
+func looksLikeTextPage(b []byte) bool {
+	s := strings.ToLower(strings.TrimLeft(string(b[:min(len(b), 64)]), " \t\r\n\ufeff"))
+	for _, p := range []string{"<!doctype", "<html", "<head", "<body", "<script", "<?xml", "{\"", "{ \""} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }

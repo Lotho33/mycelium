@@ -362,12 +362,21 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	var rewritten []string
 	var lastExtInf float64
+	// A media playlist with #EXT-X-KEY declares its segments encrypted: their
+	// bytes are ciphertext (no TS/fMP4 signature, whatever the URL extension or
+	// Content-Type says — vixsrc serves them as .html/.webp/.jpg). Tell
+	// ProxySegment so it relays them verbatim instead of "sniffing" random
+	// bytes and rejecting them as a non-video page.
+	encrypted := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
+			if strings.HasPrefix(line, "#EXT-X-KEY") {
+				encrypted = keyLineEncrypts(line)
+			}
 			// Track segment duration for progress estimation.
 			if strings.HasPrefix(line, "#EXTINF:") {
 				rest := strings.TrimPrefix(line, "#EXTINF:")
@@ -411,8 +420,12 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(lower, ".m3u8") || strings.Contains(lower, "/playlist/") {
 				endpoint = "playlist.m3u8"
 			}
-			rewritten = append(rewritten, core.AppendProxySig(fmt.Sprintf("%s/%s?data=%s&origin=%s&cookies=%s%s%s%s",
-				proxyBase, endpoint, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix)))
+			encSuffix := ""
+			if encrypted && endpoint == "segment.ts" {
+				encSuffix = "&enc=1"
+			}
+			rewritten = append(rewritten, core.AppendProxySig(fmt.Sprintf("%s/%s?data=%s&origin=%s&cookies=%s%s%s%s%s",
+				proxyBase, endpoint, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix, encSuffix)))
 		}
 	}
 
@@ -452,6 +465,7 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	uidRaw := q.Get("uid")
 	useVPN := q.Get("vpn") == "1"
 	egr := q.Get("egr")
+	encrypted := q.Get("enc") == "1"
 
 	// Warm-cache hit: the pre-buffer step (prebuffer.go) already fetched and
 	// normalized this exact segment during ResolveStream. Serve it from RAM —
@@ -602,6 +616,25 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	ct := resp.Header.Get("Content-Type")
 	bodyModified := false
 	switch {
+	case encrypted:
+		// Ciphertext (HLS AES-128): nothing to sniff, and the wire
+		// Content-Type is camouflage (text/html, image/webp, ...). Relay the
+		// bytes untouched for the player to decrypt — unless the body is
+		// plainly a text page, which is a CDN error/challenge, not a segment.
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(resp.Body, head)
+		head = head[:n]
+		if looksLikeTextPage(head) {
+			log.Printf("[proxy/segment] encrypted segment but body is a text page (content-type=%q) — rejecting url=%s", ct, logURL(realURL))
+			noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
+			http.Error(w, "non-video segment", http.StatusBadGateway)
+			return
+		}
+		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), resp.Body))
+		ct = "video/MP2T"
+		if lu := strings.ToLower(realURL); strings.Contains(lu, ".mp4") || strings.Contains(lu, ".m4s") || strings.Contains(lu, ".cmfv") || strings.Contains(lu, ".cmfa") {
+			ct = "video/mp4"
+		}
 	case ct == "":
 		ct = "video/MP2T"
 	case strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "application/"):
