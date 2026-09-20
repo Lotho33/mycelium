@@ -607,27 +607,31 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "application/"):
 		// correct type — pass through as-is
 	case strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "binary/"):
-		// Some CDNs wrap MPEG-TS segments in a fake PNG container
-		// (content-type: image/png, first byte 0x89). Browser players
-		// like hls.js scan the full payload for TS sync bytes; strict demuxers like
-		// ffmpeg/libmpv expect sync byte 0x47 at offset 0 and fail immediately.
+		// Some CDNs wrap the real segment in a fake image container
+		// (content-type image/png|jpg|webp, real image bytes up front). Browser
+		// players like hls.js scan the whole payload for TS sync bytes; strict
+		// demuxers like ffmpeg/libmpv expect sync at offset 0 and fail at once.
 		//
-		// Read up to 64 KB, locate the first 0x47 followed by another 0x47 exactly
-		// 188 bytes later (TS packet stride), then serve from that offset onwards.
-		// If no TS pattern is found, pass the raw bytes anyway as a fallback.
-		const scanLimit = 64 * 1024
-		sniff, serr := io.ReadAll(io.LimitReader(resp.Body, scanLimit))
-		tsOff := -1
-		if serr == nil {
-			tsOff = tsSyncOffset(sniff)
+		// Find where the media actually starts (TS or fMP4) and serve from
+		// there. The wrapper can be a full image, so the search window is
+		// mediaSniffLimit, not a few KB. If nothing is found, pass the raw
+		// bytes anyway as a fallback.
+		sniff, off, mediaCT, serr := sniffMediaStart(resp.Body)
+		if serr != nil {
+			log.Printf("[proxy/segment] content-type=%q read error: %v url=%s", ct, serr, logURL(realURL))
+			http.Error(w, "segment read error", http.StatusBadGateway)
+			return
 		}
-		if tsOff > 0 {
-			log.Printf("[proxy/segment] content-type=%q TS sync at offset %d — stripping header url=%s", ct, tsOff, logURL(realURL))
-			sniff = sniff[tsOff:]
+		if off > 0 {
+			log.Printf("[proxy/segment] content-type=%q media at offset %d — stripping wrapper url=%s", ct, off, logURL(realURL))
+			sniff = sniff[off:]
+			ct = mediaCT
+		} else if off == 0 {
+			ct = mediaCT
 		} else {
-			log.Printf("[proxy/segment] content-type=%q no TS sync found — passing raw bytes url=%s", ct, logURL(realURL))
+			log.Printf("[proxy/segment] content-type=%q no media signature in first %d bytes — passing raw bytes url=%s", ct, len(sniff), logURL(realURL))
+			ct = "video/MP2T"
 		}
-		ct = "video/MP2T"
 		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(sniff), resp.Body))
 		bodyModified = true
 	default:
@@ -637,14 +641,12 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		// extension). Sniff the payload for an actual media signature before
 		// deciding: relay it as video if it really contains one, reject it as
 		// a genuine error page only if it doesn't.
-		const scanLimit = 64 * 1024
-		sniff, serr := io.ReadAll(io.LimitReader(resp.Body, scanLimit))
+		sniff, off, mediaCT, serr := sniffMediaStart(resp.Body)
 		if serr != nil {
 			log.Printf("[proxy/segment] content-type=%q read error: %v url=%s", ct, serr, logURL(realURL))
 			http.Error(w, "segment read error", http.StatusBadGateway)
 			return
 		}
-		off, mediaCT := mediaStartOffset(sniff)
 		if off < 0 {
 			preview := ""
 			if os.Getenv("MYCELIUM_DEBUG") == "1" {
@@ -654,7 +656,7 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 				}
 				preview = " body[:400]=" + strconv.Quote(string(sniff[:n]))
 			}
-			log.Printf("[proxy/segment] content-type=%q no media signature — rejecting url=%s%s", ct, logURL(realURL), preview)
+			log.Printf("[proxy/segment] content-type=%q no media signature in %d bytes — rejecting url=%s%s", ct, len(sniff), logURL(realURL), preview)
 			// This is the more important of the two call sites: a CDN
 			// challenge is very often served as plain 200 OK with an
 			// html/js body (Cf-Mitigated set regardless of status), so it

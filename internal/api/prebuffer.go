@@ -271,19 +271,28 @@ func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts 
 		return nil, fmt.Errorf("upstream %d", resp.StatusCode)
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.HasPrefix(ct, "text/") || strings.HasPrefix(ct, "application/json") {
-		return nil, fmt.Errorf("non-video content-type %q", ct)
+	if strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/") || ct == "" {
+		return io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
+	// Any other content-type (text/html, image/*, binary/*, application/*) may
+	// be a wrapper the CDN puts around real MPEG-TS/fMP4 — same disguises
+	// ProxySegment unwraps. Look for the media inside before deciding; refusing
+	// on content-type alone left every wrapped stream at "0 segs warmed".
+	head, off, _, serr := sniffMediaStart(resp.Body)
+	if serr != nil {
+		return nil, serr
+	}
+	if off < 0 {
+		if strings.HasPrefix(ct, "text/") || strings.HasPrefix(ct, "application/json") {
+			return nil, fmt.Errorf("non-video content-type %q", ct)
+		}
+		off = 0 // image/binary without a detectable signature: keep raw, as before
+	}
+	rest, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "binary/") {
-		if off := tsSyncOffset(body); off > 0 {
-			body = body[off:]
-		}
-	}
-	return body, nil
+	return append(head[off:], rest...), nil
 }
 
 func isMasterPlaylist(b []byte) bool {
@@ -361,11 +370,30 @@ func segmentURLs(mediaURL string, body []byte, max int) []string {
 	return out
 }
 
-// tsSyncOffset returns the index of the first MPEG-TS packet boundary in b
-// (a 0x47 sync byte followed by another exactly 188 bytes later), or -1.
+// tsSyncOffset returns the index of the first MPEG-TS packet boundary in b, or
+// -1. A candidate is a 0x47 sync byte repeated at 188-byte stride: at least 3
+// consecutive syncs must be confirmed (a 4th too, when the buffer is long
+// enough to hold it). Two syncs alone (the old rule) match random data about
+// once per 64 KiB, which is a real problem now that wrappers can be large
+// binary blobs (fake JPEG/WebP payloads) that we scan through.
 func tsSyncOffset(b []byte) int {
-	for i := 0; i+188 < len(b); i++ {
-		if b[i] == 0x47 && b[i+188] == 0x47 {
+	const stride, confirm, maxCheck = 188, 3, 4
+	for i := 0; i+(confirm-1)*stride < len(b); i++ {
+		if b[i] != 0x47 {
+			continue
+		}
+		ok := true
+		for k := 1; k < maxCheck; k++ {
+			p := i + k*stride
+			if p >= len(b) {
+				break
+			}
+			if b[p] != 0x47 {
+				ok = false
+				break
+			}
+		}
+		if ok {
 			return i
 		}
 	}
@@ -374,18 +402,20 @@ func tsSyncOffset(b []byte) int {
 
 // fmp4BoxOffset returns the index of the first ISO-BMFF top-level box relevant
 // to an fMP4 segment (ftyp/styp for an init/media segment, moof/sidx/emsg/free
-// for a media fragment), scanning a bounded prefix, or -1. A box is
+// for a media fragment), or -1. A box is
 // `<4-byte big-endian size><4-byte ASCII type>`.
 func fmp4BoxOffset(b []byte) int {
 	types := [][]byte{
 		[]byte("ftyp"), []byte("styp"), []byte("moof"),
 		[]byte("sidx"), []byte("emsg"), []byte("free"),
 	}
-	limit := len(b) - 8
-	if limit > 4096 {
-		limit = 4096
-	}
-	for i := 0; i <= limit; i++ {
+	for i := 0; i+8 <= len(b); i++ {
+		// Real box sizes are far below 16 MiB, so the high byte is 0x00.
+		// Requiring it keeps ASCII noise (an HTML wrapper that happens to
+		// contain the word "free") from being taken for a box header.
+		if b[i] != 0 {
+			continue
+		}
 		size := uint32(b[i])<<24 | uint32(b[i+1])<<16 | uint32(b[i+2])<<8 | uint32(b[i+3])
 		if size < 8 {
 			continue
@@ -412,4 +442,46 @@ func mediaStartOffset(b []byte) (int, string) {
 		return off, "video/mp4"
 	}
 	return -1, ""
+}
+
+// mediaSniffLimit bounds how far into a segment response we look for the real
+// media behind a wrapper. Wrapper sizes are not fixed: logs show fake-HTML
+// prefixes anywhere from ~6 KB to >64 KB, and fake JPEG/WebP prefixes are
+// image-sized. The previous 64 KiB window rejected every video segment whose
+// wrapper was larger than that (all 1308 rejections in the 2026-09-11 log).
+const mediaSniffLimit = 4 << 20 // 4 MiB
+
+// sniffMediaStart reads r in chunks until it finds a media signature
+// (mediaStartOffset) or has consumed mediaSniffLimit bytes / hit EOF. It
+// returns everything read so far in buf (the caller must chain it back in front
+// of the unread remainder of r), plus the offset and content-type of the media
+// inside buf, or off=-1 when none was found. It stops as soon as the media
+// start is known, so a normal segment is not buffered beyond its wrapper.
+func sniffMediaStart(r io.Reader) (buf []byte, off int, mediaCT string, err error) {
+	const chunk = 32 << 10
+	// Re-scan a small overlap so a signature straddling two chunks is caught;
+	// ts needs 3 packets (2*188 bytes past the candidate) to confirm.
+	const overlap = 3*188 + 8
+	scanned := 0
+	for len(buf) < mediaSniffLimit {
+		start := len(buf)
+		buf = append(buf, make([]byte, chunk)...)
+		n, rerr := io.ReadFull(r, buf[start:])
+		buf = buf[:start+n]
+		from := scanned - overlap
+		if from < 0 {
+			from = 0
+		}
+		if o, ct := mediaStartOffset(buf[from:]); o >= 0 {
+			return buf, from + o, ct, nil
+		}
+		scanned = len(buf)
+		if rerr != nil {
+			if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+				return buf, -1, "", nil
+			}
+			return buf, -1, "", rerr
+		}
+	}
+	return buf, -1, "", nil
 }
