@@ -18,6 +18,8 @@ import (
 type LuaPool struct {
 	pool       chan *lua.LState
 	size       int
+	bg         chan struct{}     // slots for background callers (cron tasks, catalog warmup), see BackgroundSlot
+	cat        chan struct{}     // slots for catalog fetches (the home's burst of GetCatalog), see CatalogSlot
 	script     string            // absolute path to the .lua file
 	sharedDirs []string          // directories whose .lua files are preloaded as shared modules
 	setupFn    func(*lua.LState) // called on every new LState (registers SDK modules)
@@ -35,6 +37,8 @@ func NewLuaPool(size int, scriptPath string, sharedDirs []string, setupFn func(*
 	p := &LuaPool{
 		pool:       make(chan *lua.LState, size),
 		size:       size,
+		bg:         make(chan struct{}, backgroundSlots(size)),
+		cat:        make(chan struct{}, backgroundSlots(size)),
 		script:     scriptPath,
 		sharedDirs: sharedDirs,
 		setupFn:    setupFn,
@@ -48,6 +52,53 @@ func NewLuaPool(size int, scriptPath string, sharedDirs []string, setupFn func(*
 		p.pool <- L
 	}
 	return p, nil
+}
+
+// backgroundSlots is how many LStates background work (cron tasks, catalog
+// warmup) may hold at the same time: all but one, so a user-facing call
+// always finds a free state instead of queueing behind a long sync. A
+// single-state pool can't reserve anything, so its background work shares
+// that one state like everything else.
+func backgroundSlots(size int) int {
+	if size <= 1 {
+		return 1
+	}
+	return size - 1
+}
+
+// BackgroundSlot reserves one of the pool's background slots (blocking until
+// one frees up or ctx ends). Background callers take it BEFORE Acquire and
+// give it back with the returned func once done — including after a timeout
+// where the LState itself is discarded rather than released. Without it a
+// 600s refresh_catalog plus the boot warmup could hold both LStates of a
+// 2-state pool and every user request (GetDetails, Search, GetStreams…)
+// would sit in Acquire until one came back.
+func (p *LuaPool) BackgroundSlot(ctx context.Context) (func(), error) {
+	return takeSlot(ctx, p.bg)
+}
+
+// CatalogSlot is BackgroundSlot for catalog fetches, with its own budget. The
+// home opens a dozen carousels at once; without a cap they queue ahead of the
+// tap that follows (open a title, search) and that tap waits its turn behind
+// all of them. Kept apart from background work on purpose: a long cron task
+// must not stop the home from loading, it only has to leave one state free.
+func (p *LuaPool) CatalogSlot(ctx context.Context) (func(), error) {
+	return takeSlot(ctx, p.cat)
+}
+
+func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Stats reports how many LStates are idle right now and the pool size, for
+// diagnostic logging only (the read is a racy snapshot).
+func (p *LuaPool) Stats() (free, size int) {
+	return len(p.pool), p.size
 }
 
 // Acquire borrows an LState from the pool. Returns an error if ctx is cancelled

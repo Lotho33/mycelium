@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -518,6 +519,9 @@ type LuaPluginManager struct {
 	// connections instead of rebuilding a client per call.
 	proxyClients   map[string]*http.Client
 	proxyClientsMu sync.Mutex
+
+	// readCo merges identical concurrent read calls, see lua_readcoalesce.go.
+	readCo readCoalescer
 }
 
 // ProxyClientFor returns a cached scraping http.Client bound to proxyURL
@@ -1051,13 +1055,20 @@ func (m *LuaPluginManager) warmupCatalogCounts(p *LuaPlugin) {
 			continue
 		}
 		cat := c
-		raw, err := m.CallEntrypointJSON(p.Manifest.ID, EPGetCatalog, map[string]any{
+		raw, err := m.CallEntrypointJSONBackground(p.Manifest.ID, EPGetCatalog, map[string]any{
 			"catalog_id": cat.ID,
 			"page":       1,
 		}, "")
+		if err != nil {
+			// A failed call (pool busy behind a long task, upstream down) is
+			// "unknown", not "empty": writing 0 here would hide the catalog
+			// for the whole 30-minute TTL. Keep whatever count is cached.
+			log.Printf("[lua] warmup count %s/%s: skip (%v)", p.Manifest.ID, cat.ID, err)
+			continue
+		}
 
 		count := 0
-		if err == nil && len(raw) > 0 {
+		if len(raw) > 0 {
 			// Support both plain array and {items:[...], has_more:bool} shape.
 			var wrapper struct {
 				Items []json.RawMessage `json:"items"`
@@ -1119,7 +1130,27 @@ func entrypointTimeout(mf LuaManifest, ep, fnName string) time.Duration {
 			return d
 		}
 	}
+	if isReadEntrypoint(ep) {
+		return readEntrypointTimeout
+	}
 	return defaultEntrypointTimeout
+}
+
+// readEntrypointTimeout bounds the execution of the plain read entrypoints
+// (search, filters, details, browse, streams). resolve keeps the long default
+// on purpose — its chain of network calls is what 90s was raised for — but a
+// read has no such excuse: one stuck on a dead upstream used to keep its LState
+// for 90s, and with a 2-state pool two of them shut the plugin down. 45s
+// leaves a cold, several-fetch call room to finish while freeing the state
+// twice as fast; the client's read timeout (Pileus) is set just above it.
+const readEntrypointTimeout = 45 * time.Second
+
+func isReadEntrypoint(ep string) bool {
+	switch ep {
+	case EPSearch, EPGetSearchFilters, EPGetDetails, EPBrowse, EPGetStreams:
+		return true
+	}
+	return false
 }
 
 // callWithTimeout runs L.CallByParam bounded by ctx — the entrypoint timeout
@@ -1156,6 +1187,105 @@ func callWithTimeout(ctx context.Context, L *lua.LState, fn lua.LValue, args *lu
 	}
 }
 
+// userAcquireWait caps how long a user-facing call waits for a free LState.
+// Before, it waited on the whole entrypoint budget (90s) while the client had
+// long since given up: the screen sat on a spinner and the abandoned request
+// kept its place in the queue. A pool that stays full this long is an
+// overloaded plugin — say so quickly instead. A var so tests can shrink it.
+var userAcquireWait = 15 * time.Second
+
+// Thresholds above which a finished plugin call is written to the log. Quiet
+// by default (the log is not a per-request access log), loud when a call
+// waited for a state or ran long — the two ways a user-facing request stalls.
+const (
+	slowWaitLog = time.Second
+	slowExecLog = 3 * time.Second
+)
+
+// callClass says who is waiting on a plugin call, which decides how it may
+// use the plugin's small LState pool.
+type callClass int
+
+const (
+	// classInteractive: a user just asked for this (details, browse, search,
+	// streams, resolve). Never held back by a slot, but waits a bounded time.
+	classInteractive callClass = iota
+	// classCatalog: the home's GetCatalog burst. Limited to all-but-one state
+	// so an interactive call always finds one.
+	classCatalog
+	// classBackground: cron tasks and the catalog warmup. Same limit, own budget.
+	classBackground
+)
+
+func (c callClass) String() string {
+	switch c {
+	case classCatalog:
+		return "catalog"
+	case classBackground:
+		return "background"
+	}
+	return "interactive"
+}
+
+// classOf is the class of a request-driven call to entrypoint ep.
+func classOf(ep string) callClass {
+	if ep == EPGetCatalog || ep == EPGetCatalogList {
+		return classCatalog
+	}
+	return classInteractive
+}
+
+// acquireForCall borrows an LState for one plugin call. Catalog and
+// background callers first take their slot so they can never hold every
+// state; interactive callers wait a bounded time. done must always be called
+// (defer) — it gives the slot back; release returns the LState itself and is
+// only for the normal, non-timeout path.
+func acquireForCall(ctx context.Context, p *LuaPlugin, class callClass) (L *lua.LState, release, done func(), wait time.Duration, err error) {
+	start := time.Now()
+	done = func() {}
+	waitCtx := ctx
+	switch class {
+	case classBackground, classCatalog:
+		take := p.Pool.BackgroundSlot
+		if class == classCatalog {
+			take = p.Pool.CatalogSlot
+		}
+		free, serr := take(ctx)
+		if serr != nil {
+			return nil, nil, nil, time.Since(start), serr
+		}
+		done = free
+	default:
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, userAcquireWait)
+		defer cancel()
+	}
+	L, release, err = p.Pool.Acquire(waitCtx)
+	wait = time.Since(start)
+	if err != nil {
+		done()
+		if class == classInteractive && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			free, size := p.Pool.Stats()
+			err = fmt.Errorf("plugin occupato: nessuno stato Lua libero entro %s (liberi %d/%d)", userAcquireWait, free, size)
+		}
+		return nil, nil, nil, wait, err
+	}
+	return L, release, done, wait, nil
+}
+
+// logCall records how a plugin call went when it is worth a line: it timed
+// out, could not get a state, waited for one, or ran long. outcome is "ok",
+// "error", "timeout" or "busy".
+func (p *LuaPlugin) logCall(fnName string, class callClass, wait, exec time.Duration, outcome string) {
+	if outcome != "timeout" && outcome != "busy" && wait < slowWaitLog && exec < slowExecLog {
+		return
+	}
+	free, size := p.Pool.Stats()
+	log.Printf("[lua] call plugin=%s fn=%s class=%s outcome=%s wait=%s exec=%s free=%d/%d",
+		p.Manifest.ID, fnName, class, outcome,
+		wait.Round(time.Millisecond), exec.Round(time.Millisecond), free, size)
+}
+
 // CallEntrypoint calls a named entrypoint (by manifest key OR by Lua function name directly).
 func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]any, profileID string) (any, error) {
 	m.mu.RLock()
@@ -1174,10 +1304,18 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 	ctx, cancel := context.WithTimeout(context.Background(), entrypointTimeout(p.Manifest, ep, fnName))
 	defer cancel()
 
-	L, release, err := p.Pool.Acquire(ctx)
+	// Only cron tasks / the dashboard's "Esegui" come through here — background
+	// work, capped so it can't hold every LState of the pool.
+	const class = classBackground
+	L, release, done, wait, err := acquireForCall(ctx, p, class)
 	if err != nil {
+		p.logCall(fnName, class, wait, 0, "busy")
 		return nil, fmt.Errorf("plugin %q: pool acquire: %w", pluginID, err)
 	}
+	defer done()
+	execStart := time.Now()
+	outcome := "ok"
+	defer func() { p.logCall(fnName, class, wait, time.Since(execStart), outcome) }()
 	// release() è chiamata solo se la call finisce entro ctx — su timeout L
 	// potrebbe essere ancora in uso dalla goroutine abbandonata dentro
 	// callWithTimeout, va scartata invece che rimessa nel pool (vedi
@@ -1215,12 +1353,14 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 
 	callErr, timedOut := callWithTimeout(ctx, L, fn, luaArgs)
 	if timedOut {
+		outcome = "timeout"
 		p.Pool.DiscardAndReplace()
 		p.recordDiscard()
 		released = true
 		return nil, fmt.Errorf("plugin %q %s: timeout, esecuzione abbandonata", pluginID, fnName)
 	}
 	if callErr != nil {
+		outcome = "error"
 		return nil, fmt.Errorf("plugin %q %s: %w", pluginID, fnName, callErr)
 	}
 
@@ -1241,7 +1381,21 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 // directly to JSON, skipping the intermediate Go-native representation.
 // This eliminates one json.Marshal call and the associated allocations per request.
 func (m *LuaPluginManager) CallEntrypointJSON(pluginID, ep string, args map[string]any, profileID string) (json.RawMessage, error) {
-	return m.callEntrypointJSON(pluginID, ep, args, profileID, nil)
+	if coalescibleRead(ep) {
+		if key, ok := readKey(pluginID, ep, profileID, args); ok {
+			return m.readCo.do(key, func() (json.RawMessage, error) {
+				return m.callEntrypointJSON(pluginID, ep, args, profileID, nil, false)
+			})
+		}
+	}
+	return m.callEntrypointJSON(pluginID, ep, args, profileID, nil, false)
+}
+
+// CallEntrypointJSONBackground is CallEntrypointJSON for work nobody is
+// waiting on (the catalog-count warmup): it can't hold every LState of the
+// plugin's pool, so a user request always finds one free.
+func (m *LuaPluginManager) CallEntrypointJSONBackground(pluginID, ep string, args map[string]any, profileID string) (json.RawMessage, error) {
+	return m.callEntrypointJSON(pluginID, ep, args, profileID, nil, true)
 }
 
 // CallEntrypointJSONWithProgress is CallEntrypointJSON, but the plugin can call
@@ -1250,10 +1404,10 @@ func (m *LuaPluginManager) CallEntrypointJSON(pluginID, ep string, args map[stri
 // it's doing (trying a mirror, falling back to the browser sniffer, …) instead
 // of the caller only ever seeing the final result.
 func (m *LuaPluginManager) CallEntrypointJSONWithProgress(pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
-	return m.callEntrypointJSON(pluginID, ep, args, profileID, onProgress)
+	return m.callEntrypointJSON(pluginID, ep, args, profileID, onProgress, false)
 }
 
-func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
+func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, background bool) (json.RawMessage, error) {
 	m.mu.RLock()
 	p, ok := m.plugins[pluginID]
 	m.mu.RUnlock()
@@ -1269,10 +1423,19 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 	ctx, cancel := context.WithTimeout(context.Background(), entrypointTimeout(p.Manifest, ep, fnName))
 	defer cancel()
 
-	L, release, err := p.Pool.Acquire(ctx)
+	class := classOf(ep)
+	if background {
+		class = classBackground
+	}
+	L, release, done, wait, err := acquireForCall(ctx, p, class)
 	if err != nil {
+		p.logCall(fnName, class, wait, 0, "busy")
 		return nil, fmt.Errorf("plugin %q: pool acquire: %w", pluginID, err)
 	}
+	defer done()
+	execStart := time.Now()
+	outcome := "ok"
+	defer func() { p.logCall(fnName, class, wait, time.Since(execStart), outcome) }()
 	// Su timeout L potrebbe restare in uso dalla goroutine abbandonata dentro
 	// callWithTimeout — non va rimessa nel pool in quel caso, vedi
 	// LuaPool.DiscardAndReplace e il commento gemello in CallEntrypoint.
@@ -1304,12 +1467,14 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 
 	callErr, timedOut := callWithTimeout(ctx, L, fn, mapToLuaTable(L, args))
 	if timedOut {
+		outcome = "timeout"
 		p.Pool.DiscardAndReplace()
 		p.recordDiscard()
 		released = true
 		return nil, fmt.Errorf("plugin %q %s: timeout, esecuzione abbandonata", pluginID, fnName)
 	}
 	if callErr != nil {
+		outcome = "error"
 		return nil, fmt.Errorf("plugin %q %s: %w", pluginID, fnName, callErr)
 	}
 
