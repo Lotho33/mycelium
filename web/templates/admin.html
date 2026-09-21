@@ -399,12 +399,6 @@
                 </div>
             </div>
 
-            <div class="card border rounded-xl p-4">
-                <span class="text-sm font-semibold text-white">Accesso remoto</span>
-                <p class="text-[11px] text-gray-600 mt-1 mb-3">Raggiungi questa dashboard e il server da fuori rete tramite mesh Tailscale, senza esporlo su internet.</p>
-                <button onclick="openTailscaleModal()"
-                    class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Configura Tailscale</button>
-            </div>
 
         </div>
     </div>
@@ -506,42 +500,6 @@
         <div class="flex-1 overflow-auto p-3 sm:p-4">
             <textarea id="editor-textarea" class="code-editor" spellcheck="false"
                 placeholder="Caricamento…"></textarea>
-        </div>
-    </div>
-</div>
-
-<!-- ════════════════ TAILSCALE MODAL ════════════════ -->
-<div id="tailscale-modal" class="hidden fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-3 sm:p-4">
-    <div class="card border rounded-2xl shadow-2xl w-full max-w-sm">
-        <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
-            <h3 class="text-sm font-bold text-white">Tailscale</h3>
-            <button onclick="document.getElementById('tailscale-modal').classList.add('hidden')"
-                class="text-gray-500 hover:text-white text-xs px-2 transition">Chiudi</button>
-        </div>
-        <div class="p-5 space-y-4">
-            <div id="ts-modal-status" class="text-xs px-3 py-2 rounded-lg bg-gray-800/60 text-gray-400">
-                Verifica in corso…
-            </div>
-            <div>
-                <p class="text-xs text-gray-500 mb-2">
-                    Accesso remoto privato via mesh Tailscale (nessuna esposizione pubblica). Funziona solo se
-                    <code class="text-gray-400">tailscaled</code> gira sullo stesso host del processo mycelium — non
-                    disponibile se mycelium è containerizzato senza Tailscale installato lì dentro.
-                    <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" class="text-blue-400">→ Genera una auth key</a>
-                </p>
-                <input id="ts-authkey-input" type="text" placeholder="tskey-auth-… (lascia vuoto per autenticare via browser)"
-                    class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-600 font-mono focus:outline-none focus:border-gray-500" />
-                <button onclick="startTailscaleSetup()" id="ts-configure-btn"
-                    class="w-full mt-2 px-3 py-2 rounded-lg text-xs bg-emerald-900/40 hover:bg-emerald-900/70 text-emerald-400 transition">
-                    Configura / riconnetti
-                </button>
-            </div>
-            <div id="ts-progress-list" class="space-y-1.5"></div>
-            <div id="ts-auth-box" class="hidden p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-                <p class="text-blue-300 text-xs font-bold mb-1.5">Autenticazione richiesta</p>
-                <p class="text-gray-400 text-[11px] mb-2">Apri questo link per autorizzare il dispositivo:</p>
-                <a id="ts-auth-url" href="#" target="_blank" class="text-blue-400 text-[11px] break-all hover:underline"></a>
-            </div>
         </div>
     </div>
 </div>

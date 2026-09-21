@@ -364,7 +364,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	var lastExtInf float64
 	// A media playlist with #EXT-X-KEY declares its segments encrypted: their
 	// bytes are ciphertext (no TS/fMP4 signature, whatever the URL extension or
-	// Content-Type says — vixsrc serves them as .html/.webp/.jpg). Tell
+	// Content-Type says — some CDNs serve them as .html/.webp/.jpg). Tell
 	// ProxySegment so it relays them verbatim instead of "sniffing" random
 	// bytes and rejecting them as a non-video page.
 	encrypted := false

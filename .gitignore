@@ -46,22 +46,15 @@ tmp/
 # state, never source; never committed.
 data/wireproxy/
 
-# Companion browser service — local state & debug output (may contain
-# root-owned 0600 files written by the service's own daemon; without this
-# entry `git add .` fails with "Permesso negato" on them).
-data/cobweb/
+# Runtime state of the server and of any companion service (sessions,
+# credentials, caches; may contain root-owned 0600 files that make
+# `git add .` fail with "Permesso negato") — never source, never committed.
+/data/
 
-# Companion Telegram MTProto sidecar (telegraph, separate private repo) —
-# session/credential state, same treatment as data/cobweb/ above.
-data/telegraph/
-
-# Proxy sidecar registration state (auto-generated on first boot; also
-# root-owned 0600 files).
-data/microwarp/
-data/warp/
-
-# Local-only compose overlay that wires in private companion services
-# (cobweb, telegraph) — never distributed with the public repo, see the
-# comment at the top of docker-compose.private.yml (if present) for the
-# deploy command.
+# Local-only compose overlays (private companion services, per-host tweaks)
+# — never distributed with the public repo.
 docker-compose.private*.yml
+docker-compose.appliance*.yml
+
+# Operator-only runbooks (host provisioning notes) — kept outside the public repo.
+docs/deploy-appliance-node.md

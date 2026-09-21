@@ -55,8 +55,7 @@ func isSecureRequest(r *http.Request) bool {
 // setAdminSessionCookie creates a new admin session and attaches it to the
 // response — shared by the login form and saveSetup (which auto-logs-in the
 // browser that just created the admin account, so it can immediately call
-// other /admin/* endpoints, e.g. POST /admin/network/tailscale during the
-// setup wizard's network step).
+// other /admin/* endpoints straight after the setup wizard).
 func setAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
 	token := createAdminSession()
 	http.SetCookie(w, &http.Cookie{

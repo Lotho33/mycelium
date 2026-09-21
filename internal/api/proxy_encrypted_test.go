@@ -18,7 +18,7 @@ func encryptedSegURL(upstreamURL string) string {
 }
 
 // aesCBCTS returns an AES-128-CBC encrypted MPEG-TS-like payload (PKCS#7),
-// which is what vixsrc serves under .html/.webp/.jpg names.
+// which is what some CDNs serve under .html/.webp/.jpg names.
 func aesCBCTS(t *testing.T) (cipherText, plain []byte) {
 	t.Helper()
 	plain = tsPayload(300)

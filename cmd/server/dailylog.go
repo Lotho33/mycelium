@@ -11,7 +11,7 @@ import (
 // dailyLogFile writes to data/logs/<YYYY-MM-DD>.log, reopening the file the
 // first time it's written to after the date rolls over, and pruning files
 // older than logRetentionDays at the same time. mycelium is a long-lived
-// process with nobody watching disk usage on it (see deploy-appliance-node.md)
+// process with nobody watching disk usage on it (an unattended box)
 // — without both of these, every line since boot would land in the
 // day-of-boot's file forever, and the day files that DO get rotated would
 // then just accumulate on disk without limit forever too. Safe for
