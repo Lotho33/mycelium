@@ -139,31 +139,59 @@ func TestAcquireForCall_BackgroundSlotNotLeaked(t *testing.T) {
 // The home's catalog burst has its own budget: it can hold all but one state,
 // so a tap made while carousels load still finds a state, and — unlike
 // background work — a long cron task doesn't stop the carousels.
-func TestAcquireForCall_CatalogLeavesOneStateAndIsIndependentOfBackground(t *testing.T) {
+// Catalog and background share ONE budget (size-1), not one each — see the
+// doc comment on LuaPool.BackgroundSlot. A catalog fetch queues behind an
+// in-flight background task on a 2-state pool.
+func TestAcquireForCall_CatalogAndBackgroundShareOneBudget(t *testing.T) {
 	p := &LuaPlugin{Pool: newTestPool(t, 2)}
 
-	// A long background task holds its slot and a state.
+	// A long background task holds the plugin's one non-interactive slot.
 	_, _, doneBg, _, err := acquireForCall(context.Background(), p, classBackground)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer doneBg()
 
-	// A catalog fetch still gets in (own slot) and takes the second state...
-	_, releaseCat, doneCat, _, err := acquireForCall(context.Background(), p, classCatalog)
-	if err != nil {
-		t.Fatalf("catalog fetch behind a background task: %v", err)
-	}
-
-	// ...a second catalog fetch queues behind the first (slot budget = 1)...
+	// A catalog fetch must wait for it — the two classes are not independent.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, _, _, _, err := acquireForCall(ctx, p, classCatalog); err == nil {
-		t.Fatal("second catalog fetch should wait for the first")
+		t.Fatal("catalog fetch should have queued behind the background task")
+	}
+}
+
+// The bug this pins: two INDEPENDENT "leave one free" budgets (one per
+// class) can each be satisfied at once, jointly consuming every state of a
+// small pool and starving an interactive caller despite each class
+// individually respecting its own rule. With a 2-state pool a background
+// task and a catalog fetch running "at the same time" must not both get a
+// state.
+func TestAcquireForCall_CombinedNonInteractiveNeverStarvesInteractive(t *testing.T) {
+	p := &LuaPlugin{Pool: newTestPool(t, 2)}
+
+	_, _, doneBg, _, err := acquireForCall(context.Background(), p, classBackground)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer doneBg()
+
+	// The second non-interactive class (catalog) must NOT also get in while
+	// background already holds the shared slot...
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, _, _, _, err := acquireForCall(ctx, p, classCatalog); err == nil {
+		t.Fatal("catalog must not run concurrently with background — that's the exact bug")
 	}
 
-	releaseCat()
-	doneCat()
+	// ...so an interactive call still finds its state.
+	uctx, ucancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer ucancel()
+	_, release, done, _, err := acquireForCall(uctx, p, classInteractive)
+	if err != nil {
+		t.Fatalf("interactive starved by background+catalog together: %v", err)
+	}
+	release()
+	done()
 }
 
 func TestAcquireForCall_InteractiveNotStarvedByCatalogBurst(t *testing.T) {

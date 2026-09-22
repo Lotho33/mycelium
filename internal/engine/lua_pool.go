@@ -16,14 +16,18 @@ import (
 // returned function. Reload() tears down all states and rebuilds the pool,
 // implementing hot-reload on script change.
 type LuaPool struct {
-	pool       chan *lua.LState
-	size       int
-	bg         chan struct{}     // slots for background callers (cron tasks, catalog warmup), see BackgroundSlot
-	cat        chan struct{}     // slots for catalog fetches (the home's burst of GetCatalog), see CatalogSlot
-	script     string            // absolute path to the .lua file
-	sharedDirs []string          // directories whose .lua files are preloaded as shared modules
-	setupFn    func(*lua.LState) // called on every new LState (registers SDK modules)
-	mu         sync.RWMutex
+	pool chan *lua.LState
+	size int
+	// nonInteractive caps ALL non-interactive work (background tasks AND
+	// catalog fetches) combined at size-1 states — see the doc comment on
+	// BackgroundSlot for why this must be ONE shared budget, not one per
+	// class. Both BackgroundSlot and CatalogSlot draw from this same
+	// channel.
+	nonInteractive chan struct{}
+	script         string            // absolute path to the .lua file
+	sharedDirs     []string          // directories whose .lua files are preloaded as shared modules
+	setupFn        func(*lua.LState) // called on every new LState (registers SDK modules)
+	mu             sync.RWMutex
 }
 
 // NewLuaPool creates a pool of `size` LState instances, each pre-loaded with
@@ -35,13 +39,12 @@ func NewLuaPool(size int, scriptPath string, sharedDirs []string, setupFn func(*
 		size = 4
 	}
 	p := &LuaPool{
-		pool:       make(chan *lua.LState, size),
-		size:       size,
-		bg:         make(chan struct{}, backgroundSlots(size)),
-		cat:        make(chan struct{}, backgroundSlots(size)),
-		script:     scriptPath,
-		sharedDirs: sharedDirs,
-		setupFn:    setupFn,
+		pool:           make(chan *lua.LState, size),
+		size:           size,
+		nonInteractive: make(chan struct{}, backgroundSlots(size)),
+		script:         scriptPath,
+		sharedDirs:     sharedDirs,
+		setupFn:        setupFn,
 	}
 	for i := 0; i < size; i++ {
 		L, err := p.newState()
@@ -73,17 +76,37 @@ func backgroundSlots(size int) int {
 // 600s refresh_catalog plus the boot warmup could hold both LStates of a
 // 2-state pool and every user request (GetDetails, Search, GetStreams…)
 // would sit in Acquire until one came back.
+// BackgroundSlot reserves a slot for non-interactive work (blocking until one
+// frees up or ctx ends) — cron tasks and the catalog-count warmup call this
+// directly; CatalogSlot (a plugin's GetCatalog entrypoint — the home's own
+// carousels, but also, in at least one bundled plugin, an interactively
+// awaited per-show episode listing) draws from the exact same budget, not a
+// separate one.
+//
+// This MUST be one shared budget across every non-interactive class, not one
+// reservation per class: with a 2-state pool, backgroundSlots is 1 either
+// way, but two INDEPENDENT 1-slot budgets (one for background, one for
+// catalog) can each be satisfied AT THE SAME TIME — a cron task and a
+// catalog/episode-listing fetch running concurrently would then hold BOTH of
+// the plugin's states between just the two of them, leaving zero for an
+// interactive caller despite each class individually respecting its own
+// "leave one free" rule. A single shared channel makes that combination
+// impossible: whichever of the two callers gets there first takes the one
+// slot, the other queues, and a state is always left for the interactive
+// caller waiting on Pool.Acquire directly.
+//
+// Callers take it BEFORE Acquire and give it back with the returned func
+// once done — including after a timeout where the LState itself is
+// discarded rather than released.
 func (p *LuaPool) BackgroundSlot(ctx context.Context) (func(), error) {
-	return takeSlot(ctx, p.bg)
+	return takeSlot(ctx, p.nonInteractive)
 }
 
-// CatalogSlot is BackgroundSlot for catalog fetches, with its own budget. The
-// home opens a dozen carousels at once; without a cap they queue ahead of the
-// tap that follows (open a title, search) and that tap waits its turn behind
-// all of them. Kept apart from background work on purpose: a long cron task
-// must not stop the home from loading, it only has to leave one state free.
+// CatalogSlot is BackgroundSlot for catalog fetches (the GetCatalog
+// entrypoint) — same shared budget, see the doc comment above for why it is
+// not a separate one.
 func (p *LuaPool) CatalogSlot(ctx context.Context) (func(), error) {
-	return takeSlot(ctx, p.cat)
+	return takeSlot(ctx, p.nonInteractive)
 }
 
 func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {

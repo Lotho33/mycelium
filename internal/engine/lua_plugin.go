@@ -1210,10 +1210,15 @@ const (
 	// classInteractive: a user just asked for this (details, browse, search,
 	// streams, resolve). Never held back by a slot, but waits a bounded time.
 	classInteractive callClass = iota
-	// classCatalog: the home's GetCatalog burst. Limited to all-but-one state
-	// so an interactive call always finds one.
+	// classCatalog: the GetCatalog entrypoint — the home's carousel burst,
+	// but also, for at least one bundled plugin, an interactively-awaited
+	// per-show episode listing. Shares ONE budget with classBackground
+	// (LuaPool.BackgroundSlot/CatalogSlot — see their doc comment for why
+	// these must not be independent), so an interactive call always finds a
+	// state free.
 	classCatalog
-	// classBackground: cron tasks and the catalog warmup. Same limit, own budget.
+	// classBackground: cron tasks and the catalog-count warmup. Shares the
+	// same budget as classCatalog above.
 	classBackground
 )
 
