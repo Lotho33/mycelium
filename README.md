@@ -58,7 +58,10 @@ down the core or another plugin. Editing a plugin's files hot-reloads it.
 - (optional) a companion browser service, if a plugin needs a real browser
   (see [Browser service](#browser-service))
 
-### Run locally
+### Run locally (development)
+
+Docker (below) is the only supported way to run mycelium; `go run` is meant
+for development.
 
 ```bash
 git clone https://github.com/Lotho33/mycelium-core

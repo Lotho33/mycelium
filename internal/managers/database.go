@@ -90,6 +90,16 @@ func InitDB() error {
 		pin_hash    TEXT,   -- dead column: parental PIN feature removed 2026-09-06, no code reads it
 		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
+	-- Per-profile plugin secrets (mycelium.context.get/set_secret). They used
+	-- to live only in Redis, which runs as an evicting LRU cache: a login a
+	-- user typed once could silently disappear.
+	CREATE TABLE IF NOT EXISTS plugin_secrets (
+		plugin_id  TEXT NOT NULL,
+		profile_id TEXT NOT NULL,
+		key        TEXT NOT NULL,
+		value      TEXT NOT NULL,
+		PRIMARY KEY (plugin_id, profile_id, key)
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return err
@@ -377,11 +387,27 @@ func (m *DBManager) DeleteProgress(clientID, providerID, playableID string) erro
 // most recently watched first, capped at limit.
 // If parentID is non-empty, filters to items with that parent_id.
 func (m *DBManager) GetContinueWatching(clientID string, limit int, parentID ...string) ([]WatchHistoryEntry, error) {
+	pid := ""
+	if len(parentID) > 0 {
+		pid = parentID[0]
+	}
+	return m.GetContinueWatchingFor(clientID, limit, pid, "")
+}
+
+// GetContinueWatchingFor is GetContinueWatching with optional parent and
+// provider filters, both applied in the query — before LIMIT, so filtering
+// by plugin doesn't silently drop its entries that fell outside the first
+// `limit` rows of the whole history.
+func (m *DBManager) GetContinueWatchingFor(clientID string, limit int, parentID, providerID string) ([]WatchHistoryEntry, error) {
 	filter := ""
 	args := []any{clientID}
-	if len(parentID) > 0 && parentID[0] != "" {
-		filter = " AND parent_id = ?"
-		args = append(args, parentID[0])
+	if parentID != "" {
+		filter += " AND parent_id = ?"
+		args = append(args, parentID)
+	}
+	if providerID != "" {
+		filter += " AND provider_id = ?"
+		args = append(args, providerID)
 	}
 	args = append(args, limit)
 
@@ -415,6 +441,47 @@ func (m *DBManager) GetContinueWatching(clientID string, limit int, parentID ...
 		results = append(results, e)
 	}
 	return results, rows.Err()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plugin secrets (per plugin + profile)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GetPluginSecret returns the stored value and whether it exists.
+func (m *DBManager) GetPluginSecret(pluginID, profileID, key string) (string, bool, error) {
+	var v string
+	err := m.db.QueryRow(`SELECT value FROM plugin_secrets WHERE plugin_id=? AND profile_id=? AND key=?`,
+		pluginID, profileID, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+// SetPluginSecret stores (or replaces) a secret.
+func (m *DBManager) SetPluginSecret(pluginID, profileID, key, value string) error {
+	_, err := m.db.Exec(`INSERT INTO plugin_secrets(plugin_id, profile_id, key, value) VALUES(?,?,?,?)
+		ON CONFLICT(plugin_id, profile_id, key) DO UPDATE SET value=excluded.value`,
+		pluginID, profileID, key, value)
+	return err
+}
+
+// DeletePluginSecretsForProfile removes every plugin secret of a profile.
+func (m *DBManager) DeletePluginSecretsForProfile(profileID string) error {
+	_, err := m.db.Exec(`DELETE FROM plugin_secrets WHERE profile_id=?`, profileID)
+	return err
+}
+
+// DeleteAllPluginSecrets removes every stored plugin secret.
+func (m *DBManager) DeleteAllPluginSecrets() (int64, error) {
+	res, err := m.db.Exec(`DELETE FROM plugin_secrets`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

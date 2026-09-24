@@ -5,10 +5,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,7 +23,7 @@ import (
 // test and restores its previous value afterwards. Goes through the same
 // managers.Settings.Save the dashboard's generic settings-save endpoint
 // uses, not SaveInternal — pileus_web_repo must actually be reachable
-// through the "pileus_" allowlist prefix, and a test bypassing that wouldn't
+// through the allowlist (exact key "pileus_web_repo"), and a test bypassing that wouldn't
 // catch a regression there.
 func setPileusWebRepo(t *testing.T, repo string) {
 	t.Helper()
@@ -431,5 +434,67 @@ func TestPickWebAsset_BothFormatsPresent(t *testing.T) {
 	}
 	if got.Name != "pileus-web.zip" {
 		t.Fatalf("picked %q, want %q (first match wins)", got.Name, "pileus-web.zip")
+	}
+}
+
+// startFakeGitHubReleaseWithSums is startFakeGitHubReleaseAsset plus a
+// SHA256SUMS-web.txt asset with the given content.
+func startFakeGitHubReleaseWithSums(t *testing.T, repoSlug, tag, assetName string, assetBytes []byte, sums string) {
+	t.Helper()
+	var base string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/"+repoSlug+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": tag,
+			"assets": []map[string]any{
+				{"name": assetName, "browser_download_url": base + "/download/asset", "size": len(assetBytes)},
+				{"name": "SHA256SUMS-web.txt", "browser_download_url": base + "/download/sums", "size": len(sums)},
+			},
+		})
+	})
+	mux.HandleFunc("/download/asset", func(w http.ResponseWriter, r *http.Request) { w.Write(assetBytes) })
+	mux.HandleFunc("/download/sums", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(sums)) })
+	srv := httptest.NewServer(mux)
+	base = srv.URL
+	t.Cleanup(srv.Close)
+	t.Cleanup(core.SetGitHubAPIBaseForTest(srv.URL))
+}
+
+func TestUpdatePileusWebApp_ChecksumVerified(t *testing.T) {
+	setPileusWebRepo(t, "Lotho33/pileus")
+	withVersions(t, "1.3.2", "v1.3.2")
+	archive := buildTestWebTarGz(t, "<html>ok</html>")
+	sum := sha256.Sum256(archive)
+	startFakeGitHubReleaseWithSums(t, "Lotho33/pileus", "v1.3.9", "pileus-1.3.9-web.tar.gz", archive,
+		hex.EncodeToString(sum[:])+"  pileus-1.3.9-web.tar.gz\n")
+
+	destDir := core.AppPath("data", "pileus-web")
+	os.RemoveAll(destDir)
+	t.Cleanup(func() { os.RemoveAll(destDir); os.RemoveAll(destDir + ".bak") })
+
+	rec := callUpdatePileusWebApp(t, map[string]any{"force": true})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"checksum_verified":true`) {
+		t.Fatalf("status = %d, body=%s; want 200 with checksum_verified", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdatePileusWebApp_ChecksumMismatchAborts(t *testing.T) {
+	setPileusWebRepo(t, "Lotho33/pileus")
+	withVersions(t, "1.3.2", "v1.3.2")
+	archive := buildTestWebTarGz(t, "<html>tampered</html>")
+	startFakeGitHubReleaseWithSums(t, "Lotho33/pileus", "v1.3.9", "pileus-1.3.9-web.tar.gz", archive,
+		strings.Repeat("0", 64)+"  pileus-1.3.9-web.tar.gz\n")
+
+	destDir := core.AppPath("data", "pileus-web")
+	os.RemoveAll(destDir)
+	t.Cleanup(func() { os.RemoveAll(destDir); os.RemoveAll(destDir + ".bak") })
+
+	rec := callUpdatePileusWebApp(t, map[string]any{"force": true})
+	if rec.Code == http.StatusOK {
+		t.Fatalf("mismatching checksum installed anyway: %s", rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "index.html")); err == nil {
+		t.Fatal("tampered build was installed")
 	}
 }

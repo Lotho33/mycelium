@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -147,8 +148,11 @@ func (h *MediaHandler) GetCatalog(ctx context.Context, req *gen.CatalogRequest) 
 	resp := &gen.CatalogResponse{Items: items, HasMore: hasMore}
 
 	// Write-through, fire-and-forget. TTL from the manifest's cache_ttl_seconds
-	// when declared, else 15 min.
-	if managers.Redis != nil {
+	// when declared, else 15 min. An empty page is not cached: it's as often a
+	// transient upstream failure (plugins answering {} instead of an error)
+	// as a genuinely empty list, and caching it hid the carousel on every
+	// device for the whole TTL.
+	if managers.Redis != nil && len(items) > 0 {
 		if blob, mErr := proto.Marshal(resp); mErr == nil {
 			ttl := catalogCacheTTL(req.PluginId, req.CatalogId)
 			wCtx, wCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -169,6 +173,9 @@ func (h *MediaHandler) GetCatalog(ctx context.Context, req *gen.CatalogRequest) 
 // updateCatalogCount refreshes the catalog count cache used by ListPlugins to
 // hide empty carousels. Only page 1, only auto_hide_when_empty catalogs,
 // fire-and-forget, no-op when Redis is down.
+// emptyCatalogCountTTL caps how long a zero count (carousel hidden) is kept.
+const emptyCatalogCountTTL = 2 * time.Minute
+
 func updateCatalogCount(pluginID, catalogID string, page, count int) {
 	if page != 1 || managers.Redis == nil {
 		return
@@ -176,6 +183,11 @@ func updateCatalogCount(pluginID, catalogID string, page, count int) {
 	ttl := autoHideCatalogTTL(pluginID, catalogID)
 	if ttl <= 0 {
 		return
+	}
+	// A zero count hides the carousel: keep that short-lived, so a transient
+	// empty answer doesn't hide it for the catalog's whole TTL.
+	if count == 0 && ttl > emptyCatalogCountTTL {
+		ttl = emptyCatalogCountTTL
 	}
 	cCtx, cCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	core.SafeGo("pileus/catalog-count-store", func() {
@@ -323,11 +335,11 @@ func (h *MediaHandler) GetStreams(ctx context.Context, req *gen.StreamsRequest) 
 
 func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPipeline_ResolveStreamServer) error {
 	ctx := stream.Context()
-	sendProgress := func(status, message string) error {
-		return stream.Send(&gen.ResolveStreamEvent{
-			Payload: &gen.ResolveStreamEvent_Progress{Progress: &gen.ResolveProgress{Message: message, Status: status}},
-		})
-	}
+	sender := newResolveSender(stream)
+	defer sender.close()
+	stopKeepAlive := sender.keepAlive(ctx, resolveKeepAliveEvery)
+	defer stopKeepAlive()
+	sendProgress := sender.progress
 	// Plugin-driven progress (e.g. Lua's mycelium.progress()): forwarded live as
 	// the plugin narrates what it's doing. Best-effort — a failed send here just
 	// means the update is dropped, it doesn't abort the resolve.
@@ -515,7 +527,7 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 		if len(extraOut) > 0 {
 			resp.Extra = extraOut
 		}
-		return stream.Send(&gen.ResolveStreamEvent{Payload: &gen.ResolveStreamEvent_Result{Result: resp}})
+		return sender.result(resp)
 	}
 
 	// Il player non riceve mai un URL upstream grezzo: sia HLS che non-HLS
@@ -656,11 +668,7 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 			return status.FromContextError(cerr).Err()
 		}
 
-		return stream.Send(&gen.ResolveStreamEvent{
-			Payload: &gen.ResolveStreamEvent_Result{
-				Result: &gen.ResolveResponse{ResolvedUrl: proxyURL, IsLive: isLive, Extra: extraOut},
-			},
-		})
+		return sender.result(&gen.ResolveResponse{ResolvedUrl: proxyURL, IsLive: isLive, Extra: extraOut})
 	}
 
 	proxyURL := fmt.Sprintf("%s://%s/proxy/segment.ts?data=%s&origin=%s&cookies=%s%s%s%s",
@@ -677,7 +685,7 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	if len(extraOut) > 0 {
 		resp.Extra = extraOut
 	}
-	return stream.Send(&gen.ResolveStreamEvent{Payload: &gen.ResolveStreamEvent_Result{Result: resp}})
+	return sender.result(resp)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -703,9 +711,11 @@ func (h *MediaHandler) UpdateProgress(ctx context.Context, req *gen.ProgressRequ
 		req.Rating, req.Genres, req.Plot, req.Year,
 	)
 	if err != nil {
+		// A real error, not Ok=false: clients only look at the RPC outcome.
 		log.Printf("[pileus/media] UpdateProgress: %v", err)
+		return nil, status.Error(codes.Internal, "salvataggio avanzamento non riuscito")
 	}
-	return &gen.ProgressResponse{Ok: err == nil}, nil
+	return &gen.ProgressResponse{Ok: true}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -726,9 +736,12 @@ func (h *MediaHandler) DeleteProgress(ctx context.Context, req *gen.DeleteProgre
 	}
 	err := managers.DB.DeleteProgress(clientID, req.PluginId, req.MediaId)
 	if err != nil {
+		// A real error, not Ok=false: Pileus only checks for an exception,
+		// so a failed delete used to look successful (no rollback).
 		log.Printf("[pileus/media] DeleteProgress: %v", err)
+		return nil, status.Error(codes.Internal, "rimozione da Continua a guardare non riuscita")
 	}
-	return &gen.DeleteProgressResponse{Ok: err == nil}, nil
+	return &gen.DeleteProgressResponse{Ok: true}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -752,7 +765,7 @@ func (h *MediaHandler) GetContinueWatching(ctx context.Context, req *gen.Continu
 		limit = 20
 	}
 
-	entries, err := managers.DB.GetContinueWatching(clientID, limit, req.ParentId)
+	entries, err := managers.DB.GetContinueWatchingFor(clientID, limit, req.ParentId, req.PluginId)
 	if err != nil {
 		log.Printf("[pileus/media] GetContinueWatching: %v", err)
 		return nil, status.Error(codes.Internal, "errore recupero cronologia")
@@ -760,9 +773,6 @@ func (h *MediaHandler) GetContinueWatching(ctx context.Context, req *gen.Continu
 
 	items := make([]*gen.ContinueWatchingItem, 0, len(entries))
 	for _, e := range entries {
-		if req.PluginId != "" && e.ProviderID != req.PluginId {
-			continue
-		}
 		items = append(items, &gen.ContinueWatchingItem{
 			PluginId:          e.ProviderID,
 			MediaId:           e.PlayableID,
@@ -931,9 +941,24 @@ func profileIDFromCtx(ctx context.Context) string {
 // wrapInternal passes gRPC status errors through unchanged and wraps plain
 // errors in codes.Internal. This lets backends signal NotFound or other codes
 // without the handler needing to inspect the error type.
+// wrapInternal turns a backend error into a gRPC status the player can act
+// on: a message meant for the user, and a code that says whether retrying
+// makes sense (Pileus retries Unavailable once, never DeadlineExceeded).
 func wrapInternal(err error) error {
 	if _, ok := status.FromError(err); ok {
 		return err
+	}
+	var pe *engine.PluginError
+	switch {
+	case errors.As(err, &pe):
+		// The plugin described the failure itself: pass its words through.
+		return status.Error(codes.FailedPrecondition, pe.Msg)
+	case errors.Is(err, engine.ErrPluginTimeout):
+		return status.Error(codes.DeadlineExceeded, "La sorgente non ha risposto in tempo, riprova")
+	case errors.Is(err, engine.ErrPluginBusy):
+		return status.Error(codes.Unavailable, "Sorgente occupata, riprova tra poco")
+	case errors.Is(err, engine.ErrPluginNotLoaded):
+		return status.Error(codes.NotFound, "Plugin non disponibile")
 	}
 	return status.Error(codes.Internal, err.Error())
 }

@@ -1,0 +1,6 @@
+/* Sorgente del CSS della dashboard: rigenerare web/static/tailwind.css con
+   scripts/build-css.sh dopo aver aggiunto classi Tailwind nuove a
+   web/templates/*.html o web/static/admin.js. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

@@ -42,6 +42,10 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "db error (devices): "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if _, err := managers.DB.DeleteAllPluginSecrets(); err != nil {
+		http.Error(w, "db error (plugin secrets): "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	nProf, _ := profRes.RowsAffected()
 	nHist, _ := histRes.RowsAffected()
 	nDev, _ := devRes.RowsAffected()

@@ -178,3 +178,23 @@ func TestCheckURLNotSSRFInvalidURL(t *testing.T) {
 		t.Error("CheckURLNotSSRF with no host should error")
 	}
 }
+
+func TestBlockedProxyIP_BlockPrivateCoversCGNAT(t *testing.T) {
+	orig := proxyBlockPrivate
+	t.Cleanup(func() { proxyBlockPrivate = orig })
+
+	proxyBlockPrivate = true
+	for _, s := range []string{"100.64.0.1", "100.101.102.103", "100.127.255.254", "10.0.0.1", "192.168.1.1"} {
+		if !BlockedProxyIP(net.ParseIP(s)) {
+			t.Errorf("%s must be blocked with MYCELIUM_PROXY_BLOCK_PRIVATE=1", s)
+		}
+	}
+	if BlockedProxyIP(net.ParseIP("100.128.0.1")) {
+		t.Error("100.128.0.1 is outside 100.64/10 and must not be blocked")
+	}
+
+	proxyBlockPrivate = false
+	if BlockedProxyIP(net.ParseIP("100.64.0.1")) {
+		t.Error("CGNAT must stay allowed by default, like RFC1918")
+	}
+}

@@ -217,12 +217,24 @@ func directRemoteHost(r *http.Request) string {
 func realIP(r *http.Request) string {
 	remoteHost := directRemoteHost(r)
 	// Only honour X-Forwarded-For when the direct connection comes from a trusted proxy.
-	if isTrustedProxy(remoteHost) {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first, _, _ := strings.Cut(xff, ",")
-			if first = strings.TrimSpace(first); first != "" {
-				return first
+	if !isTrustedProxy(remoteHost) {
+		return remoteHost
+	}
+	// Walk from the RIGHT: each proxy appends the address it saw, so the
+	// entries left of the last trusted hop are whatever the client sent.
+	// Taking the leftmost one (as before) let a client behind an appending
+	// proxy (nginx $proxy_add_x_forwarded_for, Caddy) pick its own IP.
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		for _, h := range strings.Split(v, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				hops = append(hops, h)
 			}
+		}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		if !isTrustedProxy(hops[i]) || i == 0 {
+			return hops[i]
 		}
 	}
 	return remoteHost

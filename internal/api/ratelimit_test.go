@@ -105,3 +105,15 @@ func mustParseIP(t *testing.T, s string) net.IP {
 	}
 	return ip
 }
+
+// Behind an appending reverse proxy on loopback the leftmost X-Forwarded-For
+// entry is whatever the client sent: realIP must take the rightmost
+// non-trusted hop instead.
+func TestRealIP_IgnoresClientSuppliedLeftmostXFF(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "127.0.0.1:9999"
+	r.Header.Set("X-Forwarded-For", "192.168.1.5, 203.0.113.9")
+	if got := realIP(r); got != "203.0.113.9" {
+		t.Fatalf("realIP() = %q, want the proxy-appended 203.0.113.9, not the spoofed leftmost entry", got)
+	}
+}

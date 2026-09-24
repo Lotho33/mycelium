@@ -119,3 +119,58 @@ func TestAuthInterceptor_PublicMethodBypassesAuth(t *testing.T) {
 		t.Fatal("handler was not invoked for a public method")
 	}
 }
+
+// fakeServerStream is the minimal grpc.ServerStream the stream interceptor
+// needs: only Context() is consulted.
+type fakeServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (f *fakeServerStream) Context() context.Context { return f.ctx }
+
+// ResolveStream is server-streaming: grpc-go never runs unary interceptors on
+// it, so the stream interceptor is its only auth gate.
+func TestAuthStreamInterceptor_RejectsMissingAuthorization(t *testing.T) {
+	it := authStreamInterceptor(testAuthHandler())
+	info := &grpc.StreamServerInfo{FullMethod: "/mycelium.MediaPipeline/ResolveStream", IsServerStream: true}
+	called := false
+	handler := func(srv any, ss grpc.ServerStream) error { called = true; return nil }
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.MD{})
+	err := it(nil, &fakeServerStream{ctx: ctx}, info, handler)
+	requireUnauthenticated(t, err)
+	if called {
+		t.Fatal("handler invoked for an unauthenticated stream")
+	}
+}
+
+func TestAuthStreamInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
+	h := testAuthHandler()
+	it := authStreamInterceptor(h)
+	info := &grpc.StreamServerInfo{FullMethod: "/mycelium.MediaPipeline/ResolveStream", IsServerStream: true}
+
+	orig := deviceActiveLookup
+	deviceActiveLookup = func(string) bool { return true }
+	t.Cleanup(func() { deviceActiveLookup = orig })
+	deviceActiveCache.Delete("dev-stream")
+
+	tok, err := h.mintJWT("dev-stream", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("authorization", "Bearer "+tok, "x-profile-id", "prof-3"))
+
+	var gotDevice, gotProfile string
+	handler := func(srv any, ss grpc.ServerStream) error {
+		gotDevice, _ = ss.Context().Value(ctxKeyDeviceID{}).(string)
+		gotProfile, _ = ss.Context().Value(ctxKeyProfileID{}).(string)
+		return nil
+	}
+	if err := it(nil, &fakeServerStream{ctx: ctx}, info, handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotDevice != "dev-stream" || gotProfile != "prof-3" {
+		t.Errorf("context = (%q, %q), want (dev-stream, prof-3)", gotDevice, gotProfile)
+	}
+}

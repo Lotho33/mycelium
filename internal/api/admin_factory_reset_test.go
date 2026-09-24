@@ -39,6 +39,13 @@ CREATE TABLE watch_history (
 	is_completed  BOOLEAN,
 	last_updated  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (client_id, provider_id, playable_id)
+);
+CREATE TABLE plugin_secrets (
+	plugin_id  TEXT NOT NULL,
+	profile_id TEXT NOT NULL,
+	key        TEXT NOT NULL,
+	value      TEXT NOT NULL,
+	PRIMARY KEY (plugin_id, profile_id, key)
 );`
 
 // setupFactoryResetTestDB seeds one row in each of the three tables

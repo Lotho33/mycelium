@@ -2,6 +2,9 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -150,5 +153,76 @@ func TestImgFetchEncode_UnknownFormatReturnsRawBytes(t *testing.T) {
 	}
 	if rawCT != "image/png" {
 		t.Errorf("rawContentType = %q, want the upstream's own Content-Type", rawCT)
+	}
+}
+
+// /img shares the dashboard's origin and needs no auth: an upstream body that
+// isn't a raster image must never be served back inline (it used to be, under
+// the upstream's own Content-Type — HTML ran same-origin with /admin).
+func TestImageProxy_NonImageBodyIsNotServedInline(t *testing.T) {
+	withPlainImgClient(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><script>fetch('/admin/settings')</script></html>`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	u := base64.RawURLEncoding.EncodeToString([]byte(srv.URL + "/x.html"))
+	req := httptest.NewRequest(http.MethodGet, "/img?u="+u, nil)
+	rec := httptest.NewRecorder()
+	ImageProxy(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("non-image upstream served inline (status 200, Content-Type %q)", rec.Header().Get("Content-Type"))
+	}
+	if strings.Contains(rec.Body.String(), "<script>") {
+		t.Fatal("upstream HTML echoed in the response body")
+	}
+}
+
+// A tiny PNG whose IHDR declares a huge canvas must be refused before
+// image.Decode allocates it (decompression bomb), and without raw bytes so
+// the caller doesn't pass it through either.
+func TestImgFetchEncode_RejectsDecompressionBomb(t *testing.T) {
+	withPlainImgClient(t)
+	bomb := tinyPNG(t)
+	// IHDR data starts at offset 16 (8 signature + 4 length + 4 type).
+	binary.BigEndian.PutUint32(bomb[16:], 40000)
+	binary.BigEndian.PutUint32(bomb[20:], 40000)
+	binary.BigEndian.PutUint32(bomb[29:], crc32.ChecksumIEEE(bomb[12:29]))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(bomb) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/img", nil)
+	_, _, _, raw, _, err := imgFetchEncode(req, srv.URL+"/bomb.png")
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("err = %v, want a \"source too large\" rejection", err)
+	}
+	if raw != nil {
+		t.Error("oversized source must not come back as raw bytes for passthrough")
+	}
+}
+
+func TestImgSniffRasterType(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want string
+	}{
+		{"png", tinyPNG(t), "image/png"},
+		{"gif", []byte("GIF89a\x01\x00\x01\x00\x00\x00\x00;"), "image/gif"},
+		{"avif", []byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00"), "image/avif"},
+		{"html", []byte("<html><body>x</body></html>"), ""},
+		{"svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>`), ""},
+		{"text", []byte("hello"), ""},
+	}
+	for _, c := range cases {
+		if got := imgSniffRasterType(c.in); got != c.want {
+			t.Errorf("%s: imgSniffRasterType = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

@@ -178,3 +178,96 @@ func TestUploadLuaPlugin_FreshInstallReportsNotAnUpdate(t *testing.T) {
 		t.Errorf("plugin %q not registered after fresh install", id)
 	}
 }
+
+func withTempPluginsRoot(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	oldBase := core.BasePath
+	core.BasePath = tmp
+	t.Cleanup(func() { core.BasePath = oldBase })
+	dir := core.AppPath("plugins")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir plugins: %v", err)
+	}
+	return dir
+}
+
+// plugins/shared/*.lua is preloaded into every plugin's LState: an upload
+// declaring id "shared" would run its code under other plugins' identity.
+func TestUploadLuaPlugin_RejectsReservedSharedID(t *testing.T) {
+	pluginsDir := withTempPluginsRoot(t)
+	zipBytes := buildZipBytes(t, map[string]string{
+		"manifest.yaml": "id: shared\nname: X\ndirect_egress: true\n",
+		"init.lua":      "x = 1",
+	})
+	rec := postLuaPluginZip(t, "x.zip", zipBytes)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%s; want 400", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(pluginsDir, "shared", "init.lua")); err == nil {
+		t.Fatal("init.lua was written into plugins/shared")
+	}
+}
+
+// An existing directory that isn't this plugin must not be merged into.
+func TestUploadLuaPlugin_RejectsForeignExistingDir(t *testing.T) {
+	pluginsDir := withTempPluginsRoot(t)
+	foreign := filepath.Join(pluginsDir, "victim")
+	if err := os.MkdirAll(foreign, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(foreign, "data.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zipBytes := buildZipBytes(t, map[string]string{
+		"manifest.yaml": "id: victim\nname: X\ndirect_egress: true\n",
+		"init.lua":      "x = 1",
+	})
+	rec := postLuaPluginZip(t, "x.zip", zipBytes)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body=%s; want 409", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(foreign, "init.lua")); err == nil {
+		t.Fatal("init.lua was merged into a foreign directory")
+	}
+}
+
+// An update drops Lua modules the new version no longer ships, while
+// keeping runtime data files.
+func TestUploadLuaPlugin_UpdateRemovesOrphanModules(t *testing.T) {
+	pluginsDir := withTempPluginsRoot(t)
+	const id = "orphanplug"
+	dir := filepath.Join(pluginsDir, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "id: " + id + "\nname: T\ndirect_egress: true\nentrypoints:\n  probe: probe\n"
+	for name, content := range map[string]string{
+		"manifest.yaml":  manifest,
+		"init.lua":       "function probe() return {} end",
+		"old_module.lua": "return {}",
+		"cache.json":     "{}",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.LuaPlugins.LoadPlugin(dir); err != nil {
+		t.Fatalf("LoadPlugin: %v", err)
+	}
+	t.Cleanup(func() { engine.LuaPlugins.UnloadPlugin(id) })
+
+	rec := postLuaPluginZip(t, "u.zip", buildZipBytes(t, map[string]string{
+		"manifest.yaml": manifest,
+		"init.lua":      "function probe() return {v=2} end",
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s; want 200", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old_module.lua")); err == nil {
+		t.Error("orphan module old_module.lua survived the update")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cache.json")); err != nil {
+		t.Error("runtime data file cache.json must survive the update")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -202,6 +203,27 @@ func setupUI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// setupAllowAny lifts the local-network restriction on POST /setup/save, for
+// deployments whose only access path is a public address.
+var setupAllowAny = os.Getenv("MYCELIUM_SETUP_ALLOW_ANY") == "1"
+
+// setupCGNAT is 100.64.0.0/10 — Tailscale/Headscale peer addresses count as
+// local for setup purposes.
+var setupCGNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+
+// setupAllowedFrom reports whether a first-run setup may come from ip:
+// loopback, RFC1918/ULA, link-local or the tailnet range.
+func setupAllowedFrom(ip string) bool {
+	if setupAllowAny {
+		return true
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsLinkLocalUnicast() || setupCGNAT.Contains(parsed)
+}
+
 func saveSetup(w http.ResponseWriter, r *http.Request) {
 	// Il setup è un'operazione one-shot: senza questo controllo, POST
 	// /setup/save restava raggiungibile senza autenticazione per tutta la
@@ -211,6 +233,15 @@ func saveSetup(w http.ResponseWriter, r *http.Request) {
 	// POST non replicava lo stesso controllo.
 	if managers.Settings.IsSetupDone() {
 		http.Error(w, "Setup già completato", http.StatusForbidden)
+		return
+	}
+	// Until an admin password exists this endpoint is unauthenticated —
+	// on first boot and again after a factory reset. Only accept it from
+	// the local network, so a node reachable from the internet can't have
+	// its admin account claimed by whoever gets there first.
+	if !setupAllowedFrom(realIP(r)) {
+		log.Printf("[setup] rifiutato setup da %s (non in rete locale; MYCELIUM_SETUP_ALLOW_ANY=1 per consentirlo)", realIP(r))
+		http.Error(w, "Il setup iniziale è consentito solo dalla rete locale", http.StatusForbidden)
 		return
 	}
 

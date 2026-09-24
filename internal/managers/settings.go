@@ -122,20 +122,32 @@ var (
 		"enricher_bindings", // JSON map: enricher_id → []provider_id
 		"mycelium.",         // per-plugin settings: {pluginID}_{key}
 		"lua:",              // Lua plugin global settings: lua:{pluginID}:global:{key}
-		"pileus_",           // Pileus device auth settings: pileus_master_pin_hash, etc.
-		// (pileus_web_repo — "owner/repo" del repo GitHub del build web di
-		// Pileus, usato da POST /admin/pileus-web/update — rientra già in
-		// questo prefisso, nessuna voce a parte necessaria)
+		// NIENTE prefisso generico "pileus_": copriva anche pileus_jwt_secret
+		// (master secret da cui derivano chiave cookie admin, firma /proxy e
+		// JWT dei device) e pileus_grpc_tls_key/_cert — con un cookie rubato
+		// si poteva fissare un secret noto e forgiare sessioni admin per
+		// sempre (stessa classe della vecchia backdoor master_admin_hash).
+		// Le chiavi pileus_* scrivibili dalla dashboard stanno in
+		// allowedExactKeys, per nome esatto.
 		"vpn_proxy_url",   // stato on/off del routing VPN, ripristinato al boot
 		"http_profile",    // profilo fetch upstream: "standard" (default, net/http) | "browser" (profilo TLS/H2 mainstream per compatibilità CDN)
 		"prebuffer_",      // pre-buffer del flusso HLS: prebuffer_enabled / _segments_vod / _segments_live / _max_wait_ms / _max_bytes
 		"egress_profiles", // JSON: registry delle uscite di rete (vedi egress.go)
 	}
 	allowedPrefixesMu sync.RWMutex
+
+	// allowedExactKeys: chiavi scrivibili via Save solo per nome esatto,
+	// dove un prefisso esporrebbe anche chiavi sensibili vicine.
+	allowedExactKeys = map[string]bool{
+		"pileus_web_repo": true, // "owner/repo" del build web di Pileus (POST /admin/pileus-web/update)
+	}
 )
 
 // isAllowedKey verifica che la chiave rientri nell'allowlist.
 func isAllowedKey(key string) bool {
+	if allowedExactKeys[key] {
+		return true
+	}
 	allowedPrefixesMu.RLock()
 	defer allowedPrefixesMu.RUnlock()
 	for _, prefix := range allowedKeyPrefixes {

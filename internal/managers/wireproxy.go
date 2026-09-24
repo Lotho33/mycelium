@@ -26,9 +26,9 @@ import (
 // (write access to that socket is root-equivalent on the host).
 //
 // The binary ships inside the mycelium image at wireproxyBinPath (see
-// Dockerfile) for the Docker deployment; a bare-metal install (install.sh)
-// needs it installed separately and on $PATH / at that same path for this
-// feature to work — everything else in mycelium runs fine without it.
+// Dockerfile); Docker is the only supported deployment. Outside it (e.g.
+// `go run` in development) this feature needs wireproxy at that same path —
+// everything else in mycelium runs fine without it.
 
 const (
 	// Loopback port window wireproxy processes bind their SOCKS5 listener on.

@@ -216,14 +216,16 @@ mycelium.cache.del(key)
 
 ```lua
 mycelium.context.get_global_setting("api_key")        -- an admin-configured setting
-mycelium.context.get_secret(key) / set_secret(key, v) -- per-profile, in Redis
+mycelium.context.get_secret(key)                     -- per-profile, stored in SQLite ("" if unset)
+local ok, err = mycelium.context.set_secret(key, v)  -- true, or false + reason
 mycelium.context.get_profile_id()
 mycelium.context.set_plugin_status("syncing", "Indexing 1200/5000")  -- ready|syncing|needs_config|error
 ```
 
 ### `mycelium.storage`
 
-JSON files in the plugin's data area (path-traversal blocked).
+JSON files in the plugin's data area (path-traversal blocked). `write_json`
+only writes `*.json` names — never the plugin's own `.lua` code or `manifest.yaml`.
 
 ```lua
 local t, err = mycelium.storage.read_json("state.json")

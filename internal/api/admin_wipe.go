@@ -59,6 +59,9 @@ func wipeProfilesHandler(w http.ResponseWriter, r *http.Request) {
 	nProf, _ := profRes.RowsAffected()
 	nHist, _ := histRes.RowsAffected()
 
+	if _, err := managers.DB.DeleteAllPluginSecrets(); err != nil {
+		log.Printf("[admin] wipe profiles: plugin secrets: %v", err)
+	}
 	var nRedis int
 	if managers.Redis != nil {
 		nRedis, _ = managers.Redis.DelByPattern(r.Context(), "mycelium:plugin:*:user:*:secrets")

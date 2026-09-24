@@ -295,11 +295,17 @@ func (h *AuthHandler) ListDevices(ctx context.Context, _ *gen.ListDevicesRequest
 }
 
 func (h *AuthHandler) RenameDevice(ctx context.Context, req *gen.RenameDeviceRequest) (*gen.RenameDeviceResponse, error) {
-	if _, err := h.deviceFromCtx(ctx); err != nil {
+	caller, err := h.deviceFromCtx(ctx)
+	if err != nil {
 		return nil, err
 	}
 	if req.DeviceId == "" {
 		return nil, status.Error(codes.InvalidArgument, "device_id required")
+	}
+	// A device renames itself only; renaming others is the admin's job
+	// (RenameDeviceAdmin, from the dashboard).
+	if req.DeviceId != caller {
+		return nil, status.Error(codes.PermissionDenied, "un dispositivo può rinominare solo sé stesso")
 	}
 	if err := renameDevice(req.DeviceId, sanitizeDeviceLabel(req.Label)); err != nil {
 		return nil, status.Error(codes.Internal, "db error: "+err.Error())
@@ -610,7 +616,11 @@ func deleteProfile(profileID string) error {
 		`DELETE FROM pileus_profiles WHERE profile_id=?`,
 		profileID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	// The profile's plugin logins go with it.
+	return managers.DB.DeletePluginSecretsForProfile(profileID)
 }
 
 func newID() string {

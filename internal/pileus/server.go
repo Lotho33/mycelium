@@ -78,7 +78,10 @@ func Start(addr string, jwtSecret []byte, tlsCert *tls.Certificate) *grpc.Server
 	pluginHandler := NewPluginHandler()
 
 	tlsEnabled := tlsCert != nil
-	opts := []grpc.ServerOption{grpc.UnaryInterceptor(authInterceptor(authHandler))}
+	opts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(authInterceptor(authHandler)),
+		grpc.StreamInterceptor(authStreamInterceptor(authHandler)),
+	}
 	if tlsCert != nil {
 		opts = append(opts, grpc.Creds(credentials.NewServerTLSFromCert(tlsCert)))
 		if len(tlsCert.Certificate) > 0 {
@@ -218,44 +221,78 @@ func peerIP(ctx context.Context) string {
 
 func authInterceptor(auth *AuthHandler) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if publicMethods[info.FullMethod] {
-			if !pairingLimiter.allow(peerIP(ctx)) {
-				return nil, status.Error(codes.ResourceExhausted, "troppi tentativi di pairing, riprova tra poco")
-			}
-			return handler(ctx, req)
-		}
-
-		md, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "no metadata")
-		}
-
-		authVals := md.Get("authorization")
-		if len(authVals) == 0 {
-			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
-		}
-		tokenStr := strings.TrimPrefix(authVals[0], "Bearer ")
-
-		deviceID, err := auth.ParseJWT(tokenStr)
+		ctx, err := authenticate(ctx, auth, info.FullMethod)
 		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, "invalid token: "+err.Error())
+			return nil, err
 		}
-
-		// A valid signature is not enough: the device must still be paired and
-		// not revoked (P1-4 — a 30-day JWT is otherwise unrevocable).
-		if !deviceActive(deviceID) {
-			return nil, status.Error(codes.Unauthenticated, "device revoked or unknown — re-pair from the dashboard")
-		}
-
-		ctx = context.WithValue(ctx, ctxKeyDeviceID{}, deviceID)
-
-		// Inject profile ID if provided by the client.
-		if pid := md.Get("x-profile-id"); len(pid) > 0 && pid[0] != "" {
-			ctx = context.WithValue(ctx, ctxKeyProfileID{}, pid[0])
-		}
-
 		return handler(ctx, req)
 	}
+}
+
+// authStreamInterceptor applies the same checks as authInterceptor to
+// streaming RPCs. grpc-go never runs unary interceptors on streams: without
+// this, ResolveStream (server-streaming) answered anonymous callers with
+// signed /proxy URLs — and, for direct_stream plugins, the raw upstream URL
+// plus its auth headers.
+func authStreamInterceptor(auth *AuthHandler) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx, err := authenticate(ss.Context(), auth, info.FullMethod)
+		if err != nil {
+			return err
+		}
+		return handler(srv, &authedStream{ServerStream: ss, ctx: ctx})
+	}
+}
+
+// authedStream overrides Context() so stream handlers see the device/profile
+// values authenticate() injected.
+type authedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *authedStream) Context() context.Context { return s.ctx }
+
+// authenticate validates the device JWT for fullMethod (public pairing
+// methods are only rate-limited) and returns ctx enriched with the device
+// and, when sent, the profile ID.
+func authenticate(ctx context.Context, auth *AuthHandler, fullMethod string) (context.Context, error) {
+	if publicMethods[fullMethod] {
+		if !pairingLimiter.allow(peerIP(ctx)) {
+			return nil, status.Error(codes.ResourceExhausted, "troppi tentativi di pairing, riprova tra poco")
+		}
+		return ctx, nil
+	}
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no metadata")
+	}
+
+	authVals := md.Get("authorization")
+	if len(authVals) == 0 {
+		return nil, status.Error(codes.Unauthenticated, "missing authorization header")
+	}
+	tokenStr := strings.TrimPrefix(authVals[0], "Bearer ")
+
+	deviceID, err := auth.ParseJWT(tokenStr)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "invalid token: "+err.Error())
+	}
+
+	// A valid signature is not enough: the device must still be paired and
+	// not revoked (P1-4 — a 30-day JWT is otherwise unrevocable).
+	if !deviceActive(deviceID) {
+		return nil, status.Error(codes.Unauthenticated, "device revoked or unknown — re-pair from the dashboard")
+	}
+
+	ctx = context.WithValue(ctx, ctxKeyDeviceID{}, deviceID)
+
+	// Inject profile ID if provided by the client.
+	if pid := md.Get("x-profile-id"); len(pid) > 0 && pid[0] != "" {
+		ctx = context.WithValue(ctx, ctxKeyProfileID{}, pid[0])
+	}
+	return ctx, nil
 }
 
 // ctxKeyProfileID is the context key for the active profile ID.

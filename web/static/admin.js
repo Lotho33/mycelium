@@ -1557,8 +1557,9 @@ async function updatePileusWebApp(force) {
         // textContent, mai innerHTML: version/asset arrivano da GitHub via
         // il repo configurato — non fidati, ma qui non c'è comunque bisogno
         // di HTML, testContent non li interpreta mai come markup.
-        if (status) status.textContent = `Aggiornata a ${d.version} (${d.asset}).`;
-        showToast(`App web Pileus aggiornata a ${d.version}.`, 'success');
+        const integrity = d.checksum_verified ? ' Checksum verificato.' : (d.warning ? ' ' + d.warning : '');
+        if (status) status.textContent = `Aggiornata a ${d.version} (${d.asset}).${integrity}`;
+        showToast(`App web Pileus aggiornata a ${d.version}.`, d.checksum_verified ? 'success' : 'warn');
     } else {
         showToast(d.detail || 'Errore aggiornamento.', 'error');
         if (status) status.textContent = d.detail || 'Errore aggiornamento.';

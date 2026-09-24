@@ -14,7 +14,7 @@ import (
 // RedisRepo wraps go-redis with the key namespacing used by Mycelium.
 //
 // Key conventions (from architecture docs):
-//   - Secrets:       mycelium:plugin:{pluginID}:user:{profileID}:secrets  (Hash, no TTL)
+//   - Secrets:       mycelium:plugin:{pluginID}:user:{profileID}:secrets  (Hash, legacy: now in SQLite plugin_secrets, read here only to migrate)
 //   - Catalog cache: mycelium:plugin:{pluginID}:catalog:{catalogID}:p{page} (TTL 15min)
 //   - Device session: mycelium:device:{deviceID}:session                   (TTL 30d)
 type RedisRepo struct {

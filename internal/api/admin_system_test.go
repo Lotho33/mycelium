@@ -223,8 +223,8 @@ func TestCoreUpdate_RejectsMalformedLatestVersion(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
 				t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
 			}
-			if strings.Contains(d.Detail, "script di aggiornamento non trovato") {
-				t.Fatalf("got the script-not-found error, meaning validation was skipped and the flow reached the os.Stat/exec.Command path: %q", d.Detail)
+			if strings.Contains(d.Detail, "solo in Docker") {
+				t.Fatalf("got the manual_required answer, meaning validation was skipped: %q", d.Detail)
 			}
 			if d.Detail == "" {
 				t.Fatalf("expected a rejection detail message, got empty body=%s", rec.Body.String())
@@ -235,10 +235,9 @@ func TestCoreUpdate_RejectsMalformedLatestVersion(t *testing.T) {
 
 // TestCoreUpdate_AcceptsWellFormedLatestVersion is the counterpart: a
 // genuine "vX.Y.Z" (or "X.Y.Z") release tag must pass the new format check.
-// It still can't reach exec.Command in this test environment (no
-// /usr/local/bin/mycelium-update installed), so success here is observed as
-// the flow reaching the *next* gate — the generic "script non trovato"
-// error — rather than being rejected by the format validation itself.
+// Success is observed as the flow reaching the next step — the
+// "manual_required" answer (Docker is the only supported deployment) —
+// rather than being rejected by the format validation itself.
 func TestCoreUpdate_AcceptsWellFormedLatestVersion(t *testing.T) {
 	for _, latest := range []string{"v1.3.3", "1.3.3"} {
 		t.Run(latest, func(t *testing.T) {
@@ -249,12 +248,13 @@ func TestCoreUpdate_AcceptsWellFormedLatestVersion(t *testing.T) {
 			coreUpdate(rec, req)
 
 			var d struct {
+				Status string `json:"status"`
 				Detail string `json:"detail"`
 			}
 			if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
 				t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
 			}
-			if !strings.Contains(d.Detail, "script di aggiornamento non trovato") {
+			if d.Status != "manual_required" {
 				t.Fatalf("well-formed version %q was rejected by format validation: %q", latest, d.Detail)
 			}
 		})

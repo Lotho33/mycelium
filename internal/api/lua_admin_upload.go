@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -117,7 +118,25 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// "shared" is not a plugin: its .lua files are preloaded into EVERY
+	// plugin's LState, so an upload declaring id "shared" would plant code
+	// running under other plugins' identity (their settings and secrets).
+	if pluginName == "shared" {
+		http.Error(w, "id plugin riservato: shared", http.StatusBadRequest)
+		return
+	}
 	isUpdate := engine.LuaPlugins.Has(pluginName)
+	// A directory that exists but isn't that plugin (not loaded, and no
+	// manifest declaring the same id) is not ours to merge into.
+	if !isUpdate {
+		if _, err := os.Stat(destDir); err == nil {
+			if existing, merr := readLuaManifest(destDir); merr != nil || existing.ID != pluginName {
+				http.Error(w, "la cartella plugins/"+pluginName+" esiste già e non contiene questo plugin", http.StatusConflict)
+				return
+			}
+			isUpdate = true // installed but not loaded (e.g. failed to load)
+		}
+	}
 	if isUpdate {
 		// Safe hot-swap: stop the old pool/watchers before the directory
 		// underneath them changes. UnloadPlugin never deletes files — only
@@ -135,6 +154,16 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		http.Error(w, "errore creazione directory", http.StatusInternalServerError)
 		return
+	}
+	if isUpdate {
+		// Code comes only from the new ZIP: drop the old .lua modules first
+		// so one the new version removed doesn't linger (and stay
+		// require-able). Runtime data files (JSON caches) are left alone,
+		// as the merge below intends.
+		if err := removeLuaFiles(destDir); err != nil {
+			http.Error(w, "errore rimozione moduli precedenti: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := mergeDirInto(stagingDir, destDir); err != nil {
 		http.Error(w, "errore installazione file: "+err.Error(), http.StatusInternalServerError)
@@ -165,6 +194,20 @@ func boolToString(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// removeLuaFiles deletes every *.lua file under dir (recursively), leaving
+// all other files and the directory tree in place.
+func removeLuaFiles(dir string) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.EqualFold(filepath.Ext(path), ".lua") {
+			return os.Remove(path)
+		}
+		return nil
+	})
 }
 
 // mergeDirInto moves every entry from src (a staging extraction directory)

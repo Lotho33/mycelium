@@ -50,6 +50,10 @@ var proxyAllowUnsigned = os.Getenv("MYCELIUM_PROXY_ALLOW_UNSIGNED") == "1"
 // time; production code never reassigns it.
 var segmentRetryBudget = 45 * time.Second
 
+// playlistReadLimit caps an upstream HLS playlist body. Real playlists are a
+// few hundred KB at most, even long live windows or big VOD ladders.
+const playlistReadLimit = 8 << 20 // 8 MiB
+
 // requireProxySig rejects a /proxy/* request whose query carries no valid HMAC
 // (minted by media_handler.go / the playlist rewriter). Returns true if the
 // caller should stop. No-op when MYCELIUM_PROXY_ALLOW_UNSIGNED=1 or when no
@@ -109,6 +113,11 @@ func proxyResolveForPlaylist(r *http.Request, sidRaw, uidRaw string) (newPlaylis
 	var resolvedHeaders map[string]string
 
 	if engine.LuaPlugins.Has(pluginID) {
+		// A stopped plugin must not run Lua, even for a player still holding
+		// one of its playlist URLs.
+		if !engine.LuaPlugins.IsOperational(pluginID) {
+			return "", ""
+		}
 		// Lua plugins live in a separate registry from the native/gRPC ones
 		// resolve through the Lua entrypoint directly,
 		// same call lua_pipeline.go's ResolveStream makes.
@@ -286,9 +295,14 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 					return nil, err
 				}
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					b, rerr := io.ReadAll(resp.Body)
+					// Bounded: a hostile/broken upstream answering with a
+					// multi-GB "playlist" would otherwise OOM the container.
+					b, rerr := io.ReadAll(io.LimitReader(resp.Body, playlistReadLimit+1))
 					resp.Body.Close()
 					cancel()
+					if rerr == nil && len(b) > playlistReadLimit {
+						return nil, fmt.Errorf("playlist upstream oltre %d MiB", playlistReadLimit>>20)
+					}
 					return b, rerr
 				}
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

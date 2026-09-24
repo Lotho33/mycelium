@@ -83,6 +83,11 @@ const maxSDKResponseBytes = 32 << 20 // 32 MiB
 // file) before image.Decode allocates a full in-memory frame for it.
 const maxLogoImageBytes = 8 << 20 // 8 MiB
 
+// maxLogoImagePixels caps the logo's DECLARED dimensions, checked with
+// image.DecodeConfig before decoding: the byte cap alone doesn't stop a tiny
+// compressed file that expands to a gigantic frame.
+const maxLogoImagePixels = 16_000_000
+
 // maxCacheValueBytes caps the serialized size of a single mycelium.cache.set
 // value before it is written to Redis. cache.set entries are meant for a
 // plugin's own API/catalog responses it wants to reuse across calls — not
@@ -227,7 +232,7 @@ func buildNetworkModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 	t := L.NewTable()
 
 	doHTTP := func(method, rawURL, bodyStr string, headers *lua.LTable, timeoutSec int) *lua.LTable {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
 
 		// Built once, applied fresh to each retry attempt's request below.
@@ -578,7 +583,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			L.Push(lua.LString("plugin requires VPN but no proxy is configured"))
 			return 3
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
 		resp, err := bm.WaitInterceptVia(ctx, &gen.WaitInterceptRequest{
 			TriggerUrl: triggerURL,
@@ -625,7 +630,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			L.Push(lua.LString("plugin requires VPN but no proxy is configured"))
 			return 3
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
 		resp, err := bm.NavigateVia(ctx, &gen.NavigateRequest{
 			Url:       url,
@@ -659,7 +664,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			L.Push(lua.LString("plugin requires VPN but no proxy is configured"))
 			return 2
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
 		resp, err := bm.EvalVia(ctx, &gen.EvalRequest{
 			Url:       url,
@@ -838,31 +843,59 @@ func buildCacheModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// mycelium.context  (per-profile secrets via Redis)
+// mycelium.context  (per-profile secrets, stored in SQLite)
 // ─────────────────────────────────────────────────────────────────────────────
 
 func buildContextModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable {
 	t := L.NewTable()
 
+	// Secrets live in SQLite (managers.DB): Redis is an evicting cache and
+	// used to be their only store. A value still found only in the old
+	// Redis hash is migrated to SQLite on first read.
 	t.RawSetString("get_secret", L.NewFunction(func(L *lua.LState) int {
 		key := L.CheckString(1)
-		if opts.Redis == nil || scope.profileID == "" {
+		if scope.profileID == "" {
 			L.Push(lua.LString(""))
 			return 1
 		}
-		val, _ := opts.Redis.HGet(context.Background(), managers.SecretsKey(opts.PluginID, scope.profileID), key)
+		if managers.DB != nil {
+			if v, ok, err := managers.DB.GetPluginSecret(opts.PluginID, scope.profileID, key); err == nil && ok {
+				L.Push(lua.LString(v))
+				return 1
+			}
+		}
+		val := ""
+		if opts.Redis != nil {
+			val, _ = opts.Redis.HGet(context.Background(), managers.SecretsKey(opts.PluginID, scope.profileID), key)
+			if val != "" && managers.DB != nil {
+				_ = managers.DB.SetPluginSecret(opts.PluginID, scope.profileID, key, val)
+			}
+		}
 		L.Push(lua.LString(val))
 		return 1
 	}))
 
+	// mycelium.context.set_secret(key, value) → true | false, err
 	t.RawSetString("set_secret", L.NewFunction(func(L *lua.LState) int {
 		key := L.CheckString(1)
 		val := L.CheckString(2)
-		if opts.Redis == nil || scope.profileID == "" {
-			return 0
+		if scope.profileID == "" {
+			L.Push(lua.LFalse)
+			L.Push(lua.LString("set_secret: nessun profilo attivo"))
+			return 2
 		}
-		_ = opts.Redis.HSet(context.Background(), managers.SecretsKey(opts.PluginID, scope.profileID), map[string]any{key: val})
-		return 0
+		if managers.DB == nil {
+			L.Push(lua.LFalse)
+			L.Push(lua.LString("set_secret: database non disponibile"))
+			return 2
+		}
+		if err := managers.DB.SetPluginSecret(opts.PluginID, scope.profileID, key, val); err != nil {
+			L.Push(lua.LFalse)
+			L.Push(lua.LString("set_secret: " + err.Error()))
+			return 2
+		}
+		L.Push(lua.LTrue)
+		return 1
 	}))
 
 	// mycelium.context.get_profile_id() → profile_id string
@@ -952,7 +985,21 @@ func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		}
 		defer resp.Body.Close()
 
-		imgData, _, err := image.Decode(io.LimitReader(resp.Body, maxLogoImageBytes))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxLogoImageBytes))
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		// Declared size first: a few-KB PNG can declare a huge canvas and
+		// make image.Decode allocate gigabytes (decompression bomb).
+		if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr == nil &&
+			int64(cfg.Width)*int64(cfg.Height) > maxLogoImagePixels {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(fmt.Sprintf("image too large: %dx%d", cfg.Width, cfg.Height)))
+			return 2
+		}
+		imgData, _, err := image.Decode(bytes.NewReader(raw))
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString("image decode: " + err.Error()))
@@ -1199,6 +1246,14 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 			L.Push(lua.LString(err.Error()))
 			return 1
 		}
+		// Only *.json data files: the plugin dir also holds its own code and
+		// manifest.yaml (JSON is valid YAML), and a plugin rewriting those
+		// could grant itself direct_egress (bypassing the admin's VPN) or
+		// claim another plugin's id — and with it its settings/secrets.
+		if !strings.EqualFold(filepath.Ext(path), ".json") {
+			L.Push(lua.LString(fmt.Sprintf("storage.write_json: only .json files may be written (%q)", name)))
+			return 1
+		}
 		native := luaToJSON(val)
 		data, err := json.MarshalIndent(native, "", "  ")
 		if err != nil {
@@ -1262,6 +1317,10 @@ func jsonToLua(L *lua.LState, v interface{}) lua.LValue {
 }
 
 func luaToJSON(v lua.LValue) interface{} {
+	return luaToJSONGuarded(v, newLuaConvGuard())
+}
+
+func luaToJSONGuarded(v lua.LValue, g *luaConvGuard) interface{} {
 	switch val := v.(type) {
 	case *lua.LNilType:
 		return nil
@@ -1272,10 +1331,15 @@ func luaToJSON(v lua.LValue) interface{} {
 	case lua.LString:
 		return string(val)
 	case *lua.LTable:
+		if !g.enter(val) {
+			return nil // cycle / too deep / too many tables — see luaConvGuard
+		}
+		defer g.leave(val)
 		// Determina se è array (chiavi 1..n) o oggetto
 		isArray := true
-		maxN := 0
+		maxN, count := 0, 0
 		val.ForEach(func(k, _ lua.LValue) {
+			count++
 			if n, ok := k.(lua.LNumber); ok && float64(n) == float64(int(n)) && int(n) > 0 {
 				if int(n) > maxN {
 					maxN = int(n)
@@ -1284,16 +1348,18 @@ func luaToJSON(v lua.LValue) interface{} {
 				isArray = false
 			}
 		})
-		if isArray && maxN > 0 {
+		// maxN <= 2*count: a few holes (nil gaps) still make an array, but a
+		// sparse t[1e9] = 1 must not allocate a billion-slot slice.
+		if isArray && maxN > 0 && maxN <= 2*count {
 			arr := make([]interface{}, maxN)
 			for i := 1; i <= maxN; i++ {
-				arr[i-1] = luaToJSON(val.RawGetInt(i))
+				arr[i-1] = luaToJSONGuarded(val.RawGetInt(i), g)
 			}
 			return arr
 		}
 		obj := make(map[string]interface{})
 		val.ForEach(func(k, v lua.LValue) {
-			obj[k.String()] = luaToJSON(v)
+			obj[k.String()] = luaToJSONGuarded(v, g)
 		})
 		return obj
 	default:

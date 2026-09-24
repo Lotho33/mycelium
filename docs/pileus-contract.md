@@ -8,7 +8,7 @@ it as other contracts need pinning down.
 
 ## ResolveStream — progress contract
 
-`MediaService.ResolveStream` (`proto/media.proto`, served by
+`MediaService.ResolveStream` (`third_party/stipes-sdk/proto/media.proto`, served by
 `internal/pileus/media_handler.go`) is server-streaming:
 
 ```
@@ -40,6 +40,11 @@ Client rules the server relies on (do not change without a coordinated bump):
 - Only the **latest** progress event is shown.
 - 30 s client inactivity timeout, reset on every event. The server must keep
   events flowing at least every few seconds during any long phase.
+- **Keep-alive (server):** whenever the stream has been silent for 10 s
+  (`resolveKeepAliveEvery`, `internal/pileus/resolve_sender.go`) the server
+  re-sends the **last** progress event (same `message`/`status`; "Ricerca
+  della sorgente…" if the plugin hasn't said anything yet). Clients must
+  treat a repeated message as a no-op, not as a new phase.
 
 ### Phases the server narrates
 
@@ -89,6 +94,39 @@ Client rules the server relies on (do not change without a coordinated bump):
   slow CDN this is the tens-of-seconds wait. The pre-buffer step moves the
   first N of those fetches *before* `{result}` so they can be measured and
   reported, and serves them warm afterwards.
+
+---
+
+## Errors — gRPC status codes
+
+Backend failures are mapped (`wrapInternal`, `internal/pileus/media_handler.go`)
+so the client can pick a message and decide whether to retry:
+
+| code | when | message | client |
+|---|---|---|---|
+| `FailedPrecondition` | the plugin returned `nil, "msg"` | the plugin's `msg`, verbatim (written for the user) | show it, no retry |
+| `DeadlineExceeded` | entrypoint exceeded its time budget | "La sorgente non ha risposto in tempo, riprova" | no automatic retry |
+| `Unavailable` | no free Lua state (plugin busy) | "Sorgente occupata, riprova tra poco" | Pileus retries once |
+| `NotFound` | plugin not loaded / not running | "Plugin non disponibile" | — |
+| `Internal` | anything else | technical text | — |
+
+`UpdateProgress` / `DeleteProgress` return `Internal` on a storage failure
+(they used to answer `ok=false` with no error, which clients never checked).
+
+## Plugin result conventions the server relies on
+
+- `get_streams`: an explicit list — even empty — is returned as-is (empty =
+  "nothing to play"); only `nil` still means the legacy single source
+  `{id = media_id}`.
+- `get_catalog` / `browse`: returning `{items = {...}, has_more = bool}`
+  makes the server pass the plugin's `has_more` through; a plain array keeps
+  the old guess (`has_more = #items > 0`).
+- On an upstream failure return `nil, "msg"`, not an empty list. Empty
+  catalog pages are not cached, and a zero count hides a carousel for at
+  most 2 minutes, but an error is still the honest answer.
+- `resolve_stream`: `headers` / `extra` may be empty tables.
+- Long single steps are fine (keep-alive above), but narrate phases with
+  `mycelium.progress` so the user sees what is happening.
 
 ---
 

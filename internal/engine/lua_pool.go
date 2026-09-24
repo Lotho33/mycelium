@@ -236,6 +236,18 @@ func lockdownStdlib(L *lua.LState) {
 		// filesystem fallback, breaking no legitimate require().
 		L.SetField(pkg, "path", lua.LString(""))
 	}
+	// Blanking package.path alone is not enough: the package table stays
+	// writable from Lua, so a plugin could just reassign
+	// package.path = "./?.lua" and the filesystem loader would read it back
+	// live. Drop that loader outright: require() walks the registry's
+	// _LOADERS table (the same object as package.loaders), and gopher-lua
+	// installs it as {preload, filesystem} — keep only the preload loader.
+	// Lua code can't obtain the Go filesystem loader again once it's gone.
+	if loaders, ok := L.GetField(L.Get(lua.RegistryIndex), "_LOADERS").(*lua.LTable); ok {
+		for i := loaders.Len(); i > 1; i-- {
+			loaders.RawSetInt(i, lua.LNil)
+		}
+	}
 }
 
 // newState creates, configures, and pre-loads a single LState.

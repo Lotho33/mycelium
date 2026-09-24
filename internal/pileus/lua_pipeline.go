@@ -25,23 +25,29 @@ var debugLog = os.Getenv("MYCELIUM_DEBUG") == "1"
 type luaPipelineProvider struct{ id string }
 
 func (p *luaPipelineProvider) GetCatalog(ctx context.Context, catalogID string, page int) ([]*gen.CatalogItem, bool, error) {
-	lms, err := luaCallLuaMetas(p.id, engine.EPGetCatalog, map[string]any{
+	lms, hasMore, err := luaCallLuaMetasPaged(ctx, p.id, engine.EPGetCatalog, map[string]any{
 		"catalog_id": catalogID,
 		"page":       page,
 	}, profileIDFromCtx(ctx))
 	if err != nil {
 		return nil, false, err
 	}
-	return luaMetasToCatalogItems(lms), len(lms) > 0, nil
+	return luaMetasToCatalogItems(lms), hasMore, nil
 }
 
 func (p *luaPipelineProvider) GetSearchFilters(ctx context.Context) ([]*gen.SearchFilter, error) {
-	b, err := engine.LuaPlugins.CallEntrypointJSON(p.id, engine.EPGetSearchFilters, map[string]any{}, profileIDFromCtx(ctx))
-	if err != nil || isNullJSON(b) {
+	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, p.id, engine.EPGetSearchFilters, map[string]any{}, profileIDFromCtx(ctx))
+	if err != nil {
+		// Still no filters rather than a failed search screen — but visible.
+		log.Printf("[pileus/search] %s get_search_filters: %v", p.id, err)
+		return nil, nil
+	}
+	if isNullJSON(b) {
 		return nil, nil
 	}
 	var defs []luaFilterDef
 	if err := json.Unmarshal(b, &defs); err != nil {
+		log.Printf("[pileus/search] %s get_search_filters: unexpected shape: %v", p.id, err)
 		return nil, nil
 	}
 	filters := make([]*gen.SearchFilter, 0, len(defs))
@@ -63,7 +69,7 @@ func (p *luaPipelineProvider) Search(ctx context.Context, query string, page int
 	if debugLog {
 		log.Printf("[pileus/search] plugin=%s query=%q page=%d filters=%v", p.id, query, page, filters)
 	}
-	b, err := engine.LuaPlugins.CallEntrypointJSON(p.id, engine.EPSearch, map[string]any{
+	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, p.id, engine.EPSearch, map[string]any{
 		"query":   query,
 		"page":    page,
 		"filters": filtersAny,
@@ -86,7 +92,7 @@ func (p *luaPipelineProvider) Search(ctx context.Context, query string, page int
 }
 
 func (p *luaPipelineProvider) GetDetails(ctx context.Context, mediaID string) (*gen.DetailsResponse, error) {
-	b, err := engine.LuaPlugins.CallEntrypointJSON(p.id, engine.EPGetDetails, map[string]any{
+	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, p.id, engine.EPGetDetails, map[string]any{
 		"media_id": mediaID,
 	}, profileIDFromCtx(ctx))
 	if err != nil {
@@ -111,14 +117,14 @@ func (p *luaPipelineProvider) GetDetails(ctx context.Context, mediaID string) (*
 }
 
 func (p *luaPipelineProvider) Browse(ctx context.Context, dirID string, page int) (*gen.BrowseResponse, error) {
-	lms, err := luaCallLuaMetas(p.id, engine.EPBrowse, map[string]any{
+	lms, hasMore, err := luaCallLuaMetasPaged(ctx, p.id, engine.EPBrowse, map[string]any{
 		"directory_id": dirID,
 		"page":         page,
 	}, profileIDFromCtx(ctx))
 	if err != nil {
 		return nil, err
 	}
-	resp := &gen.BrowseResponse{HasMore: len(lms) > 0}
+	resp := &gen.BrowseResponse{HasMore: hasMore}
 	for _, lm := range lms {
 		if lm.MediaType == models.TypeEpisode {
 			resp.Episodes = append(resp.Episodes, luaMetaToEpisodeInfo(lm))
@@ -130,7 +136,7 @@ func (p *luaPipelineProvider) Browse(ctx context.Context, dirID string, page int
 }
 
 func (p *luaPipelineProvider) GetStreams(ctx context.Context, mediaID string) ([]*gen.StreamSource, error) {
-	b, err := engine.LuaPlugins.CallEntrypointJSON(p.id, engine.EPGetStreams, map[string]any{
+	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, p.id, engine.EPGetStreams, map[string]any{
 		"media_id": mediaID,
 	}, profileIDFromCtx(ctx))
 	if err != nil {
@@ -150,21 +156,28 @@ func (p *luaPipelineProvider) GetStreams(ctx context.Context, mediaID string) ([
 		}
 		return out
 	}
+	// nil from the plugin = legacy "single stream, resolve the media id
+	// itself". An explicit list — even empty — is taken at its word: an
+	// invented {Id: mediaID} source for "no streams" only turned into a
+	// resolve with a wrong id and an obscure error.
+	if isNullJSON(b) {
+		return []*gen.StreamSource{{Id: mediaID, Label: "Stream", Quality: "Auto"}}, nil
+	}
 	var direct []srcEntry
-	if json.Unmarshal(b, &direct) == nil && len(direct) > 0 {
+	if json.Unmarshal(b, &direct) == nil {
 		return toProto(direct), nil
 	}
 	var wrapped struct {
 		Sources []srcEntry `json:"sources"`
 	}
-	if json.Unmarshal(b, &wrapped) == nil && len(wrapped.Sources) > 0 {
-		return toProto(wrapped.Sources), nil
+	if err := json.Unmarshal(b, &wrapped); err != nil {
+		return nil, fmt.Errorf("get_streams: unexpected result shape: %w", err)
 	}
-	return []*gen.StreamSource{{Id: mediaID, Label: "Stream", Quality: "Auto"}}, nil
+	return toProto(wrapped.Sources), nil
 }
 
 func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string, onProgress engine.ProgressFunc) (string, map[string]string, bool, map[string]string, error) {
-	b, err := engine.LuaPlugins.CallEntrypointJSONWithProgress(p.id, engine.EPResolveStream, map[string]any{
+	b, err := engine.LuaPlugins.CallEntrypointJSONWithProgressCtx(ctx, p.id, engine.EPResolveStream, map[string]any{
 		"stream_id": streamID,
 	}, profileIDFromCtx(ctx), onProgress)
 	if err != nil {
@@ -174,10 +187,12 @@ func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string
 		return "", nil, false, nil, status.Error(codes.NotFound, "stream not resolved: plugin returned nil")
 	}
 	var result struct {
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
-		IsLive  bool              `json:"is_live"`
-		Extra   map[string]string `json:"extra"`
+		URL string `json:"url"`
+		// flexMap: a Lua table left empty ({}) serialises as [] — with a
+		// plain map that failed the whole resolve with "invalid lua result".
+		Headers flexMap `json:"headers"`
+		IsLive  bool    `json:"is_live"`
+		Extra   flexMap `json:"extra"`
 	}
 	if err := json.Unmarshal(b, &result); err != nil {
 		return "", nil, false, nil, fmt.Errorf("invalid lua result: %w", err)
@@ -185,7 +200,7 @@ func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string
 	if result.URL == "" {
 		return "", nil, false, nil, status.Error(codes.NotFound, "stream not resolved: empty URL")
 	}
-	return result.URL, result.Headers, result.IsLive, result.Extra, nil
+	return result.URL, map[string]string(result.Headers), result.IsLive, map[string]string(result.Extra), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -519,15 +534,31 @@ func luaMetaToEpisodeInfo(lm luaMeta) *gen.EpisodeInfo {
 // Dispatch helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// luaCallLuaMetas calls a Lua entrypoint and returns parsed luaMeta items.
-// Uses CallEntrypointJSON for a single JSON serialization pass.
-func luaCallLuaMetas(pluginID, ep string, args map[string]any, profileID string) ([]luaMeta, error) {
-	b, err := engine.LuaPlugins.CallEntrypointJSON(pluginID, ep, args, profileID)
+// luaCallLuaMetasPaged is luaCallLuaMetas plus has_more: the plugin's own
+// value when it returns the {items, has_more} wrapper (a plugin that says
+// "no more pages" is believed), otherwise the legacy guess "a non-empty page
+// may have a successor".
+func luaCallLuaMetasPaged(ctx context.Context, pluginID, ep string, args map[string]any, profileID string) ([]luaMeta, bool, error) {
+	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, pluginID, ep, args, profileID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	lms, _, err := luaMetasFromJSON(b)
-	return lms, err
+	lms, hasMore, err := luaMetasFromJSON(b)
+	if err != nil {
+		return nil, false, err
+	}
+	if !isItemsWrapper(b) {
+		hasMore = len(lms) > 0
+	}
+	return lms, hasMore, nil
+}
+
+// isItemsWrapper reports whether b is the {items: [...]} object form.
+func isItemsWrapper(b json.RawMessage) bool {
+	var w struct {
+		Items json.RawMessage `json:"items"`
+	}
+	return len(b) > 0 && b[0] == '{' && json.Unmarshal(b, &w) == nil && len(w.Items) > 0
 }
 
 // luaMetasFromJSON parses a JSON payload as []luaMeta, supporting both a

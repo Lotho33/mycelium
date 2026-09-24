@@ -103,6 +103,27 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// securityHeadersMiddleware sets baseline browser hardening on every
+// response. The dashboard, the Pileus web app (/app) and the unauthenticated
+// media endpoints (/img, /proxy/*, /plugin-icon) share one origin, so content
+// from third parties must never be sniffed into HTML, the dashboard must not
+// be framed (clickjacking), and signed /proxy URLs must not leak via Referer.
+// Endpoints that relay third-party bytes additionally get a sandbox CSP so
+// even a mislabelled body (or an SVG with <script>) stays inert.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Referrer-Policy", "same-origin")
+		p := r.URL.Path
+		if p == "/img" || p == "/plugin-icon" || strings.HasPrefix(p, "/plugin-icon/") || strings.HasPrefix(p, "/proxy/") {
+			h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	applyMemoryLimit()
 	log.SetOutput(api.UILogs)
@@ -203,7 +224,7 @@ func main() {
 	// legacy (client più vecchi, debug di rete).
 	var tlsCert *tls.Certificate
 	if managers.Settings.GetString("pileus_grpc_tls", "true") == "true" {
-		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.Save)
+		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.SaveInternal)
 		if err != nil {
 			log.Printf("[server] generazione certificato TLS gRPC fallita, si prosegue in chiaro: %v", err)
 		} else {
@@ -284,7 +305,7 @@ func main() {
 	port := managers.Settings.GetString("server_port", "8000")
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           corsMiddleware(mux),
+		Handler:           securityHeadersMiddleware(corsMiddleware(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -318,7 +339,7 @@ func main() {
 	var httpsSrv *http.Server
 	if managers.Settings.GetString("server_https", "false") == "true" {
 		httpsPort := managers.Settings.GetString("server_https_port", "8443")
-		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.Save)
+		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.SaveInternal)
 		if err != nil {
 			log.Printf("[server] HTTPS disabilitato: generazione certificato fallita: %v", err)
 		} else {
@@ -328,7 +349,7 @@ func main() {
 			} else {
 				httpsSrv = &http.Server{
 					Addr:              ":" + httpsPort,
-					Handler:           corsMiddleware(mux),
+					Handler:           securityHeadersMiddleware(corsMiddleware(mux)),
 					ReadHeaderTimeout: 10 * time.Second,
 					IdleTimeout:       120 * time.Second,
 					TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
@@ -404,6 +425,6 @@ func loadOrCreateJWTSecret() []byte {
 	if _, err := rand.Read(b); err != nil {
 		log.Fatalf("[server] jwt secret gen: %v", err)
 	}
-	_ = managers.Settings.Save(map[string]any{key: hex.EncodeToString(b)})
+	_ = managers.Settings.SaveInternal(map[string]any{key: hex.EncodeToString(b)})
 	return b
 }

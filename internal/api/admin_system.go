@@ -6,9 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -311,41 +309,13 @@ func coreUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Windows: aggiornamento automatico non supportato (binary in uso).
-	if runtime.GOOS == "windows" {
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "manual_required",
-			"detail":  "Windows: scarica il nuovo binary da GitHub Releases e sostituisci manualmente.",
-			"version": latest,
-			"url":     "https://github.com/Lotho33/mycelium-core/releases/latest",
-		})
-		return
-	}
-
-	// Linux bare-metal: delega allo script di aggiornamento installato da install.sh.
-	updateScript := "/usr/local/bin/mycelium-update"
-	if _, err := os.Stat(updateScript); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"detail": "script di aggiornamento non trovato — reinstalla con install.sh",
-			"url":    "https://github.com/Lotho33/mycelium-core/releases/latest",
-		})
-		return
-	}
-
-	log.Printf("[core] avvio aggiornamento → %s", latest)
-	cmd := exec.Command(updateScript, latest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"detail": "avvio script fallito: " + err.Error()})
-		return
-	}
-
+	// Docker è l'unico deployment supportato (install.sh bare-metal rimosso):
+	// fuori da Docker — tipicamente `go run` in sviluppo — non c'è nulla da
+	// aggiornare in automatico.
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "updating",
+		"status":  "manual_required",
+		"detail":  "mycelium è supportato solo in Docker: aggiorna l'immagine (docker compose pull && docker compose up -d).",
 		"version": latest,
-		"detail":  "aggiornamento in corso — il servizio si riavvierà a breve",
+		"url":     "https://github.com/Lotho33/mycelium-core/releases/latest",
 	})
 }

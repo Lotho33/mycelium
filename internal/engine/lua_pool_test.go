@@ -109,8 +109,13 @@ func TestLuaPool_RequireCannotEscapeToFilesystem(t *testing.T) {
 	script := filepath.Join(attackerDir, "init.lua")
 	if err := os.WriteFile(script, []byte(`
 		local ok, err = pcall(require, "plugins.victim.init")
+		-- Second attempt: the package table is writable, so restore a
+		-- filesystem search path first — must still not resolve.
+		package.path = "./?.lua"
+		local ok2 = pcall(require, "plugins.victim.init")
 		results = {
 			ok = tostring(ok),
+			ok_repathed = tostring(ok2),
 			victim_loaded = tostring(victim_loaded),
 		}
 	`), 0o644); err != nil {
@@ -136,6 +141,9 @@ func TestLuaPool_RequireCannotEscapeToFilesystem(t *testing.T) {
 	got := map[string]string{}
 	tbl.ForEach(func(k, v lua.LValue) { got[k.String()] = v.String() })
 
+	if got["ok_repathed"] != "false" {
+		t.Errorf("require after package.path reassignment ok = %q, want false (filesystem loader must be gone)", got["ok_repathed"])
+	}
 	if got["ok"] != "false" {
 		t.Errorf("require(\"plugins.victim.init\") ok = %q, want false (must fail to resolve on the filesystem)", got["ok"])
 	}

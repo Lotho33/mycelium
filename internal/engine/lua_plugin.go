@@ -587,7 +587,10 @@ func (m *LuaPluginManager) LoadAll(dir string) error {
 		return err
 	}
 	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "shared" {
+		// "shared" holds modules preloaded into every plugin, not a plugin;
+		// dot-dirs are leftovers such as an upload's .staging-* after a crash
+		// (they'd otherwise load as a duplicate of the plugin being updated).
+		if !e.IsDir() || e.Name() == "shared" || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		if err := m.loadPlugin(filepath.Join(dir, e.Name())); err != nil {
@@ -1170,6 +1173,13 @@ func isReadEntrypoint(ep string) bool {
 // (see LuaPool.DiscardAndReplace) — a future Acquire() could hand it to an
 // unrelated caller while the abandoned goroutine is still mutating it.
 func callWithTimeout(ctx context.Context, L *lua.LState, fn lua.LValue, args *lua.LTable) (callErr error, timedOut bool) {
+	// Bind ctx to the VM so the abandoned goroutine actually stops: with a
+	// context set, gopher-lua checks ctx.Done() between instructions and
+	// raises an error once it fires. Without it a pure-Lua infinite loop in
+	// a timed-out call kept burning a core forever, one more per retry.
+	// Cleared again only on normal completion — after a timeout L is
+	// discarded, never reused.
+	L.SetContext(ctx)
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -1181,6 +1191,7 @@ func callWithTimeout(ctx context.Context, L *lua.LState, fn lua.LValue, args *lu
 	}()
 	select {
 	case err := <-done:
+		L.RemoveContext()
 		return err, false
 	case <-ctx.Done():
 		return ctx.Err(), true
@@ -1271,7 +1282,7 @@ func acquireForCall(ctx context.Context, p *LuaPlugin, class callClass) (L *lua.
 		done()
 		if class == classInteractive && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 			free, size := p.Pool.Stats()
-			err = fmt.Errorf("plugin occupato: nessuno stato Lua libero entro %s (liberi %d/%d)", userAcquireWait, free, size)
+			err = fmt.Errorf("%w: nessuno stato Lua libero entro %s (liberi %d/%d)", ErrPluginBusy, userAcquireWait, free, size)
 		}
 		return nil, nil, nil, wait, err
 	}
@@ -1297,7 +1308,7 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 	p, ok := m.plugins[pluginID]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("lua plugin %q not loaded", pluginID)
+		return nil, fmt.Errorf("%w: %q", ErrPluginNotLoaded, pluginID)
 	}
 
 	// Resolve entrypoint alias from manifest, fall back to direct function name.
@@ -1362,7 +1373,7 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 		p.Pool.DiscardAndReplace()
 		p.recordDiscard()
 		released = true
-		return nil, fmt.Errorf("plugin %q %s: timeout, esecuzione abbandonata", pluginID, fnName)
+		return nil, fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
 	}
 	if callErr != nil {
 		outcome = "error"
@@ -1376,7 +1387,7 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 
 	if errVal != lua.LNil {
 		if errStr, ok := errVal.(lua.LString); ok && string(errStr) != "" {
-			return nil, fmt.Errorf("plugin %q %s: %s", pluginID, fnName, string(errStr))
+			return nil, &PluginError{PluginID: pluginID, Fn: fnName, Msg: string(errStr)}
 		}
 	}
 	return luaToGo(ret), nil
@@ -1386,21 +1397,30 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 // directly to JSON, skipping the intermediate Go-native representation.
 // This eliminates one json.Marshal call and the associated allocations per request.
 func (m *LuaPluginManager) CallEntrypointJSON(pluginID, ep string, args map[string]any, profileID string) (json.RawMessage, error) {
+	return m.CallEntrypointJSONCtx(context.Background(), pluginID, ep, args, profileID)
+}
+
+// CallEntrypointJSONCtx is CallEntrypointJSON bound to the caller's ctx: when
+// the request goes away (user left the screen) the Lua call and its SDK I/O
+// stop instead of holding a pool slot for the whole entrypoint budget.
+// Coalesced reads are the exception — one call serves every identical
+// concurrent request, so no single caller's ctx may cancel it.
+func (m *LuaPluginManager) CallEntrypointJSONCtx(ctx context.Context, pluginID, ep string, args map[string]any, profileID string) (json.RawMessage, error) {
 	if coalescibleRead(ep) {
 		if key, ok := readKey(pluginID, ep, profileID, args); ok {
 			return m.readCo.do(key, func() (json.RawMessage, error) {
-				return m.callEntrypointJSON(pluginID, ep, args, profileID, nil, false)
+				return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, false)
 			})
 		}
 	}
-	return m.callEntrypointJSON(pluginID, ep, args, profileID, nil, false)
+	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, nil, false)
 }
 
 // CallEntrypointJSONBackground is CallEntrypointJSON for work nobody is
 // waiting on (the catalog-count warmup): it can't hold every LState of the
 // plugin's pool, so a user request always finds one free.
 func (m *LuaPluginManager) CallEntrypointJSONBackground(pluginID, ep string, args map[string]any, profileID string) (json.RawMessage, error) {
-	return m.callEntrypointJSON(pluginID, ep, args, profileID, nil, true)
+	return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, true)
 }
 
 // CallEntrypointJSONWithProgress is CallEntrypointJSON, but the plugin can call
@@ -1409,15 +1429,21 @@ func (m *LuaPluginManager) CallEntrypointJSONBackground(pluginID, ep string, arg
 // it's doing (trying a mirror, falling back to the browser sniffer, …) instead
 // of the caller only ever seeing the final result.
 func (m *LuaPluginManager) CallEntrypointJSONWithProgress(pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
-	return m.callEntrypointJSON(pluginID, ep, args, profileID, onProgress, false)
+	return m.CallEntrypointJSONWithProgressCtx(context.Background(), pluginID, ep, args, profileID, onProgress)
 }
 
-func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, background bool) (json.RawMessage, error) {
+// CallEntrypointJSONWithProgressCtx is CallEntrypointJSONWithProgress bound to
+// the caller's ctx (see CallEntrypointJSONCtx).
+func (m *LuaPluginManager) CallEntrypointJSONWithProgressCtx(ctx context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
+	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, onProgress, false)
+}
+
+func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, background bool) (json.RawMessage, error) {
 	m.mu.RLock()
 	p, ok := m.plugins[pluginID]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("lua plugin %q not loaded", pluginID)
+		return nil, fmt.Errorf("%w: %q", ErrPluginNotLoaded, pluginID)
 	}
 
 	fnName := ep
@@ -1425,7 +1451,7 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 		fnName = alias
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), entrypointTimeout(p.Manifest, ep, fnName))
+	ctx, cancel := context.WithTimeout(parent, entrypointTimeout(p.Manifest, ep, fnName))
 	defer cancel()
 
 	class := classOf(ep)
@@ -1476,7 +1502,7 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 		p.Pool.DiscardAndReplace()
 		p.recordDiscard()
 		released = true
-		return nil, fmt.Errorf("plugin %q %s: timeout, esecuzione abbandonata", pluginID, fnName)
+		return nil, fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
 	}
 	if callErr != nil {
 		outcome = "error"
@@ -1489,7 +1515,7 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 
 	if errVal != lua.LNil {
 		if errStr, ok := errVal.(lua.LString); ok && string(errStr) != "" {
-			return nil, fmt.Errorf("plugin %q %s: %s", pluginID, fnName, string(errStr))
+			return nil, &PluginError{PluginID: pluginID, Fn: fnName, Msg: string(errStr)}
 		}
 	}
 	if ret == lua.LNil {
@@ -1503,6 +1529,10 @@ func (m *LuaPluginManager) callEntrypointJSON(pluginID, ep string, args map[stri
 // luaValueToJSON serialises a Lua value directly to JSON without an intermediate
 // Go representation, avoiding the luaToGo alloc chain.
 func luaValueToJSON(w *bytes.Buffer, v lua.LValue) {
+	luaValueToJSONGuarded(w, v, newLuaConvGuard())
+}
+
+func luaValueToJSONGuarded(w *bytes.Buffer, v lua.LValue, g *luaConvGuard) {
 	switch val := v.(type) {
 	case *lua.LNilType:
 		w.WriteString("null")
@@ -1523,7 +1553,12 @@ func luaValueToJSON(w *bytes.Buffer, v lua.LValue) {
 		b, _ := json.Marshal(string(val))
 		w.Write(b)
 	case *lua.LTable:
-		luaTableToJSON(w, val)
+		if !g.enter(val) {
+			w.WriteString("null") // cycle / too deep / too many tables
+			return
+		}
+		luaTableToJSON(w, val, g)
+		g.leave(val)
 	default:
 		b, _ := json.Marshal(v.String())
 		w.Write(b)
@@ -1531,7 +1566,7 @@ func luaValueToJSON(w *bytes.Buffer, v lua.LValue) {
 }
 
 // luaTableToJSON decides array vs object using the same heuristic as luaTableToGo.
-func luaTableToJSON(w *bytes.Buffer, t *lua.LTable) {
+func luaTableToJSON(w *bytes.Buffer, t *lua.LTable, g *luaConvGuard) {
 	isArray := true
 	maxIdx := 0
 	t.ForEach(func(k, _ lua.LValue) {
@@ -1552,7 +1587,7 @@ func luaTableToJSON(w *bytes.Buffer, t *lua.LTable) {
 			if i > 1 {
 				w.WriteByte(',')
 			}
-			luaValueToJSON(w, t.RawGetInt(i))
+			luaValueToJSONGuarded(w, t.RawGetInt(i), g)
 		}
 		w.WriteByte(']')
 		return
@@ -1567,7 +1602,7 @@ func luaTableToJSON(w *bytes.Buffer, t *lua.LTable) {
 		kb, _ := json.Marshal(k.String())
 		w.Write(kb)
 		w.WriteByte(':')
-		luaValueToJSON(w, v)
+		luaValueToJSONGuarded(w, v, g)
 	})
 	w.WriteByte('}')
 }
@@ -1980,6 +2015,10 @@ func goToLua(L *lua.LState, v any) lua.LValue {
 }
 
 func luaToGo(v lua.LValue) any {
+	return luaToGoGuarded(v, newLuaConvGuard())
+}
+
+func luaToGoGuarded(v lua.LValue, g *luaConvGuard) any {
 	switch val := v.(type) {
 	case *lua.LNilType:
 		return nil
@@ -1990,13 +2029,17 @@ func luaToGo(v lua.LValue) any {
 	case lua.LString:
 		return string(val)
 	case *lua.LTable:
-		return luaTableToGo(val)
+		if !g.enter(val) {
+			return nil // cycle / too deep / too many tables
+		}
+		defer g.leave(val)
+		return luaTableToGo(val, g)
 	default:
 		return v.String()
 	}
 }
 
-func luaTableToGo(t *lua.LTable) any {
+func luaTableToGo(t *lua.LTable, g *luaConvGuard) any {
 	isArray := true
 	maxIdx := 0
 	t.ForEach(func(k, _ lua.LValue) {
@@ -2014,13 +2057,13 @@ func luaTableToGo(t *lua.LTable) any {
 	if isArray && maxIdx == t.Len() {
 		arr := make([]any, 0, maxIdx)
 		for i := 1; i <= maxIdx; i++ {
-			arr = append(arr, luaToGo(t.RawGetInt(i)))
+			arr = append(arr, luaToGoGuarded(t.RawGetInt(i), g))
 		}
 		return arr
 	}
 	m := make(map[string]any)
 	t.ForEach(func(k, v lua.LValue) {
-		m[k.String()] = luaToGo(v)
+		m[k.String()] = luaToGoGuarded(v, g)
 	})
 	return m
 }

@@ -60,11 +60,17 @@ import (
 // `?w=` is still accepted from older clients and simply ignored.
 
 const (
-	imgWebPQuality   = 82               // WebP scale is not 1:1 with JPEG; ~80-85 ≈ JPEG q90 at a smaller size
-	imgMaxDimension  = 2000             // safety cap only — downscale a pathologically large source to fit
-	imgFetchTimeout  = 15 * time.Second //
-	imgSrcReadLimit  = 25 << 20         // 25 MB — refuse pathological upstreams
-	imgCacheMaxBytes = 300 << 20        // ~300 MB of images, then oldest-first sweep
+	imgWebPQuality  = 82               // WebP scale is not 1:1 with JPEG; ~80-85 ≈ JPEG q90 at a smaller size
+	imgMaxDimension = 2000             // safety cap only — downscale a pathologically large source to fit
+	imgFetchTimeout = 15 * time.Second //
+	imgSrcReadLimit = 25 << 20         // 25 MB — refuse pathological upstreams
+	// imgMaxSourcePixels caps the DECLARED source size, checked with
+	// image.DecodeConfig before any full decode: a few-KB PNG can declare
+	// 40000×40000 and make image.Decode allocate ~6 GB (decompression bomb),
+	// OOM-killing the container. 30 MP (≈120 MB as NRGBA) is well above any
+	// real poster/backdrop.
+	imgMaxSourcePixels = 30_000_000
+	imgCacheMaxBytes   = 300 << 20 // ~300 MB of images, then oldest-first sweep
 )
 
 // imgDebug gates the per-request hit/store lines. The conversion and
@@ -151,7 +157,7 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, srcLen, srcFmt, raw, rawCT, err := imgFetchEncode(r, upstream)
+	out, srcLen, srcFmt, raw, _, err := imgFetchEncode(r, upstream)
 	if err != nil {
 		if raw != nil {
 			// The upstream fetch itself succeeded — we're holding valid
@@ -166,17 +172,23 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 			// happen to already be same-origin). Serving the same bytes
 			// ourselves, same-origin, costs nothing extra — we already paid
 			// for the fetch — and sidesteps that failure mode entirely.
-			log.Printf("[img] passthrough-inline (%v): %s", err, imgShortURL(upstream))
-			ct := rawCT
-			if ct == "" {
-				ct = "application/octet-stream"
+			//
+			// Only bytes that sniff as a raster image are served inline, and
+			// always under the SNIFFED type, never the upstream's own
+			// Content-Type: /img is unauthenticated and shares the dashboard's
+			// origin, so echoing an upstream "text/html" body verbatim ran
+			// attacker script same-origin with /admin (one-click takeover)
+			// and let anyone read arbitrary LAN responses through us.
+			if ct := imgSniffRasterType(raw); ct != "" {
+				log.Printf("[img] passthrough-inline (%v): %s", err, imgShortURL(upstream))
+				imgSecurityHeaders(w)
+				w.Header().Set("Content-Type", ct)
+				w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+				_, _ = w.Write(raw)
+				return
 			}
-			w.Header().Set("Content-Type", ct)
-			w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
-			_, _ = w.Write(raw)
-			return
 		}
 		// Nothing to serve ourselves — the upstream fetch itself failed
 		// (network error, timeout, non-2xx). A redirect is the only option
@@ -218,7 +230,34 @@ func imgShortURL(u string) string {
 	return u
 }
 
+// imgSecurityHeaders keeps whatever /img serves inert on this origin (it
+// shares it with /admin): no MIME sniffing into HTML, and a sandbox CSP so
+// even a mislabelled body can't run script or reach the dashboard's cookies.
+func imgSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+}
+
+// imgSniffRasterType returns the content type of raw when it is a raster
+// image format a browser renders as an image (never SVG, which can carry
+// script), or "" otherwise.
+func imgSniffRasterType(raw []byte) string {
+	// AVIF isn't in http.DetectContentType's table: ISO-BMFF "ftyp" box with
+	// an avif/avis brand.
+	if len(raw) >= 12 && string(raw[4:8]) == "ftyp" {
+		if brand := string(raw[8:12]); brand == "avif" || brand == "avis" {
+			return "image/avif"
+		}
+	}
+	ct := http.DetectContentType(raw)
+	if strings.HasPrefix(ct, "image/") && !strings.Contains(ct, "svg") {
+		return ct
+	}
+	return ""
+}
+
 func imgServeHeaders(w http.ResponseWriter) {
+	imgSecurityHeaders(w)
 	w.Header().Set("Content-Type", "image/webp")
 	w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -258,6 +297,15 @@ func imgFetchEncode(r *http.Request, upstream string) (out []byte, srcLen int, s
 	}
 	srcLen = len(raw)
 	rawContentType = resp.Header.Get("Content-Type")
+
+	// Check the declared dimensions before decoding (decompression bomb, see
+	// imgMaxSourcePixels). Oversized → plain error with no raw bytes: the
+	// caller redirects to the original instead of serving it.
+	if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr == nil {
+		if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > imgMaxSourcePixels {
+			return nil, srcLen, "", nil, "", fmt.Errorf("source too large: %dx%d", cfg.Width, cfg.Height)
+		}
+	}
 
 	src, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {

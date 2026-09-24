@@ -2,8 +2,8 @@
 // client can find mycelium's IP without the user typing it in. Replaces the
 // old mDNS-via-Avahi approach (internal/managers/network.go), which never
 // actually worked in the Docker deployment (no avahi-daemon in the image)
-// and had a second, divergent implementation in install.sh for bare-metal —
-// two systems, neither reliable everywhere. UDP broadcast works the same way
+// and had a second, divergent implementation in the (since removed) bare-metal
+// installer — two systems, neither reliable everywhere. UDP broadcast works the same way
 // regardless of deployment (Docker port-publish forwards broadcast-received
 // datagrams to the container like any other published UDP port) and needs
 // nothing installed on the host.

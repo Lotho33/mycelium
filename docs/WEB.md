@@ -58,7 +58,7 @@ the browser can reach.
       setting (dashboard → *Host del server*) to the full public origin, e.g.
       `https://media.example.com` — otherwise proxy URLs come back
       `http://127.0.0.1:8000/...` and nothing plays.
-- [ ] `network_mode: host` or bare-metal: `x-http-host` / `peer.LocalAddr` are
+- [ ] `network_mode: host` (or `go run` in development): `x-http-host` / `peer.LocalAddr` are
       enough; still needs TLS in front for an `https` PWA.
 - [ ] Bridge / Docker-published ports: `server_host` is **mandatory** (neither
       the client hint nor the veth IP is the host-published address).

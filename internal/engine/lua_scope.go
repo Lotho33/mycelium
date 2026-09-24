@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -56,6 +57,30 @@ func (s *callScope) set(ctx context.Context, profileID string, requireProxy bool
 	s.requireProxy = requireProxy
 	s.proxyURL = proxyURL
 	s.onProgress = onProgress
+}
+
+// parentCtx is the context SDK I/O (network, browser) should derive from:
+// the running entrypoint's ctx, so a cancelled request or an expired
+// entrypoint budget also aborts the HTTP/browser call in flight instead of
+// letting it run on for its own full timeout. Background outside a call.
+func (s *callScope) parentCtx() context.Context {
+	if s != nil && s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
+
+// maxSDKTimeout caps a plugin-supplied timeout_seconds for a single SDK I/O.
+const maxSDKTimeout = 90 * time.Second
+
+// clampSDKTimeout converts a plugin-supplied timeout (seconds) to a
+// duration in (0, maxSDKTimeout].
+func clampSDKTimeout(sec int) time.Duration {
+	d := time.Duration(sec) * time.Second
+	if d <= 0 || d > maxSDKTimeout {
+		return maxSDKTimeout
+	}
+	return d
 }
 
 func (s *callScope) reset() {

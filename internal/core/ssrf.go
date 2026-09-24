@@ -15,6 +15,11 @@ import (
 // Turn it on for deployments whose sources are all public.
 var proxyBlockPrivate = os.Getenv("MYCELIUM_PROXY_BLOCK_PRIVATE") == "1"
 
+// cgnatNet is 100.64.0.0/10 (RFC 6598 shared address space) — also the range
+// Tailscale/Headscale assign to tailnet peers. net.IP.IsPrivate doesn't cover
+// it, so with MYCELIUM_PROXY_BLOCK_PRIVATE=1 the mesh nodes stayed reachable.
+var cgnatNet = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+
 // lookupIPAddr is net.DefaultResolver.LookupIPAddr, indirected through a
 // package variable purely so tests can substitute a fake resolver — e.g. to
 // simulate a DNS-rebinding name that would answer differently across two
@@ -44,7 +49,7 @@ func BlockedProxyIP(ip net.IP) bool {
 	if ip.Equal(net.IPv4(169, 254, 169, 254)) {
 		return true
 	}
-	if proxyBlockPrivate && ip.IsPrivate() {
+	if proxyBlockPrivate && (ip.IsPrivate() || cgnatNet.Contains(ip)) {
 		return true
 	}
 	return false

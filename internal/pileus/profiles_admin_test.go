@@ -21,6 +21,13 @@ CREATE TABLE pileus_profiles (
 	avatar_url  TEXT NOT NULL DEFAULT '',
 	preferences TEXT NOT NULL DEFAULT '{}',
 	created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE plugin_secrets (
+	plugin_id  TEXT NOT NULL,
+	profile_id TEXT NOT NULL,
+	key        TEXT NOT NULL,
+	value      TEXT NOT NULL,
+	PRIMARY KEY (plugin_id, profile_id, key)
 );`
 
 func setupProfileTestDB(t *testing.T) {

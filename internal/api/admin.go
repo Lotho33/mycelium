@@ -30,7 +30,9 @@ func AdminRoutes(mux *http.ServeMux) {
 	// Lua plugin management lives under /admin/lua-plugins/* (RegisterLuaAdminRoutes).
 
 	mux.HandleFunc("POST /admin/settings/save", auth(saveSettings))
-	mux.HandleFunc("POST /admin/password/change", auth(changeAdminPasswordHandler))
+	// Rate limited like the wipes below: it verifies the current password,
+	// so a stolen cookie could otherwise brute-force it without limit.
+	mux.HandleFunc("POST /admin/password/change", rateLimitMiddleware(wipeLimiter, auth(changeAdminPasswordHandler)))
 	mux.HandleFunc("POST /admin/cache/clear", auth(clearCacheHandler))
 	// Rate limited (wipeLimiter, same 5/min budget as /admin/login): both
 	// re-check the admin password in the body, so a stolen session cookie

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -177,6 +178,7 @@ func TestSDKSleep_InterruptedByEntrypointTimeout(t *testing.T) {
 		t.Fatalf("loadPlugin: %v", err)
 	}
 
+	baseline := runtime.NumGoroutine()
 	start := time.Now()
 	_, err := m.CallEntrypointJSON("t.sleep", "probe", nil, "")
 	if err == nil {
@@ -186,29 +188,23 @@ func TestSDKSleep_InterruptedByEntrypointTimeout(t *testing.T) {
 		t.Fatalf("CallEntrypointJSON took %v, want ~1s (the task's timeout_seconds)", elapsed)
 	}
 
-	// The plugin function keeps running in the background after
-	// CallEntrypointJSON gives up on it (see callWithTimeout). Poll its log
-	// buffer, well short of the 10s the plugin actually asked mycelium.sleep
-	// for, to confirm the sleep itself was interrupted by the expired ctx
-	// rather than running to completion.
-	buf := m.GetLogBuffer("t.sleep")
-	if buf == nil {
-		t.Fatal("no log buffer for t.sleep")
-	}
+	// The abandoned goroutine must not linger for the 10s the plugin asked
+	// for: mycelium.sleep returns on the expired ctx, and the VM (bound to
+	// the same ctx by callWithTimeout) aborts at the next instruction — so
+	// "after-sleep" is never logged, and the goroutine count drops back.
 	deadline := time.Now().Add(4 * time.Second)
-	for {
-		for _, line := range buf.Lines() {
-			if strings.Contains(line, "after-sleep") {
-				if logged := time.Since(start); logged >= 9*time.Second {
-					t.Fatalf("sleep ran for ~%v — the full requested duration, not cut short by the expired ctx", logged)
-				}
-				return
-			}
-		}
+	for runtime.NumGoroutine() > baseline {
 		if time.Now().After(deadline) {
-			t.Fatal("plugin never logged after-sleep within 4s — mycelium.sleep(10000) is blocking for its full duration instead of respecting the entrypoint ctx")
+			t.Fatalf("abandoned plugin goroutine still alive 4s after the timeout (goroutines %d > baseline %d) — mycelium.sleep(10000) is not respecting the entrypoint ctx", runtime.NumGoroutine(), baseline)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	if buf := m.GetLogBuffer("t.sleep"); buf != nil {
+		for _, line := range buf.Lines() {
+			if strings.Contains(line, "after-sleep") {
+				t.Fatal("Lua kept executing after the entrypoint timeout (after-sleep logged)")
+			}
+		}
 	}
 }
 
@@ -583,4 +579,33 @@ func TestSDKStorageWriteJSON_CapsPayloadSize(t *testing.T) {
 			t.Fatalf("written data field has length %d, want 1024", len(got.Data))
 		}
 	})
+}
+
+// write_json must not reach the plugin's own code or manifest.yaml: JSON is
+// valid YAML, so a rewritten manifest could grant direct_egress or claim
+// another plugin's id on the next load.
+func TestSDKStorageWriteJSON_OnlyJSONFiles(t *testing.T) {
+	manifest := "id: t.storageext\nname: T\ndirect_egress: false\npool_size: 1\nentrypoints:\n  probe: probe\n"
+	dir := writeTestPlugin(t, manifest,
+		`function probe(args)
+		   local err = mycelium.storage.write_json(args.name, { id = "hijack", direct_egress = true })
+		   return { err = err or "" }
+		 end`)
+	m := newTestManager(t)
+	if err := m.loadPlugin(dir); err != nil {
+		t.Fatalf("loadPlugin: %v", err)
+	}
+	for _, name := range []string{"manifest.yaml", "init.lua", "MANIFEST.YAML", "sub/../manifest.yaml"} {
+		raw, err := m.CallEntrypointJSON("t.storageext", "probe", map[string]any{"name": name}, "")
+		if err != nil {
+			t.Fatalf("call(%s): %v", name, err)
+		}
+		if !strings.Contains(string(raw), "only .json") {
+			t.Errorf("write_json(%q) = %s, want an 'only .json' rejection", name, raw)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil || string(got) != manifest {
+		t.Fatalf("manifest.yaml was modified: %q (err %v)", got, err)
+	}
 }

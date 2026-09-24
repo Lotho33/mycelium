@@ -18,6 +18,22 @@ func TestIsAllowedKey_RejectsMasterAdminHash(t *testing.T) {
 	}
 }
 
+// Same backdoor class via the old generic "pileus_" prefix: pileus_jwt_secret
+// is the master secret behind admin cookies, /proxy signatures and device
+// JWTs, and the gRPC TLS key/cert pin the server identity. None may be
+// writable through the generic settings endpoint; pileus_web_repo (the only
+// pileus_* key the dashboard edits) stays allowed by exact name.
+func TestIsAllowedKey_PileusKeys(t *testing.T) {
+	for _, k := range []string{"pileus_jwt_secret", "pileus_grpc_tls_key", "pileus_grpc_tls_cert", "pileus_grpc_tls", "pileus_web_repo_x"} {
+		if isAllowedKey(k) {
+			t.Errorf("%s must not be in the generic settings allowlist", k)
+		}
+	}
+	if !isAllowedKey("pileus_web_repo") {
+		t.Error("pileus_web_repo must stay writable from the dashboard")
+	}
+}
+
 func TestSave_RejectsMasterAdminHash(t *testing.T) {
 	withTempSettings(t)
 

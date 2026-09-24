@@ -9,6 +9,8 @@ package api
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -125,19 +127,36 @@ func updatePileusWebApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Integrity: the Pileus release ships SHA256SUMS-web.txt next to the
+	// archive. When present the archive must match it; when absent the
+	// update still proceeds (older releases) but the response says so.
+	// Note this guards against a corrupted/tampered download, not against
+	// a compromised release (whoever can upload the archive can upload the
+	// sums too) — that would need signing.
+	expectedSHA, sumsErr := releaseChecksumFor(assets, asset.Name)
+	if sumsErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"detail": "lettura checksum della release: " + sumsErr.Error()})
+		return
+	}
+
 	destDir := core.AppPath("data", "pileus-web")
-	if err := installPileusWebAsset(asset, destDir); err != nil {
+	if err := installPileusWebAsset(asset, destDir, expectedSHA); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"detail": err.Error()})
 		return
 	}
 
-	log.Printf("[pileus-web] app web aggiornata a %s (asset %s) da %s", tag, asset.Name, repoSlug)
-	writeJSON(w, http.StatusOK, map[string]any{
+	log.Printf("[pileus-web] app web aggiornata a %s (asset %s, checksum verificato: %v) da %s", tag, asset.Name, expectedSHA != "", repoSlug)
+	resp := map[string]any{
 		"ok":                  true,
 		"version":             tag,
 		"asset":               asset.Name,
+		"checksum_verified":   expectedSHA != "",
 		"mycelium_up_to_date": myceliumUpToDate,
-	})
+	}
+	if expectedSHA == "" {
+		resp["warning"] = "la release non pubblica un file SHA256SUMS: integrità dell'archivio non verificata"
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // pickWebAsset chooses the release asset that looks like the Flutter web
@@ -217,7 +236,66 @@ func isTarGzArchiveName(lowerName string) bool {
 // Both renames are as close to atomic as os.Rename gives on the same
 // filesystem (extractDir is created as a sibling of destDir specifically so
 // the final rename is same-filesystem, not a cross-device copy).
-func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir string) error {
+// releaseChecksumFor looks for a SHA256SUMS*.txt asset in the release and
+// returns the hex digest it lists for assetName. ("", nil) when the release
+// has no sums file or the file doesn't list the asset.
+func releaseChecksumFor(assets []core.GitHubReleaseAsset, assetName string) (string, error) {
+	for _, a := range assets {
+		lower := strings.ToLower(a.Name)
+		if !strings.HasPrefix(lower, "sha256sums") || a.BrowserDownloadURL == "" {
+			continue
+		}
+		body, err := fetchSmall(a.BrowserDownloadURL, 64<<10)
+		if err != nil {
+			return "", err
+		}
+		if sum := parseSHA256Sums(body, assetName); sum != "" {
+			return sum, nil
+		}
+	}
+	return "", nil
+}
+
+// parseSHA256Sums finds name in `sha256sum` output ("<hex>  <name>", or
+// "<hex> *<name>" in binary mode) and returns its lowercased digest.
+func parseSHA256Sums(body []byte, name string) string {
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		if strings.TrimPrefix(fields[1], "*") == name && len(fields[0]) == 64 {
+			return strings.ToLower(fields[0])
+		}
+	}
+	return ""
+}
+
+// fetchSmall GETs url and returns at most limit bytes of the body.
+func fetchSmall(url string, limit int64) ([]byte, error) {
+	client := core.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "mycelium-core/"+core.Version)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, limit))
+}
+
+// installPileusWebAsset downloads, verifies (when expectedSHA != "") and
+// installs the web build archive into destDir.
+func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir, expectedSHA string) error {
 	if asset.BrowserDownloadURL == "" {
 		return fmt.Errorf("asset senza browser_download_url")
 	}
@@ -267,6 +345,15 @@ func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir string) error 
 	}
 	if n > maxPileusWebAssetBytes {
 		return fmt.Errorf("asset troppo grande (oltre %d MiB)", maxPileusWebAssetBytes>>20)
+	}
+	if expectedSHA != "" {
+		got, err := fileSHA256(tmpArchivePath)
+		if err != nil {
+			return fmt.Errorf("calcolo checksum: %w", err)
+		}
+		if got != expectedSHA {
+			return fmt.Errorf("checksum dell'archivio non corrisponde a SHA256SUMS della release (atteso %s, ottenuto %s): aggiornamento annullato", expectedSHA, got)
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(destDir), 0755); err != nil {
@@ -337,6 +424,20 @@ func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir string) error 
 // stripping already normalizes to) as well as an archive whose entries didn't
 // uniformly share one top folder (so the stripping didn't kick in) but still
 // nests the build one level deep.
+// fileSHA256 returns the lowercase hex SHA-256 of the file at path.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func hasIndexHTML(dir string) bool {
 	if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
 		return true

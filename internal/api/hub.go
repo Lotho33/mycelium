@@ -119,8 +119,8 @@ func postProgress(w http.ResponseWriter, r *http.Request) {
 // Gated by NeedsLogo so a title only ever triggers this once (per
 // client+show), not once per playback-position heartbeat.
 func fetchWatchHistoryLogo(clientID, providerID, parentID, playableID string) {
-	if !engine.LuaPlugins.Has(providerID) {
-		return
+	if !engine.LuaPlugins.Has(providerID) || !engine.LuaPlugins.IsOperational(providerID) {
+		return // not loaded, or stopped: a stopped plugin must not run Lua
 	}
 	target := managers.WatchHistoryLogoTarget{
 		ClientID: clientID, ProviderID: providerID, ParentID: parentID, PlayableID: playableID,
