@@ -709,6 +709,7 @@ func (h *MediaHandler) UpdateProgress(ctx context.Context, req *gen.ProgressRequ
 		req.NavigationContext, req.Title, req.Poster,
 		float64(req.CurrentPosition), float64(req.TotalDuration),
 		req.Rating, req.Genres, req.Plot, req.Year,
+		req.SeasonNumber, req.EpisodeNumber,
 	)
 	if err != nil {
 		// A real error, not Ok=false: clients only look at the RPC outcome.
@@ -787,6 +788,8 @@ func (h *MediaHandler) GetContinueWatching(ctx context.Context, req *gen.Continu
 			Genres:            e.Genres,
 			Plot:              e.Plot,
 			Year:              e.Year,
+			SeasonNumber:      e.SeasonNumber,
+			EpisodeNumber:     e.EpisodeNumber,
 		})
 	}
 	return &gen.ContinueWatchingResponse{Items: items}, nil

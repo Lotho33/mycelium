@@ -97,7 +97,10 @@ func postProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := managers.DB.UpsertProgress(clientID, body.ProviderID, body.PlayableID, body.ParentID, body.NavigationContext, body.Title, body.Poster, body.ProgressTime, body.TotalTime, body.Rating, body.Genres, body.Plot, body.Year); err != nil {
+	// season_number/episode_number: not part of this endpoint's JSON body
+	// (Stremio has no equivalent concept here) — 0 is the correct "unknown",
+	// same keep-if-empty semantics as every other field UpsertProgress has.
+	if err := managers.DB.UpsertProgress(clientID, body.ProviderID, body.PlayableID, body.ParentID, body.NavigationContext, body.Title, body.Poster, body.ProgressTime, body.TotalTime, body.Rating, body.Genres, body.Plot, body.Year, 0, 0); err != nil {
 		log.Printf("❌ [progress] client=%s err=%v", clientID, err)
 		http.Error(w, `{"detail": "Errore salvataggio progress"}`, http.StatusInternalServerError)
 		return

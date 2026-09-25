@@ -32,6 +32,8 @@ CREATE TABLE watch_history (
 	plot TEXT NOT NULL DEFAULT '',
 	year INTEGER NOT NULL DEFAULT 0,
 	logo_url TEXT NOT NULL DEFAULT '',
+	season_number INTEGER NOT NULL DEFAULT 0,
+	episode_number INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (client_id, provider_id, playable_id)
 );
 `
@@ -161,10 +163,10 @@ func TestUpsertProgress_ReplacesSeriesEntryAtomically(t *testing.T) {
 
 	const clientID, providerID, parentID = "client1", "prov1", "series1"
 
-	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0); err != nil {
+	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0, 0, 0); err != nil {
 		t.Fatalf("first UpsertProgress: %v", err)
 	}
-	if err := m.UpsertProgress(clientID, providerID, "ep2", parentID, "Series", "Ep2", "poster2", 200, 1000, 0, nil, "", 0); err != nil {
+	if err := m.UpsertProgress(clientID, providerID, "ep2", parentID, "Series", "Ep2", "poster2", 200, 1000, 0, nil, "", 0, 0, 0); err != nil {
 		t.Fatalf("second UpsertProgress: %v", err)
 	}
 
@@ -207,11 +209,11 @@ func TestUpsertProgress_RollsBackOnInsertFailure(t *testing.T) {
 
 	const clientID, providerID, parentID = "client1", "prov1", "series1"
 
-	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0); err != nil {
+	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0, 0, 0); err != nil {
 		t.Fatalf("initial UpsertProgress: %v", err)
 	}
 
-	err := m.UpsertProgress(clientID, providerID, "ep2", parentID, "Series", "FAIL_TRIGGER", "poster2", 200, 1000, 0, nil, "", 0)
+	err := m.UpsertProgress(clientID, providerID, "ep2", parentID, "Series", "FAIL_TRIGGER", "poster2", 200, 1000, 0, nil, "", 0, 0, 0)
 	if err == nil {
 		t.Fatal("expected UpsertProgress to fail when the insert trigger aborts, got nil error")
 	}
@@ -272,7 +274,7 @@ func TestUpdateProgressPosition_UpdatesPositionOnly(t *testing.T) {
 	m := NewDBManager(db)
 
 	const clientID, providerID, parentID = "client1", "prov1", "series1"
-	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 4.5, []string{"Drama"}, "The plot.", 2024); err != nil {
+	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 4.5, []string{"Drama"}, "The plot.", 2024, 0, 0); err != nil {
 		t.Fatalf("seed UpsertProgress: %v", err)
 	}
 
@@ -299,6 +301,59 @@ func TestUpdateProgressPosition_UpdatesPositionOnly(t *testing.T) {
 	}
 }
 
+// --- season_number/episode_number (Continue Watching "S2 · E5") ----------
+
+// TestUpsertProgress_SeasonEpisodeKeepIfZero mirrors year's own keep-if-empty
+// rule: a later call with season/episode both 0 (a position-only heartbeat,
+// or a launch path that doesn't know them yet) must not blank an
+// already-stored non-zero value.
+func TestUpsertProgress_SeasonEpisodeKeepIfZero(t *testing.T) {
+	db := newTestDB(t, "")
+	m := NewDBManager(db)
+
+	const clientID, providerID, parentID = "client1", "prov1", "series1"
+	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0, 2, 5); err != nil {
+		t.Fatalf("seed UpsertProgress: %v", err)
+	}
+	// Same episode, position-only heartbeat — season/episode both 0.
+	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "", "", 300, 1000, 0, nil, "", 0, 0, 0); err != nil {
+		t.Fatalf("heartbeat UpsertProgress: %v", err)
+	}
+
+	var season, episode int32
+	err := db.QueryRow(`SELECT season_number, episode_number FROM watch_history WHERE client_id=? AND provider_id=? AND playable_id=?`,
+		clientID, providerID, "ep1").Scan(&season, &episode)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if season != 2 || episode != 5 {
+		t.Fatalf("want season=2 episode=5 preserved through a 0/0 heartbeat, got season=%d episode=%d", season, episode)
+	}
+}
+
+// TestUpsertProgress_MovieHasNoSeasonEpisode verifies a movie (season=0,
+// episode=0 from the client, since it's never episodic) stores 0/0, not some
+// stale value from an unrelated previous row — the primary key already keeps
+// these row-scoped, this just confirms nothing coerces 0 into anything else.
+func TestUpsertProgress_MovieHasNoSeasonEpisode(t *testing.T) {
+	db := newTestDB(t, "")
+	m := NewDBManager(db)
+
+	if err := m.UpsertProgress("client1", "prov1", "movie1", "", "", "Movie", "poster1", 100, 1000, 0, nil, "", 0, 0, 0); err != nil {
+		t.Fatalf("UpsertProgress: %v", err)
+	}
+
+	var season, episode int32
+	err := db.QueryRow(`SELECT season_number, episode_number FROM watch_history WHERE client_id=? AND provider_id=? AND playable_id=?`,
+		"client1", "prov1", "movie1").Scan(&season, &episode)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if season != 0 || episode != 0 {
+		t.Fatalf("want season=0 episode=0 for a movie, got season=%d episode=%d", season, episode)
+	}
+}
+
 // --- Continue-watching logo (background fetch gate + write) --------------
 
 func TestNeedsLogo_TrueWhenEmptyFalseOnceSet(t *testing.T) {
@@ -307,7 +362,7 @@ func TestNeedsLogo_TrueWhenEmptyFalseOnceSet(t *testing.T) {
 
 	target := WatchHistoryLogoTarget{ClientID: "c1", ProviderID: "prov1", ParentID: "series1", PlayableID: "ep1"}
 
-	if err := m.UpsertProgress(target.ClientID, target.ProviderID, target.PlayableID, target.ParentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0); err != nil {
+	if err := m.UpsertProgress(target.ClientID, target.ProviderID, target.PlayableID, target.ParentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0, 0, 0); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
 
@@ -341,7 +396,7 @@ func TestUpdateWatchHistoryLogo_NeverOverwritesExisting(t *testing.T) {
 	m := NewDBManager(db)
 	target := WatchHistoryLogoTarget{ClientID: "c1", ProviderID: "prov1", ParentID: "series1", PlayableID: "ep1"}
 
-	if err := m.UpsertProgress(target.ClientID, target.ProviderID, target.PlayableID, target.ParentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0); err != nil {
+	if err := m.UpsertProgress(target.ClientID, target.ProviderID, target.PlayableID, target.ParentID, "Series", "Ep1", "poster1", 100, 1000, 0, nil, "", 0, 0, 0); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
 	if err := m.UpdateWatchHistoryLogo(target, "https://example.com/first.png"); err != nil {
@@ -367,7 +422,7 @@ func TestUpdateWatchHistoryLogo_MovieHasNoParent(t *testing.T) {
 	m := NewDBManager(db)
 	target := WatchHistoryLogoTarget{ClientID: "c1", ProviderID: "prov1", ParentID: "", PlayableID: "movie1"}
 
-	if err := m.UpsertProgress(target.ClientID, target.ProviderID, target.PlayableID, "", "", "Movie", "poster1", 100, 1000, 0, nil, "", 0); err != nil {
+	if err := m.UpsertProgress(target.ClientID, target.ProviderID, target.PlayableID, "", "", "Movie", "poster1", 100, 1000, 0, nil, "", 0, 0, 0); err != nil {
 		t.Fatalf("UpsertProgress: %v", err)
 	}
 
