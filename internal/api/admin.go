@@ -58,6 +58,9 @@ func AdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/vpn/test", auth(testVPNConnection))
 	mux.HandleFunc("GET /admin/logs/stream", auth(getLogsSSE))
 	mux.HandleFunc("POST /admin/core/update", auth(coreUpdate))
+	// Graceful self-restart — needed for settings that are only read once at
+	// boot (server_https, mdns_enabled/mdns_hostname); see restartService.
+	mux.HandleFunc("POST /admin/system/restart", auth(restartService))
 
 	// Lua plugin management
 	RegisterLuaAdminRoutes(mux)

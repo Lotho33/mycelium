@@ -1638,6 +1638,24 @@ async function saveMdns() {
     else showToast('Salvataggio non riuscito.', 'error');
 }
 
+// Rete → "Riavvia il servizio": chiude il processo con lo stesso SIGTERM
+// gestito da main.go (shutdown pulito di HTTP/gRPC/scheduler); ogni
+// docker-compose*.yml lo gira con `restart: unless-stopped`, quindi torna su
+// da solo — necessario perché server_https/mdns_* sopra si leggono solo
+// all'avvio. La dashboard stessa perde la sessione HTTP per qualche secondo:
+// la pagina si ricarica da sola, il login riappare solo se il cookie è
+// scaduto nel frattempo (non lo è, dura ben più di un riavvio).
+async function restartService() {
+    if (!confirm('Il servizio verrà riavviato: streaming e connessioni attive si interrompono per qualche secondo, poi tutto riparte da solo. Continuare?')) return;
+    const r = await apiFetch('/admin/system/restart', { method: 'POST' });
+    if (!r?.ok) {
+        showToast('Riavvio non riuscito.', 'error');
+        return;
+    }
+    showToast('Riavvio in corso…', 'success');
+    setTimeout(() => window.location.reload(), 6000);
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 // pollResources alimenta anche l'header aggregato (agg-cpu/agg-mem/agg-uptime,
 // sempre visibile fuori dai div dei tab) — non si può fermare del tutto sui

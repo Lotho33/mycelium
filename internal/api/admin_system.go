@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"mycelium/internal/core"
@@ -349,4 +350,47 @@ func coreUpdate(w http.ResponseWriter, r *http.Request) {
 		"version": latest,
 		"url":     "https://github.com/Lotho33/mycelium-core/releases/latest",
 	})
+}
+
+// restartService triggers a graceful, in-place restart of the mycelium
+// process itself. It exists because a couple of settings — server_https,
+// mdns_enabled/mdns_hostname — are read once at boot in main() and can't be
+// live-reloaded like most others (egress_ipv6, etc.) are; until this,
+// applying them meant an operator had to reach for `docker compose restart`
+// on their own, with no equivalent inside the dashboard that told them to.
+//
+// Every shipped compose file (docker-compose*.yml) runs mycelium with
+// `restart: unless-stopped`, so a clean process exit is enough: sending
+// ourselves the exact same SIGTERM main() already listens for (§quit chan)
+// reuses the existing graceful-shutdown path — HTTP/HTTPS server Shutdown,
+// gRPC GracefulStop, scheduler stop — verbatim, rather than a second one
+// that could drift out of sync with it. Docker then brings the container
+// straight back up and main() re-reads settings fresh. Outside Docker
+// (bare `go run`, no MYCELIUM_DOCKER) nothing supervises the process, so
+// the response says so up front — same "supported deployment" caveat
+// coreUpdate above already gives for self-update.
+func restartService(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	inDocker := os.Getenv("MYCELIUM_DOCKER") == "1"
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "restarting",
+		"docker": inDocker,
+	})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	log.Println("[admin] riavvio del servizio richiesto dalla dashboard")
+	go func() {
+		// Give the response a moment to actually reach the browser before
+		// this process starts tearing itself down.
+		time.Sleep(300 * time.Millisecond)
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			log.Printf("[admin] riavvio: os.FindProcess fallito: %v", err)
+			return
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			log.Printf("[admin] riavvio: invio SIGTERM fallito: %v", err)
+		}
+	}()
 }

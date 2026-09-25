@@ -412,6 +412,19 @@
                 </div>
             </div>
 
+            <!-- Riavvio servizio: le due impostazioni sopra vengono lette una
+                 sola volta all'avvio, quindi un cambiamento resta senza
+                 effetto finché il processo non riparte. -->
+            <div class="card border rounded-xl p-4">
+                <div class="flex items-start justify-between gap-3">
+                    <span>
+                        <span class="text-sm font-semibold text-white">Riavvia il servizio</span>
+                        <span class="block text-[11px] text-gray-600 mt-1">Necessario dopo aver cambiato "Porta HTTPS aggiuntiva" o "Risoluzione nome.local" qui sopra per farle applicare. Interrompe per qualche secondo tutte le connessioni attive (incluso lo streaming in corso); riparte da solo subito dopo.</span>
+                    </span>
+                    <button onclick="restartService()" class="shrink-0 text-xs font-semibold text-amber-400 hover:text-amber-300 border border-amber-900/60 hover:border-amber-700 px-3 py-1.5 rounded-lg transition">Riavvia</button>
+                </div>
+            </div>
+
             <!-- Uscite di rete (egress registry) -->
             <div class="card border rounded-xl p-4">
                 <div class="flex items-center gap-2 mb-2 flex-wrap">
