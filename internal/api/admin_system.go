@@ -283,6 +283,14 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 			}
 			return "browser-relay"
 		}(),
+		// HTTPS opzionale (porta aggiuntiva, oltre alla :8000 in chiaro) e
+		// risoluzione mDNS (*.local) — entrambe lette una sola volta
+		// all'avvio (cmd/server/main.go), quindi un cambio richiede un
+		// riavvio del servizio; la dashboard lo segnala nella scheda Rete.
+		"server_https":      core.ParseBoolish(managers.Settings.GetString("server_https", "false")),
+		"server_https_port": managers.Settings.GetString("server_https_port", "8443"),
+		"mdns_enabled":      core.ParseBoolish(managers.Settings.GetString("mdns_enabled", "true")),
+		"mdns_hostname":     managers.Settings.GetString("mdns_hostname", "mycelium"),
 	})
 }
 

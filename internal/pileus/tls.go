@@ -76,3 +76,15 @@ func GenerateOrLoadTLSCert(getSetting func(key, def string) string, saveSetting 
 
 	return tls.X509KeyPair(certOut, keyOut)
 }
+
+// CurrentCertPEM returns the persisted self-signed certificate's PEM bytes
+// as-is, for endpoints that let an operator/user download and manually
+// trust it (e.g. GET /cert) — empty if none has been generated yet (no TLS
+// listener has ever started). Reads the exact same setting key
+// GenerateOrLoadTLSCert writes; does not generate or alter anything, so it
+// can never change the certificate's fingerprint — native clients already
+// paired via TOFU pinning (see server.go's TLSFingerprint) are never
+// affected by this.
+func CurrentCertPEM(getSetting func(key, def string) string) string {
+	return getSetting("pileus_grpc_tls_cert", "")
+}

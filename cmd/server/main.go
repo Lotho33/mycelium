@@ -249,6 +249,14 @@ func main() {
 	// nell'immagine).
 	api.StartDiscovery()
 
+	// Risponditore mDNS vero (RFC 6762, "mycelium.local") — vedi
+	// internal/api/mdns.go per come si differenzia dal broadcast qui sopra
+	// (quello è un protocollo interno di Pileus, invisibile a un browser) e
+	// per il vincolo di rete: serve traffico multicast reale, quindi
+	// network_mode: host (o bare metal) — il bridge Docker con sole porte
+	// pubblicate tipicamente non lo inoltra dentro il container.
+	api.StartMDNS()
+
 	mux := http.NewServeMux()
 
 	fs := http.FileServer(http.Dir(core.AppPath("web", "static")))

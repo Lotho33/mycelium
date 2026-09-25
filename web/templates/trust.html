@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Fidati del certificato — Mycelium</title>
+
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Mycelium">
+    <meta name="theme-color" content="#0a0d12">
+
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+    <link rel="icon" href="/static/icon-192.png">
+
+    <link rel="stylesheet" href="/static/tailwind.css">
+    <style>
+        body {
+            background: #0a0d12;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .card { background: #141820; border: 1px solid #1e2530; }
+        .step-number {
+            background: linear-gradient(135deg, #7c6af7, #5a4fd4);
+            min-width: 2rem;
+            height: 2rem;
+        }
+        @supports (padding-top: env(safe-area-inset-top)) {
+            .safe-top { padding-top: env(safe-area-inset-top); }
+            .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen safe-top safe-bottom">
+
+<div class="max-w-md mx-auto px-5 py-10">
+
+    <!-- Header -->
+    <div class="text-center mb-10">
+        <div class="w-20 h-20 mx-auto mb-5 rounded-2xl flex items-center justify-center"
+             style="background: linear-gradient(135deg, #7c6af7 0%, #5a4fd4 100%);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" width="44" height="44">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                <path d="M2 17l10 5 10-5"/>
+                <path d="M2 12l10 5 10-5"/>
+            </svg>
+        </div>
+        <h1 class="text-3xl font-bold text-white tracking-tight">Fidati del certificato</h1>
+        <p class="text-gray-400 mt-2 text-base">Serve una volta sola, prima di installare l'app</p>
+    </div>
+
+    {{if not .HasCert}}
+    <div class="card rounded-2xl p-4 mb-6 text-center" style="border-color:#7c2d2d;background:#1f1414">
+        <p class="text-red-300 font-semibold">Nessun certificato disponibile</p>
+        <p class="text-gray-400 text-sm mt-1">
+            L'HTTPS opzionale non è ancora attivo su questo server. Abilitalo dalla dashboard
+            (scheda Rete) e riprova.
+        </p>
+    </div>
+    {{else}}
+
+    <div class="rounded-2xl p-4 mb-6" style="background: rgba(124,106,247,0.08); border: 1px solid rgba(124,106,247,0.2);">
+        <p class="text-purple-300 text-sm">
+            Questo server usa un certificato autofirmato (nessuna autorità pubblica lo riconosce,
+            perché non ha un dominio internet vero dietro). Il browser lo segnala come "non sicuro"
+            finché non lo installi qui — un passaggio da fare una volta sola su ogni dispositivo.
+        </p>
+    </div>
+
+    <!-- Android -->
+    <div class="card rounded-2xl p-6 mb-6">
+        <h2 class="text-white font-semibold text-lg mb-5">Android</h2>
+        <div class="space-y-5">
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">1</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">
+                        Scarica il certificato:
+                        <a href="/cert" class="text-purple-400 underline">/cert</a>
+                    </p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Chrome dovrebbe proporre subito di installarlo. Se invece lo scarica soltanto,
+                        apri Impostazioni → Sicurezza → Crittografia e credenziali → Installa un
+                        certificato → CA, e scegli il file appena scaricato.
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">2</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">Ricarica la pagina del server</p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Torna su questo indirizzo: l'avviso "non sicuro" dovrebbe sparire. Se
+                        l'installazione dell'app resta comunque bloccata anche dopo questo passaggio,
+                        l'unica soluzione affidabile è un dominio vero con un certificato riconosciuto
+                        (chiedi all'amministratore del server).
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- iOS -->
+    <div class="card rounded-2xl p-6 mb-6">
+        <h2 class="text-white font-semibold text-lg mb-5">iPhone / iPad</h2>
+        <div class="space-y-5">
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">1</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">
+                        Apri in Safari:
+                        <a href="/cert.mobileconfig" class="text-purple-400 underline">/cert.mobileconfig</a>
+                    </p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Safari mostra "Profilo scaricato". Vai in Impostazioni → Generale → VPN e
+                        gestione dispositivo, tocca il profilo e installalo.
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">2</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">Attiva la piena fiducia</p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Passaggio a parte, obbligatorio: Impostazioni → Generale → Info →
+                        Impostazioni attendibilità certificati, e attiva l'interruttore per
+                        "Mycelium". Apple non permette di farlo automaticamente dal profilo.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="text-center">
+        <a href="/install" class="text-purple-400 underline text-sm">Fatto — torna a installare l'app →</a>
+    </div>
+
+    {{end}}
+</div>
+
+</body>
+</html>

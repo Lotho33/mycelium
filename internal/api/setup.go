@@ -13,6 +13,7 @@ import (
 
 	"mycelium/internal/core"
 	"mycelium/internal/managers"
+	"mycelium/internal/pileus"
 )
 
 // InternalRoutes registers non-Stremio utility endpoints: proxy, progress, version.
@@ -50,6 +51,15 @@ func SetupRoutes(mux *http.ServeMux) {
 	// PWA install guide — no auth required (opened in Safari by the user)
 	mux.HandleFunc("GET /install", installUI)
 	mux.HandleFunc("GET /manifest.json", serveManifest)
+
+	// Self-signed certificate download/trust — no auth required (a user
+	// needs these before they can even log in, on a device that's never
+	// talked to this server before). See admin_pwa.go's sibling PWA routes
+	// for why the two other pages exist; these three are their counterpart
+	// for "the certificate itself isn't trusted yet".
+	mux.HandleFunc("GET /trust", trustUI)
+	mux.HandleFunc("GET /cert", serveCert)
+	mux.HandleFunc("GET /cert.mobileconfig", serveCertMobileConfig)
 
 	// Pileus web app — Flutter web build served as PWA.
 	//   /app/     ← data/pileus-web/      (mobile build; the PWA/install target)
@@ -169,6 +179,63 @@ func installUI(w http.ResponseWriter, r *http.Request) {
 func serveManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/manifest+json")
 	http.ServeFile(w, r, filepath.Join(core.BasePath, "web", "static", "manifest.json"))
+}
+
+// trustUI renders /trust — a guide for installing/trusting mycelium's
+// self-signed certificate, the counterpart of /install for people without a
+// real domain (a self-signed cert alone gets a browser's "not secure"
+// interstitial, which manually clicking through does not reliably satisfy a
+// PWA's installability check, especially on Android Chrome — this page is
+// the best available way to get it genuinely trusted instead).
+func trustUI(w http.ResponseWriter, r *http.Request) {
+	tmpl, err := template.ParseFiles(filepath.Join(core.BasePath, "web", "templates", "trust.html"))
+	if err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		return
+	}
+	data := map[string]any{
+		"HasCert": pileus.CurrentCertPEM(managers.Settings.GetString) != "",
+	}
+	if err := tmpl.Execute(w, data); err != nil {
+		log.Printf("[trust] template execute: %v", err)
+	}
+}
+
+// serveCert serves the exact same self-signed certificate already generated
+// for the gRPC/HTTPS listeners (see pileus.GenerateOrLoadTLSCert) as a
+// downloadable file — this endpoint changes nothing about how that
+// certificate is generated, only exposes it. application/x-x509-ca-cert is
+// the MIME type Android's browser/download manager recognises to offer
+// "install this certificate" directly.
+func serveCert(w http.ResponseWriter, r *http.Request) {
+	certPEM := pileus.CurrentCertPEM(managers.Settings.GetString)
+	if certPEM == "" {
+		http.Error(w, "Nessun certificato disponibile: abilita prima l'HTTPS opzionale dalla dashboard.", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="mycelium.crt"`)
+	w.Write([]byte(certPEM)) //nolint:errcheck
+}
+
+// serveCertMobileConfig serves the same certificate wrapped in a minimal
+// Apple Configuration Profile — see pileus.BuildMobileConfig — so Safari on
+// iOS recognises it and offers to install it, instead of just downloading
+// an opaque .crt file it wouldn't otherwise know what to do with.
+func serveCertMobileConfig(w http.ResponseWriter, r *http.Request) {
+	certPEM := pileus.CurrentCertPEM(managers.Settings.GetString)
+	if certPEM == "" {
+		http.Error(w, "Nessun certificato disponibile: abilita prima l'HTTPS opzionale dalla dashboard.", http.StatusNotFound)
+		return
+	}
+	profile, err := pileus.BuildMobileConfig(certPEM)
+	if err != nil {
+		http.Error(w, "Errore generazione profilo", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+	w.Header().Set("Content-Disposition", `attachment; filename="mycelium.mobileconfig"`)
+	w.Write([]byte(profile)) //nolint:errcheck
 }
 
 // pileusInfo serves the same payload as the UDP discovery responder

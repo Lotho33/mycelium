@@ -1489,6 +1489,17 @@ async function checkCoreVersion() {
     const ipv6 = document.getElementById('egress-ipv6');
     if (ipv6 && typeof d.egress_ipv6 === 'boolean') ipv6.checked = d.egress_ipv6;
 
+    // HTTPS opzionale + mDNS — non toccare i campi mentre l'admin ci sta
+    // scrivendo dentro, stesso guard già usato sopra per pileus-web-repo.
+    const httpsCb = document.getElementById('server-https');
+    if (httpsCb && typeof d.server_https === 'boolean') httpsCb.checked = d.server_https;
+    const httpsPort = document.getElementById('server-https-port');
+    if (httpsPort && document.activeElement !== httpsPort) httpsPort.value = d.server_https_port || '8443';
+    const mdnsCb = document.getElementById('mdns-enabled');
+    if (mdnsCb && typeof d.mdns_enabled === 'boolean') mdnsCb.checked = d.mdns_enabled;
+    const mdnsHost = document.getElementById('mdns-hostname');
+    if (mdnsHost && document.activeElement !== mdnsHost) mdnsHost.value = d.mdns_hostname || 'mycelium';
+
     // Versione del build web installato (version.json di data/pileus-web).
     const pwVer = document.getElementById('pileus-web-version');
     if (pwVer) {
@@ -1590,6 +1601,41 @@ async function saveEgressIPv6(cb) {
         cb.checked = !cb.checked;
         showToast('Salvataggio non riuscito.', 'error');
     }
+}
+
+// Rete → "Porta HTTPS aggiuntiva": letta solo all'avvio (cmd/server/main.go),
+// quindi — a differenza di egress_ipv6 — il salvataggio non ha effetto finché
+// il servizio non viene riavviato manualmente.
+async function saveServerHttps() {
+    const cb = document.getElementById('server-https');
+    const port = document.getElementById('server-https-port');
+    const r = await apiFetch('/admin/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            server_https: cb.checked ? '1' : '0',
+            server_https_port: (port.value || '').trim() || '8443',
+        }),
+    });
+    if (r?.ok) showToast('Salvato — riavvia il servizio per applicare.', 'success');
+    else showToast('Salvataggio non riuscito.', 'error');
+}
+
+// Rete → "Risoluzione nome.local (mDNS)": stessa natura "serve un riavvio"
+// di saveServerHttps sopra — il bind avviene una sola volta in main().
+async function saveMdns() {
+    const cb = document.getElementById('mdns-enabled');
+    const host = document.getElementById('mdns-hostname');
+    const r = await apiFetch('/admin/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            mdns_enabled: cb.checked ? '1' : '0',
+            mdns_hostname: (host.value || '').trim() || 'mycelium',
+        }),
+    });
+    if (r?.ok) showToast('Salvato — riavvia il servizio per applicare.', 'success');
+    else showToast('Salvataggio non riuscito.', 'error');
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
