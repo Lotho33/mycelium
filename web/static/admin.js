@@ -1486,6 +1486,13 @@ async function checkCoreVersion() {
     if (repoInput && document.activeElement !== repoInput) repoInput.value = d.pileus_web_repo || '';
     const pwBtn = document.getElementById('pileus-web-update-btn');
     if (pwBtn) pwBtn.disabled = !d.pileus_web_repo;
+    // Versione del build web installato (version.json di data/pileus-web).
+    const pwVer = document.getElementById('pileus-web-version');
+    if (pwVer) {
+        pwVer.textContent = d.pileus_web_version
+            ? d.pileus_web_version + (d.pileus_web_build ? ` (build ${d.pileus_web_build})` : '')
+            : 'nessuna app web installata';
+    }
     const pwStatus = document.getElementById('pileus-web-status');
     if (pwStatus && !pwStatus.dataset.busy) {
         pwStatus.textContent = d.pileus_web_repo ? '' : "Configura il repo Pileus qui sopra per abilitare l'aggiornamento.";
@@ -1560,6 +1567,7 @@ async function updatePileusWebApp(force) {
         const integrity = d.checksum_verified ? ' Checksum verificato.' : (d.warning ? ' ' + d.warning : '');
         if (status) status.textContent = `Aggiornata a ${d.version} (${d.asset}).${integrity}`;
         showToast(`App web Pileus aggiornata a ${d.version}.`, d.checksum_verified ? 'success' : 'warn');
+        checkCoreVersion(); // aggiorna la riga "Versione installata"
     } else {
         showToast(d.detail || 'Errore aggiornamento.', 'error');
         if (status) status.textContent = d.detail || 'Errore aggiornamento.';

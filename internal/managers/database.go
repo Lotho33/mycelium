@@ -135,6 +135,12 @@ func InitDB() error {
 	// provider already returns logo_url there for its catalog, see
 	// animeunity/vix.series/vix.movie) instead of waiting on a client change.
 	runMigration(db, `ALTER TABLE watch_history ADD COLUMN logo_url TEXT NOT NULL DEFAULT ''`)
+	// season_number/episode_number: lets the continue-watching card show
+	// "S2 · E5" without a client-side re-fetch — 0 for a movie/non-episodic
+	// item (Pileus's EpisodeInfo/EpisodeDetails already carry both, this
+	// just persists them alongside the rest of the CW metadata).
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN season_number INTEGER NOT NULL DEFAULT 0`)
+	runMigration(db, `ALTER TABLE watch_history ADD COLUMN episode_number INTEGER NOT NULL DEFAULT 0`)
 
 	log.Println("🗄️ Database inizializzato (mycelium.db).")
 	DB = &DBManager{db: db}
@@ -251,7 +257,7 @@ func (m *DBManager) SetSetting(key, value string) error {
 
 // UpsertProgress aggiorna la cronologia.
 // Se parentID non è vuoto, rimuove la entry precedente della stessa serie prima di inserire.
-func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, navigationContext, title, poster string, currentTime, totalTime float64, rating float64, genres []string, plot string, year int32) error {
+func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, navigationContext, title, poster string, currentTime, totalTime float64, rating float64, genres []string, plot string, year int32, seasonNumber, episodeNumber int32) error {
 	isCompleted := 0
 	if totalTime > 0 && (currentTime/totalTime) > 0.90 {
 		isCompleted = 1
@@ -260,8 +266,8 @@ func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, n
 
 	query := `
 		INSERT INTO watch_history
-		(client_id, provider_id, playable_id, parent_id, navigation_context, title, poster, progress_time, total_time, is_completed, rating, genres, plot, year, last_updated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		(client_id, provider_id, playable_id, parent_id, navigation_context, title, poster, progress_time, total_time, is_completed, rating, genres, plot, year, season_number, episode_number, last_updated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(client_id, provider_id, playable_id) DO UPDATE SET
 			parent_id          = excluded.parent_id,
 			-- keep-if-empty, same as title/poster below: a position-only
@@ -277,6 +283,8 @@ func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, n
 			genres             = CASE WHEN excluded.genres != '' THEN excluded.genres ELSE genres END,
 			plot               = CASE WHEN excluded.plot   != '' THEN excluded.plot   ELSE plot   END,
 			year               = CASE WHEN excluded.year   > 0   THEN excluded.year   ELSE year   END,
+			season_number      = CASE WHEN excluded.season_number  > 0 THEN excluded.season_number  ELSE season_number  END,
+			episode_number     = CASE WHEN excluded.episode_number > 0 THEN excluded.episode_number ELSE episode_number END,
 			last_updated       = CURRENT_TIMESTAMP
 	`
 	// When parentID is set, the stale sibling row (same series, different
@@ -284,7 +292,7 @@ func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, n
 	// a concurrent GetContinueWatching, or a crash between the two
 	// statements, must never observe the series with neither row present.
 	if parentID == "" {
-		_, err := m.db.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year)
+		_, err := m.db.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year, seasonNumber, episodeNumber)
 		return err
 	}
 
@@ -300,7 +308,7 @@ func (m *DBManager) UpsertProgress(clientID, providerID, playableID, parentID, n
 	); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year); err != nil {
+	if _, err := tx.Exec(query, clientID, providerID, playableID, parentID, navigationContext, title, poster, currentTime, totalTime, isCompleted, rating, genresJoined, plot, year, seasonNumber, episodeNumber); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -321,6 +329,8 @@ type WatchHistoryEntry struct {
 	Genres            []string `json:"genres,omitempty"`
 	Plot              string   `json:"plot,omitempty"`
 	Year              int32    `json:"year,omitempty"`
+	SeasonNumber      int32    `json:"season_number,omitempty"`
+	EpisodeNumber     int32    `json:"episode_number,omitempty"`
 }
 
 // WatchHistoryLogoTarget identifies which rows NeedsLogo/UpdateWatchHistoryLogo
@@ -451,7 +461,7 @@ func (m *DBManager) GetContinueWatchingFor(clientID string, limit int, parentID,
 	// amount of it has actually played. is_completed (flipped at >90% in
 	// UpsertProgress) is what drops it back out once it's finished.
 	rows, err := m.db.Query(`
-		SELECT provider_id, playable_id, parent_id, navigation_context, title, poster, logo_url, progress_time, total_time, last_updated, rating, genres, plot, year
+		SELECT provider_id, playable_id, parent_id, navigation_context, title, poster, logo_url, progress_time, total_time, last_updated, rating, genres, plot, year, season_number, episode_number
 		FROM watch_history
 		WHERE client_id = ? AND is_completed = 0
 		`+filter+`
@@ -467,7 +477,7 @@ func (m *DBManager) GetContinueWatchingFor(clientID string, limit int, parentID,
 	for rows.Next() {
 		var e WatchHistoryEntry
 		var genresJoined string
-		if err := rows.Scan(&e.ProviderID, &e.PlayableID, &e.ParentId, &e.NavigationContext, &e.Title, &e.Poster, &e.LogoURL, &e.ProgressTime, &e.TotalTime, &e.LastUpdated, &e.Rating, &genresJoined, &e.Plot, &e.Year); err != nil {
+		if err := rows.Scan(&e.ProviderID, &e.PlayableID, &e.ParentId, &e.NavigationContext, &e.Title, &e.Poster, &e.LogoURL, &e.ProgressTime, &e.TotalTime, &e.LastUpdated, &e.Rating, &genresJoined, &e.Plot, &e.Year, &e.SeasonNumber, &e.EpisodeNumber); err != nil {
 			return nil, err
 		}
 		if genresJoined != "" {

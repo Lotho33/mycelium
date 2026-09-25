@@ -2502,10 +2502,16 @@ type ProgressRequest struct {
 	// rating/genres/plot/year: same merge-on-conflict rule as above — 0/empty
 	// leaves the stored value untouched. Sourced from GetDetails at play time
 	// (PlaybackArgs on the Flutter side), not re-fetched here server-side.
-	Rating        float64  `protobuf:"fixed64,9,opt,name=rating,proto3" json:"rating,omitempty"`
-	Genres        []string `protobuf:"bytes,10,rep,name=genres,proto3" json:"genres,omitempty"`
-	Plot          string   `protobuf:"bytes,11,opt,name=plot,proto3" json:"plot,omitempty"`
-	Year          int32    `protobuf:"varint,12,opt,name=year,proto3" json:"year,omitempty"`
+	Rating float64  `protobuf:"fixed64,9,opt,name=rating,proto3" json:"rating,omitempty"`
+	Genres []string `protobuf:"bytes,10,rep,name=genres,proto3" json:"genres,omitempty"`
+	Plot   string   `protobuf:"bytes,11,opt,name=plot,proto3" json:"plot,omitempty"`
+	Year   int32    `protobuf:"varint,12,opt,name=year,proto3" json:"year,omitempty"`
+	// season_number/episode_number: same merge-on-conflict rule as above - 0
+	// leaves the stored value untouched. 0 for a movie/non-episodic item (no
+	// column ever gets a real value for those, so GetContinueWatching's 0
+	// means "not an episode" unambiguously on the read side too).
+	SeasonNumber  int32 `protobuf:"varint,13,opt,name=season_number,json=seasonNumber,proto3" json:"season_number,omitempty"`
+	EpisodeNumber int32 `protobuf:"varint,14,opt,name=episode_number,json=episodeNumber,proto3" json:"episode_number,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2620,6 +2626,20 @@ func (x *ProgressRequest) GetPlot() string {
 func (x *ProgressRequest) GetYear() int32 {
 	if x != nil {
 		return x.Year
+	}
+	return 0
+}
+
+func (x *ProgressRequest) GetSeasonNumber() int32 {
+	if x != nil {
+		return x.SeasonNumber
+	}
+	return 0
+}
+
+func (x *ProgressRequest) GetEpisodeNumber() int32 {
+	if x != nil {
+		return x.EpisodeNumber
 	}
 	return 0
 }
@@ -2779,6 +2799,8 @@ type ContinueWatchingItem struct {
 	Genres            []string               `protobuf:"bytes,11,rep,name=genres,proto3" json:"genres,omitempty"`
 	Plot              string                 `protobuf:"bytes,12,opt,name=plot,proto3" json:"plot,omitempty"`
 	Year              int32                  `protobuf:"varint,13,opt,name=year,proto3" json:"year,omitempty"`
+	SeasonNumber      int32                  `protobuf:"varint,14,opt,name=season_number,json=seasonNumber,proto3" json:"season_number,omitempty"`
+	EpisodeNumber     int32                  `protobuf:"varint,15,opt,name=episode_number,json=episodeNumber,proto3" json:"episode_number,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2900,6 +2922,20 @@ func (x *ContinueWatchingItem) GetPlot() string {
 func (x *ContinueWatchingItem) GetYear() int32 {
 	if x != nil {
 		return x.Year
+	}
+	return 0
+}
+
+func (x *ContinueWatchingItem) GetSeasonNumber() int32 {
+	if x != nil {
+		return x.SeasonNumber
+	}
+	return 0
+}
+
+func (x *ContinueWatchingItem) GetEpisodeNumber() int32 {
+	if x != nil {
+		return x.EpisodeNumber
 	}
 	return 0
 }
@@ -4007,7 +4043,7 @@ const file_media_proto_rawDesc = "" +
 	"\x12ResolveStreamEvent\x127\n" +
 	"\bprogress\x18\x01 \x01(\v2\x19.mycelium.ResolveProgressH\x00R\bprogress\x123\n" +
 	"\x06result\x18\x02 \x01(\v2\x19.mycelium.ResolveResponseH\x00R\x06resultB\t\n" +
-	"\apayload\"\xed\x02\n" +
+	"\apayload\"\xb9\x03\n" +
 	"\x0fProgressRequest\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\x12\x1b\n" +
@@ -4021,14 +4057,16 @@ const file_media_proto_rawDesc = "" +
 	"\x06genres\x18\n" +
 	" \x03(\tR\x06genres\x12\x12\n" +
 	"\x04plot\x18\v \x01(\tR\x04plot\x12\x12\n" +
-	"\x04year\x18\f \x01(\x05R\x04year\"\"\n" +
+	"\x04year\x18\f \x01(\x05R\x04year\x12#\n" +
+	"\rseason_number\x18\r \x01(\x05R\fseasonNumber\x12%\n" +
+	"\x0eepisode_number\x18\x0e \x01(\x05R\repisodeNumber\"\"\n" +
 	"\x10ProgressResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"O\n" +
 	"\x15DeleteProgressRequest\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\"(\n" +
 	"\x16DeleteProgressResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x87\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd3\x03\n" +
 	"\x14ContinueWatchingItem\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\x12\x1b\n" +
@@ -4044,7 +4082,9 @@ const file_media_proto_rawDesc = "" +
 	" \x01(\x01R\x06rating\x12\x16\n" +
 	"\x06genres\x18\v \x03(\tR\x06genres\x12\x12\n" +
 	"\x04plot\x18\f \x01(\tR\x04plot\x12\x12\n" +
-	"\x04year\x18\r \x01(\x05R\x04year\"i\n" +
+	"\x04year\x18\r \x01(\x05R\x04year\x12#\n" +
+	"\rseason_number\x18\x0e \x01(\x05R\fseasonNumber\x12%\n" +
+	"\x0eepisode_number\x18\x0f \x01(\x05R\repisodeNumber\"i\n" +
 	"\x17ContinueWatchingRequest\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x05R\x05limit\x12\x1b\n" +
 	"\tparent_id\x18\x02 \x01(\tR\bparentId\x12\x1b\n" +

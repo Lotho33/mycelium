@@ -251,6 +251,21 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		// precompilare il campo e abilitare/disabilitare il bottone di
 		// aggiornamento senza un endpoint GET dedicato.
 		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", "Lotho33/pileus"),
+		// Versione del build web di Pileus attualmente installato in
+		// data/pileus-web (dal suo version.json): "" = nessun build installato
+		// o file illeggibile.
+		"pileus_web_version": func() string {
+			if info, ok := pileusWebVersion(); ok {
+				return info.Version
+			}
+			return ""
+		}(),
+		"pileus_web_build": func() string {
+			if info, ok := pileusWebVersion(); ok {
+				return info.BuildNumber
+			}
+			return ""
+		}(),
 		// Upstream HLS-proxy path: "browser-relay" (default — relayed through
 		// the external browser/extractor sidecar's /v1/fetch) unless
 		// MYCELIUM_HTTP_PROFILE=standard pins a plain net/http stack.
