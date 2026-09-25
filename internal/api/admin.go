@@ -17,12 +17,6 @@ func AdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/login", rateLimitMiddleware(loginLimiter, adminLoginSubmit))
 	mux.HandleFunc("POST /admin/logout", adminLogout)
 
-	// PWA (manifest + service worker) — pubblici apposta: la pagina di login
-	// deve poter essere installata anche prima di autenticarsi, esattamente
-	// come qualunque altra PWA con un flusso di accesso. Vedi admin_pwa.go.
-	mux.HandleFunc("GET /admin/manifest.json", serveAdminManifest)
-	mux.HandleFunc("GET /admin/sw.js", serveAdminServiceWorker)
-
 	// Tutto il resto richiede sessione valida
 	auth := adminAuthMiddleware
 	mux.HandleFunc("GET /admin/dashboard", auth(adminDashboard))

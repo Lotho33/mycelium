@@ -57,6 +57,23 @@ const mdnsPort = 5353
 
 var mdnsGroupV4 = net.IPv4(224, 0, 0, 251)
 
+// MDNSHostname returns the normalized hostname (mdns_hostname setting,
+// default "mycelium", any ".local"/"." suffix stripped if the operator typed
+// one anyway) that the mDNS responder answers for. Exported and used as the
+// single source of truth for that name — pileus.GenerateOrLoadWebTLSCert's
+// certificate SAN (cmd/server/main.go) and this responder must always agree
+// on exactly the same name, or a browser could get a cert valid for a
+// different ".local" name than the one that actually resolves.
+func MDNSHostname() string {
+	hostname := strings.ToLower(strings.TrimSpace(managers.Settings.GetString("mdns_hostname", "mycelium")))
+	hostname = strings.TrimSuffix(hostname, ".local")
+	hostname = strings.TrimSuffix(hostname, ".")
+	if hostname == "" {
+		hostname = "mycelium"
+	}
+	return hostname
+}
+
 // StartMDNS launches the responder in the background, best-effort — same
 // posture as StartDiscovery: if it can't bind (already in use, no
 // CAP_NET_RAW-adjacent permission in this environment, disabled by the
@@ -69,13 +86,7 @@ func StartMDNS() {
 		log.Printf("[mdns] disattivato da impostazioni")
 		return
 	}
-	hostname := strings.ToLower(strings.TrimSpace(managers.Settings.GetString("mdns_hostname", "mycelium")))
-	hostname = strings.TrimSuffix(hostname, ".local")
-	hostname = strings.TrimSuffix(hostname, ".")
-	if hostname == "" {
-		hostname = "mycelium"
-	}
-	fqdn := hostname + ".local."
+	fqdn := MDNSHostname() + ".local."
 
 	conn, err := net.ListenMulticastUDP("udp4", nil, &net.UDPAddr{IP: mdnsGroupV4, Port: mdnsPort})
 	if err != nil {

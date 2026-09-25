@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"net"
@@ -54,9 +55,7 @@ func SetupRoutes(mux *http.ServeMux) {
 
 	// Self-signed certificate download/trust — no auth required (a user
 	// needs these before they can even log in, on a device that's never
-	// talked to this server before). See admin_pwa.go's sibling PWA routes
-	// for why the two other pages exist; these three are their counterpart
-	// for "the certificate itself isn't trusted yet".
+	// talked to this server before).
 	mux.HandleFunc("GET /trust", trustUI)
 	mux.HandleFunc("GET /cert", serveCert)
 	mux.HandleFunc("GET /cert.mobileconfig", serveCertMobileConfig)
@@ -193,22 +192,27 @@ func trustUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
+	httpsPort := managers.Settings.GetString("server_https_port", "8443")
+	fqdn := MDNSHostname() + ".local"
 	data := map[string]any{
-		"HasCert": pileus.CurrentCertPEM(managers.Settings.GetString) != "",
+		"HasCert":  pileus.CurrentWebCertPEM(managers.Settings.GetString) != "",
+		"FQDN":     fqdn,
+		"TrustURL": fmt.Sprintf("https://%s:%s", fqdn, httpsPort),
 	}
 	if err := tmpl.Execute(w, data); err != nil {
 		log.Printf("[trust] template execute: %v", err)
 	}
 }
 
-// serveCert serves the exact same self-signed certificate already generated
-// for the gRPC/HTTPS listeners (see pileus.GenerateOrLoadTLSCert) as a
-// downloadable file — this endpoint changes nothing about how that
-// certificate is generated, only exposes it. application/x-x509-ca-cert is
-// the MIME type Android's browser/download manager recognises to offer
-// "install this certificate" directly.
+// serveCert serves the browser-facing HTTPS listener's self-signed
+// certificate (see pileus.GenerateOrLoadWebTLSCert — NOT the gRPC one, which
+// carries no SAN a browser would ever accept) as a downloadable file — this
+// endpoint changes nothing about how that certificate is generated, only
+// exposes it. application/x-x509-ca-cert is the MIME type Android's
+// browser/download manager recognises to offer "install this certificate"
+// directly.
 func serveCert(w http.ResponseWriter, r *http.Request) {
-	certPEM := pileus.CurrentCertPEM(managers.Settings.GetString)
+	certPEM := pileus.CurrentWebCertPEM(managers.Settings.GetString)
 	if certPEM == "" {
 		http.Error(w, "Nessun certificato disponibile: abilita prima l'HTTPS opzionale dalla dashboard.", http.StatusNotFound)
 		return
@@ -223,7 +227,7 @@ func serveCert(w http.ResponseWriter, r *http.Request) {
 // iOS recognises it and offers to install it, instead of just downloading
 // an opaque .crt file it wouldn't otherwise know what to do with.
 func serveCertMobileConfig(w http.ResponseWriter, r *http.Request) {
-	certPEM := pileus.CurrentCertPEM(managers.Settings.GetString)
+	certPEM := pileus.CurrentWebCertPEM(managers.Settings.GetString)
 	if certPEM == "" {
 		http.Error(w, "Nessun certificato disponibile: abilita prima l'HTTPS opzionale dalla dashboard.", http.StatusNotFound)
 		return

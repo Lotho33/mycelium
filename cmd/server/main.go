@@ -341,17 +341,22 @@ func main() {
 	// browser's PWA "Aggiungi a schermata Home" install prompt requires a
 	// secure context — Chrome/Android has no LAN exception — and until now
 	// the web bundle was only ever reachable over :8000 plain HTTP, so the
-	// prompt could never appear (reported 2026-09-18). Reuses the exact same
-	// self-signed cert as the gRPC port (GenerateOrLoadTLSCert is keyed by a
-	// fixed setting name, so a second call here returns the same persisted
-	// cert, not a new one) — one certificate to trust for the whole app, not
-	// two. A browser will still show its own "not secure"/self-signed
-	// interstitial on first visit; the user has to click through it once,
-	// same as accepting any self-signed cert.
+	// prompt could never appear (reported 2026-09-18).
+	//
+	// Uses its own certificate (GenerateOrLoadWebTLSCert), NOT the gRPC
+	// port's — this used to just call GenerateOrLoadTLSCert a second time
+	// and reuse that cert, which carries only DNSNames: ["localhost"] and so
+	// could never validate for the address a browser actually navigates to
+	// (an IP, or "<mdns_hostname>.local"): trusting it via /trust never
+	// helped, since SAN mismatch isn't something trusting the issuer bypasses.
+	// See pileus.GenerateOrLoadWebTLSCert's doc comment for the full
+	// reasoning. The hostname it's issued for is the exact same one
+	// api.MDNSHostname()/StartMDNS answers for below, so the cert and the
+	// name that actually resolves can never drift apart.
 	var httpsSrv *http.Server
 	if managers.Settings.GetString("server_https", "false") == "true" {
 		httpsPort := managers.Settings.GetString("server_https_port", "8443")
-		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.SaveInternal)
+		cert, err := pileus.GenerateOrLoadWebTLSCert(api.MDNSHostname(), managers.Settings.GetString, managers.Settings.SaveInternal)
 		if err != nil {
 			log.Printf("[server] HTTPS disabilitato: generazione certificato fallita: %v", err)
 		} else {

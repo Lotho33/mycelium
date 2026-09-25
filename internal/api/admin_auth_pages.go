@@ -110,11 +110,7 @@ func loginHTML(withErr bool) string {
 	return `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0d12">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Mycelium">
 <title>Mycelium — Accesso</title>
-<link rel="manifest" href="/admin/manifest.json">
-<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="icon" href="/static/icon-192.png">
 <style>
   *{box-sizing:border-box}
@@ -151,11 +147,6 @@ func loginHTML(withErr bool) string {
     <button type="submit">Accedi</button>
   </form>
 </div>
-<script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/admin/sw.js', { scope: '/admin/' }).catch(() => {});
-  }
-</script>
 </body></html>`
 }
 

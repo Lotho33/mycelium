@@ -1500,6 +1500,26 @@ async function checkCoreVersion() {
     const mdnsHost = document.getElementById('mdns-hostname');
     if (mdnsHost && document.activeElement !== mdnsHost) mdnsHost.value = d.mdns_hostname || 'mycelium';
 
+    // Tab Download (iOS/macOS): il link a /app/ deve puntare all'origine
+    // HTTPS giusta, non a "qualunque pagina l'admin stia guardando ora" — se
+    // questa dashboard è aperta in HTTP semplice, window.location.origin
+    // darebbe un link non installabile, esattamente il problema che l'HTTPS
+    // opzionale esiste per risolvere. Preferisce il nome mDNS (stabile,
+    // quello per cui il certificato in /trust è valido) quando è attivo;
+    // altrimenti l'hostname corrente va bene lo stesso — meglio di niente,
+    // ma senza mDNS resta legato all'IP. (Solo Pileus: la dashboard admin
+    // non punta più a diventare un'app installabile — resta un normale tab
+    // di browser, ci accede solo l'operatore.)
+    const warning = document.getElementById('download-https-warning');
+    if (warning) warning.classList.toggle('hidden', !!d.server_https);
+    let secureOrigin = window.location.origin;
+    if (d.server_https) {
+        const host = d.mdns_enabled ? (d.mdns_hostname || 'mycelium') + '.local' : window.location.hostname;
+        secureOrigin = `https://${host}:${d.server_https_port || '8443'}`;
+    }
+    const dlApp = document.getElementById('dl-app-link');
+    if (dlApp) { const u = secureOrigin + '/app/'; dlApp.href = u; dlApp.textContent = u; }
+
     // Versione del build web installato (version.json di data/pileus-web).
     const pwVer = document.getElementById('pileus-web-version');
     if (pwVer) {
@@ -1674,8 +1694,9 @@ window.onload = () => {
     loadPileusDevices();
     setInterval(checkCoreVersion, 3_600_000);
 
-    // Drawer: Esc closes it (mobile); full URL on the iOS-download link.
+    // Drawer: Esc closes it (mobile). The dl-app-link full URL itself is set
+    // by checkCoreVersion() above, which knows whether HTTPS/mDNS are on and
+    // can point at the right secure origin — not just whatever page happens
+    // to be open right now.
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
-    const dl = document.getElementById('dl-app-link');
-    if (dl) { const u = window.location.origin + '/app/'; dl.href = u; dl.textContent = u; }
 };

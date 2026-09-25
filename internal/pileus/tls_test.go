@@ -1,6 +1,26 @@
 package pileus
 
-import "testing"
+import (
+	"crypto/x509"
+	"testing"
+)
+
+func fakeSettingsStore() (get func(key, def string) string, save func(map[string]any) error, store map[string]string) {
+	store = map[string]string{}
+	get = func(key, def string) string {
+		if v, ok := store[key]; ok {
+			return v
+		}
+		return def
+	}
+	save = func(kv map[string]any) error {
+		for k, v := range kv {
+			store[k] = v.(string)
+		}
+		return nil
+	}
+	return get, save, store
+}
 
 func TestCurrentCertPEM_EmptyWhenNeverGenerated(t *testing.T) {
 	get := func(key, def string) string { return def }
@@ -60,5 +80,77 @@ func TestGenerateOrLoadTLSCert_RoundTripsThroughCurrentCertPEM(t *testing.T) {
 	}
 	if got := CurrentCertPEM(get); got != pem {
 		t.Fatalf("cert changed across a second GenerateOrLoadTLSCert call — this would break every already-paired client's TOFU pinning")
+	}
+}
+
+// TestGenerateOrLoadWebTLSCert_CoversTheConfiguredHostname is the actual bug
+// this function exists to fix: a browser rejects a certificate whose SAN
+// doesn't include the hostname it navigated to, and trusting the issuer (the
+// /trust flow) never bypasses that check. localhost alone (what the gRPC
+// cert this used to reuse carries) was never enough.
+func TestGenerateOrLoadWebTLSCert_CoversTheConfiguredHostname(t *testing.T) {
+	get, save, _ := fakeSettingsStore()
+
+	cert, err := GenerateOrLoadWebTLSCert("mycelium", get, save)
+	if err != nil {
+		t.Fatalf("GenerateOrLoadWebTLSCert: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parsing generated leaf: %v", err)
+	}
+	if !containsFold(leaf.DNSNames, "mycelium.local") {
+		t.Fatalf("DNSNames = %v, want it to include %q", leaf.DNSNames, "mycelium.local")
+	}
+	if !containsFold(leaf.DNSNames, "localhost") {
+		t.Fatalf("DNSNames = %v, want it to still include %q", leaf.DNSNames, "localhost")
+	}
+}
+
+// TestGenerateOrLoadWebTLSCert_StableAcrossRepeatedCalls: unlike the gRPC
+// cert, nothing pins this one's fingerprint, but it should still avoid
+// needlessly regenerating (and thus forcing every browser to re-trust it) on
+// every single call when the configured hostname hasn't changed.
+func TestGenerateOrLoadWebTLSCert_StableAcrossRepeatedCalls(t *testing.T) {
+	get, save, _ := fakeSettingsStore()
+
+	first, err := GenerateOrLoadWebTLSCert("mycelium", get, save)
+	if err != nil {
+		t.Fatalf("first GenerateOrLoadWebTLSCert: %v", err)
+	}
+	second, err := GenerateOrLoadWebTLSCert("mycelium", get, save)
+	if err != nil {
+		t.Fatalf("second GenerateOrLoadWebTLSCert: %v", err)
+	}
+	if CurrentWebCertPEM(get) == "" {
+		t.Fatal("CurrentWebCertPEM returned empty after generation")
+	}
+	if string(first.Certificate[0]) != string(second.Certificate[0]) {
+		t.Fatal("cert regenerated on a second call with the same hostname — should have reused the persisted one")
+	}
+}
+
+// TestGenerateOrLoadWebTLSCert_RegeneratesWhenHostnameChanges: an operator
+// renaming mdns_hostname must get a cert that actually covers the new name
+// on the next boot, not keep serving one valid only for the old one.
+func TestGenerateOrLoadWebTLSCert_RegeneratesWhenHostnameChanges(t *testing.T) {
+	get, save, _ := fakeSettingsStore()
+
+	if _, err := GenerateOrLoadWebTLSCert("mycelium", get, save); err != nil {
+		t.Fatalf("first GenerateOrLoadWebTLSCert: %v", err)
+	}
+	cert, err := GenerateOrLoadWebTLSCert("salotto", get, save)
+	if err != nil {
+		t.Fatalf("second GenerateOrLoadWebTLSCert (renamed): %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parsing regenerated leaf: %v", err)
+	}
+	if containsFold(leaf.DNSNames, "mycelium.local") {
+		t.Fatalf("DNSNames = %v, still covers the old hostname after a rename", leaf.DNSNames)
+	}
+	if !containsFold(leaf.DNSNames, "salotto.local") {
+		t.Fatalf("DNSNames = %v, want it to cover the new hostname %q", leaf.DNSNames, "salotto.local")
 	}
 }

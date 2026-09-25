@@ -69,44 +69,30 @@
         </p>
     </div>
 
-    <!-- Android -->
-    <div class="card rounded-2xl p-6 mb-6">
-        <h2 class="text-white font-semibold text-lg mb-5">Android</h2>
-        <div class="space-y-5">
-            <div class="flex items-start gap-4">
-                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
-                    <span class="text-white text-sm font-bold">1</span>
-                </div>
-                <div>
-                    <p class="text-white font-medium">
-                        Scarica il certificato:
-                        <a href="/cert" class="text-purple-400 underline">/cert</a>
-                    </p>
-                    <p class="text-gray-400 text-sm mt-1">
-                        Chrome dovrebbe proporre subito di installarlo. Se invece lo scarica soltanto,
-                        apri Impostazioni → Sicurezza → Crittografia e credenziali → Installa un
-                        certificato → CA, e scegli il file appena scaricato.
-                    </p>
-                </div>
-            </div>
-            <div class="flex items-start gap-4">
-                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
-                    <span class="text-white text-sm font-bold">2</span>
-                </div>
-                <div>
-                    <p class="text-white font-medium">Ricarica la pagina del server</p>
-                    <p class="text-gray-400 text-sm mt-1">
-                        Torna su questo indirizzo: l'avviso "non sicuro" dovrebbe sparire. Se
-                        l'installazione dell'app resta comunque bloccata anche dopo questo passaggio,
-                        l'unica soluzione affidabile è un dominio vero con un certificato riconosciuto
-                        (chiedi all'amministratore del server).
-                    </p>
-                </div>
-            </div>
-        </div>
+    <div class="rounded-2xl p-4 mb-6" style="background: rgba(124,106,247,0.08); border: 1px solid rgba(124,106,247,0.2);">
+        <p class="text-purple-300 text-sm">
+            Importante: il certificato è valido solo per questo indirizzo esatto, non per il
+            semplice IP del server (che può cambiare). Dopo averlo installato, apri sempre l'app
+            da qui:
+        </p>
+        <p class="text-white font-mono text-sm mt-2 break-all">{{.TrustURL}}</p>
+        <p class="text-gray-500 text-xs mt-2">
+            Se questo indirizzo non si apre affatto, il problema viene prima del certificato: il
+            tuo dispositivo non sta risolvendo "{{.FQDN}}" sulla rete locale — su iPhone, iPad e
+            Mac funziona da solo (Bonjour).
+        </p>
     </div>
 
-    <!-- iOS -->
+    <div class="rounded-2xl p-4 mb-6" style="background: rgba(16,163,74,0.08); border: 1px solid rgba(16,163,74,0.2);">
+        <p class="text-green-300 text-sm">
+            <strong>Questa pagina serve solo su iPhone, iPad e Mac.</strong> Sono gli unici sistemi
+            dove sia il nome ".local" sia la fiducia del certificato arrivano fino in fondo in modo
+            integrato, senza software aggiuntivo — su tutti gli altri sistemi l'app è già
+            disponibile per l'installazione diretta, nessun passaggio extra necessario.
+        </p>
+    </div>
+
+    <!-- iOS / iPadOS -->
     <div class="card rounded-2xl p-6 mb-6">
         <h2 class="text-white font-semibold text-lg mb-5">iPhone / iPad</h2>
         <div class="space-y-5">
@@ -134,7 +120,42 @@
                     <p class="text-gray-400 text-sm mt-1">
                         Passaggio a parte, obbligatorio: Impostazioni → Generale → Info →
                         Impostazioni attendibilità certificati, e attiva l'interruttore per
-                        "Mycelium". Apple non permette di farlo automaticamente dal profilo.
+                        "{{.FQDN}}". Apple non permette di farlo automaticamente dal profilo.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- macOS -->
+    <div class="card rounded-2xl p-6 mb-6">
+        <h2 class="text-white font-semibold text-lg mb-5">Mac</h2>
+        <div class="space-y-5">
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">1</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">
+                        Scarica il certificato:
+                        <a href="/cert" class="text-purple-400 underline">/cert</a>
+                    </p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        Si apre (o va aperto con doppio click) in Accesso Portachiavi.
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-start gap-4">
+                <div class="step-number rounded-full flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">2</span>
+                </div>
+                <div>
+                    <p class="text-white font-medium">Attiva la piena fiducia</p>
+                    <p class="text-gray-400 text-sm mt-1">
+                        In Accesso Portachiavi cerca "{{.FQDN}}" tra i certificati, aprilo con
+                        doppio click, apri la sezione "Attendibilità" e imposta "Quando si usa
+                        questo certificato" su "Attendi sempre". Chiudi la finestra e conferma con
+                        la password del Mac.
                     </p>
                 </div>
             </div>
