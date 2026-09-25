@@ -62,6 +62,17 @@ func (c *BrowserServiceClient) setAuth(req *http.Request) {
 	}
 }
 
+// ApplyAuth is setAuth for requests to the sidecar built outside this client
+// — the HLS proxy's /v1/fetch transport (internal/api/upstream_transport.go).
+// Without it that path never sent X-Api-Key, so turning on the sidecar's
+// api_key broke every proxied stream. Safe on a nil client (no sidecar
+// configured): it just adds nothing.
+func (c *BrowserServiceClient) ApplyAuth(req *http.Request) {
+	if c != nil {
+		c.setAuth(req)
+	}
+}
+
 // ConnectBrowserClient points BrowserClient at addr (the sidecar's HTTP
 // base URL). apiKey is sent as X-Api-Key on every request; leave it empty
 // if the sidecar has no API key configured (its auth middleware then

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mycelium/internal/core"
+	"mycelium/internal/managers"
 )
 
 // Upstream fetches (HLS playlists, segments, keys) are relayed by cobweb's
@@ -183,6 +184,7 @@ func (t *cobwebRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response,
 		return nil, err
 	}
 	fReq.Header.Set("Content-Type", "application/json")
+	managers.BrowserClient.ApplyAuth(fReq)
 
 	resp, err := cobwebFetchClient.Do(fReq)
 	if err != nil {

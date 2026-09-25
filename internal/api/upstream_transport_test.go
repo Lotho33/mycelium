@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"mycelium/internal/managers"
 )
 
 func TestProxyRequestsAreBodyless(t *testing.T) {
@@ -188,5 +190,35 @@ func TestCobwebRoundTripper_KeepsPinnedUA(t *testing.T) {
 	}
 	if _, leaked := hdrs[pinUAHeader]; leaked {
 		t.Errorf("internal marker leaked to cobweb: %v", hdrs)
+	}
+}
+
+// With the sidecar's api_key configured, /v1/fetch must carry X-Api-Key like
+// every other cobweb call — before, it didn't, so enabling the key broke all
+// proxied streams.
+func TestCobwebRoundTripper_SendsAPIKey(t *testing.T) {
+	var gotKey string
+	cobweb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+		w.WriteHeader(200)
+	}))
+	defer cobweb.Close()
+	t.Setenv("COBWEB_ADDR", cobweb.URL)
+
+	orig := managers.BrowserClient
+	t.Cleanup(func() { managers.BrowserClient = orig })
+	if err := managers.ConnectBrowserClient(cobweb.URL, "k3y"); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := &cobwebRoundTripper{}
+	req, _ := http.NewRequest(http.MethodGet, "https://cdn.example/seg/1.ts", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if gotKey != "k3y" {
+		t.Fatalf("X-Api-Key = %q, want k3y", gotKey)
 	}
 }
