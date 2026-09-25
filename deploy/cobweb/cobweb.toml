@@ -1,0 +1,28 @@
+# cobweb config for docker-compose.cobweb.yml (host networking, next to
+# mycelium). Full option reference: https://github.com/Lotho33/cobweb
+# (config.example.toml).
+
+[server]
+# Loopback only: with network_mode: host any other bind address would expose
+# cobweb's API (fetch/eval/jar) to the whole LAN. mycelium reaches it at
+# http://127.0.0.1:8191. If you set api_key here, set the same value as
+# COBWEB_API_KEY in mycelium's environment (.env).
+bind           = "127.0.0.1"
+port           = 8191
+browser_engine = "chromium"
+max_contexts   = 2
+
+[browser]
+no_sandbox = true    # Chromium's sandbox can't start inside most containers/CTs
+
+[jar]
+path = "/data/jar"
+
+[egress.direct]
+proxy = ""
+
+[settings]
+state_path = "/data/settings.json"
+
+[log]
+level = "info"

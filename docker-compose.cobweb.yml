@@ -1,0 +1,38 @@
+# Optional overlay: runs cobweb (https://github.com/Lotho33/cobweb — the
+# headless-browser fetch sidecar, public image) next to mycelium and wires it
+# in. Most content plugins need it (browser sniff, upstream fetch relay).
+#
+#   COMPOSE_FILE=docker-compose.prod.yml:docker-compose.cobweb.yml   (in .env)
+#   docker compose up -d
+#
+# See docs/deploy-selfhosted.md.
+
+services:
+  cobweb:
+    image: ${COBWEB_IMAGE:-ghcr.io/lotho33/cobweb}:${COBWEB_TAG:-latest}
+    container_name: cobweb
+    restart: unless-stopped
+    # Same network namespace as mycelium: reachable on 127.0.0.1:8191 only
+    # (deploy/cobweb/cobweb.toml binds loopback).
+    network_mode: host
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    mem_limit: 2048m
+    memswap_limit: 2048m
+    volumes:
+      - ./data/cobweb:/data
+      - ./deploy/cobweb/cobweb.toml:/config/config.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8191' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+
+  mycelium:
+    depends_on:
+      cobweb:
+        condition: service_healthy
+    environment:
+      - COBWEB_ADDR=http://127.0.0.1:8191
+      - COBWEB_API_KEY=${COBWEB_API_KEY:-}

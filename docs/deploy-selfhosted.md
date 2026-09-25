@@ -44,24 +44,32 @@ so the build needs only this one repo — no sibling checkout.
 
 ## Server setup
 
+Everything comes from this repo; the images (mycelium, cobweb) are public, so
+no registry login is needed. On a fresh Debian host / Proxmox CT with Docker
+and the compose plugin installed (for an LXC CT: unprivileged, features
+`nesting=1,keyctl=1`):
+
 ```bash
-mkdir -p ~/mycelium && cd ~/mycelium
-docker login <your-registry>          # credentials Watchtower reuses
+apt install -y git
+git clone --depth 1 https://github.com/Lotho33/mycelium /opt/mycelium
+cd /opt/mycelium
+cp deploy/stack.env.example .env       # COMPOSE_FILE = prod + cobweb overlay
 
-# copy next to the compose file:
-#   docker-compose.prod.yml
-#   cobweb.toml
-mkdir -p data
+# Watchtower mounts ~/.docker/config.json: it must exist as a FILE before the
+# first `up`, or Docker creates a directory there and Watchtower breaks.
+mkdir -p ~/.docker && [ -f ~/.docker/config.json ] || echo '{}' > ~/.docker/config.json
 
-docker compose -f docker-compose.prod.yml up -d --remove-orphans
+mkdir -p data/cobweb
+docker compose up -d
 ```
 
-Bundled plugins ship inside the image; the entrypoint syncs them into the
-`mycelium_plugins` volume on every start (`MYCELIUM_PLUGIN_SYNC=1`), so a
-Watchtower update also delivers plugin changes — no `git pull` on the server.
-The volume keeps dashboard-uploaded plugins and per-plugin caches across
-updates. A plugin **dropped** from a release stays in the volume; remove it once
-with `docker compose exec mycelium rm -rf plugins/<id>`.
+What runs: `mycelium`, `redis`, `cobweb` (`docker-compose.cobweb.yml`, config
+in `deploy/cobweb/cobweb.toml`, loopback-only) and `watchtower`, which pulls
+new mycelium/cobweb images on its own. To pick up changes to the compose
+files themselves: `git pull && docker compose up -d`.
+
+Then open `http://<server-ip>:8000/setup` from the LAN (or your tailnet) to
+set the admin password, and install plugins from the dashboard.
 
 ### Networking
 
@@ -74,7 +82,7 @@ LAN-reachable address.
 ### Checks
 
 ```bash
-docker compose -f docker-compose.prod.yml ps      # all "healthy"
+docker compose ps                                  # all "healthy"
 curl -s localhost:8000/health                      # mycelium
 curl -s localhost:8191/health                      # cobweb
 docker logs -f watchtower
@@ -94,14 +102,14 @@ mycelium`. Reverse both to resume auto-update.
 
 ## VPN / egress
 
-`microwarp` (Cloudflare WARP egress) starts with the stack. It is available but
-never forced — each plugin picks its exit in the dashboard under **Settings →
-VPN → Network exits** (`Direct` is the default). Disable it with
-`docker compose -f docker-compose.prod.yml up -d --scale microwarp=0`.
+The public stack has no VPN egress container: every plugin marked
+`direct_egress: true` goes out directly, and `VPN_PROXY_URL` is left empty in
+`deploy/stack.env.example`. Point it at a SOCKS5 proxy only if you run one.
 
-For a generic WireGuard exit, drop a `.conf` onto the "Network exits" page —
-mycelium launches its own bundled `wireproxy` binary as a plain child process
-(userspace, no `cap_add`, no container, no Docker socket involved).
+For a WireGuard exit, drop a `.conf` onto the dashboard's "Network exits"
+page — mycelium launches its own bundled `wireproxy` binary as a plain child
+process (userspace, no `cap_add`, no `/dev/net/tun`, no Docker socket), then
+pick it per plugin.
 
 ## Notes
 

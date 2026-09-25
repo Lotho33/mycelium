@@ -64,7 +64,7 @@ Docker (below) is the only supported way to run mycelium; `go run` is meant
 for development.
 
 ```bash
-git clone https://github.com/Lotho33/mycelium-core
+git clone https://github.com/Lotho33/mycelium mycelium-core
 cd mycelium-core
 go run ./cmd/server
 ```

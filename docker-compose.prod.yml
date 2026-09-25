@@ -114,7 +114,7 @@ services:
       # some CDNs reject; the same fetch over its clean public IPv6 goes
       # through. Drop this line on a deployment with a clean dedicated IPv4 /
       # no IPv6.
-      - MYCELIUM_EGRESS_IPV6=1
+      - MYCELIUM_EGRESS_IPV6=${MYCELIUM_EGRESS_IPV6:-1}
       - TZ=Europe/Rome
       - GOMEMLIMIT=600MiB
     healthcheck:
