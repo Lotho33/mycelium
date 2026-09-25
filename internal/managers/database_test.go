@@ -239,6 +239,66 @@ func TestUpsertProgress_RollsBackOnInsertFailure(t *testing.T) {
 	}
 }
 
+// --- Server-observed position snapshot (StreamSession.RecordFetch) -------
+
+// TestUpdateProgressPosition_NeverCreatesARow is the regression test for the
+// blank "ghost" Continue Watching card: a segment-fetch snapshot for an id
+// with no existing row (e.g. the resolved stream id diverged from the id the
+// client's own UpdateProgress heartbeat used) must be a silent no-op, never
+// an insert.
+func TestUpdateProgressPosition_NeverCreatesARow(t *testing.T) {
+	db := newTestDB(t, "")
+	m := NewDBManager(db)
+
+	if err := m.UpdateProgressPosition("client1", "prov1", "ghost-id", 50, 1000); err != nil {
+		t.Fatalf("UpdateProgressPosition: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM watch_history WHERE client_id='client1' AND provider_id='prov1' AND playable_id='ghost-id'`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("want no row created for an id with no existing entry, got %d", count)
+	}
+}
+
+// TestUpdateProgressPosition_UpdatesPositionOnly verifies it refines an
+// existing row's position/is_completed without touching (or being able to
+// touch) title/poster/plot/parent_id — those stay whatever the client's own
+// UpdateProgress last set.
+func TestUpdateProgressPosition_UpdatesPositionOnly(t *testing.T) {
+	db := newTestDB(t, "")
+	m := NewDBManager(db)
+
+	const clientID, providerID, parentID = "client1", "prov1", "series1"
+	if err := m.UpsertProgress(clientID, providerID, "ep1", parentID, "Series", "Ep1", "poster1", 100, 1000, 4.5, []string{"Drama"}, "The plot.", 2024); err != nil {
+		t.Fatalf("seed UpsertProgress: %v", err)
+	}
+
+	if err := m.UpdateProgressPosition(clientID, providerID, "ep1", 950, 1000); err != nil {
+		t.Fatalf("UpdateProgressPosition: %v", err)
+	}
+
+	var title, poster, plot, pid string
+	var progress float64
+	var completed bool
+	err := db.QueryRow(`SELECT title, poster, plot, parent_id, progress_time, is_completed FROM watch_history WHERE client_id=? AND provider_id=? AND playable_id=?`,
+		clientID, providerID, "ep1").Scan(&title, &poster, &plot, &pid, &progress, &completed)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if title != "Ep1" || poster != "poster1" || plot != "The plot." || pid != parentID {
+		t.Fatalf("metadata must be untouched, got title=%q poster=%q plot=%q parent_id=%q", title, poster, plot, pid)
+	}
+	if progress != 950 {
+		t.Fatalf("want progress_time updated to 950, got %v", progress)
+	}
+	if !completed {
+		t.Fatalf("want is_completed=true at 95%% progress")
+	}
+}
+
 // --- Continue-watching logo (background fetch gate + write) --------------
 
 func TestNeedsLogo_TrueWhenEmptyFalseOnceSet(t *testing.T) {

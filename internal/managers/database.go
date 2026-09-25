@@ -374,6 +374,41 @@ func (m *DBManager) UpdateWatchHistoryLogo(t WatchHistoryLogoTarget, logoURL str
 	return err
 }
 
+// UpdateProgressPosition refines an *existing* watch_history row's position
+// from server-observed activity (currently: segment fetches, see
+// StreamSession.RecordFetch) — a plain UPDATE, never an INSERT. It must not
+// be able to create a row: the caller has no title/poster/plot/parent_id to
+// give one (those only ever come from the client's own explicit
+// UpdateProgress), and this is keyed by whatever id the *stream* resolved to
+// rather than the id the client's own progress calls use — the two aren't
+// guaranteed to match (a plugin can hand out a different id per source
+// variant of the same episode). Before this existed, RecordFetch called the
+// same UpsertProgress the client's own heartbeat uses, which — on exactly
+// that id mismatch — inserted a brand new row with every metadata field
+// empty: a permanent blank "ghost" card in Continue Watching alongside the
+// real one, since its own parent_id was also always empty and so never
+// matched (and was never targeted by) the parent_id-based sibling cleanup
+// either. A no-op UPDATE when there's no matching row is the correct
+// behaviour here: the real row (if any) was or will be created by the
+// client's own call.
+func (m *DBManager) UpdateProgressPosition(clientID, providerID, playableID string, currentTime, totalTime float64) error {
+	isCompleted := 0
+	if totalTime > 0 && (currentTime/totalTime) > 0.90 {
+		isCompleted = 1
+	}
+	_, err := m.db.Exec(`
+		UPDATE watch_history SET
+			progress_time = ?,
+			total_time    = CASE WHEN ? > 0 THEN ? ELSE total_time END,
+			is_completed  = ?,
+			last_updated  = CURRENT_TIMESTAMP
+		WHERE client_id = ? AND provider_id = ? AND playable_id = ?`,
+		currentTime, totalTime, totalTime, isCompleted,
+		clientID, providerID, playableID,
+	)
+	return err
+}
+
 // DeleteProgress removes a single watch_history entry for a client.
 func (m *DBManager) DeleteProgress(clientID, providerID, playableID string) error {
 	_, err := m.db.Exec(

@@ -71,7 +71,6 @@ type StreamSession struct {
 	UserID   string
 	PluginID string
 	SourceID string
-	ParentID string
 	IsLive   bool
 	TotalSec float64 // 0 se non noto (live o non sondato)
 
@@ -111,17 +110,22 @@ func (s *StreamSession) RecordFetch() {
 		return
 	}
 	snap := struct {
-		userID, pluginID, sourceID, parentID string
-		pos, total                           float64
-	}{s.UserID, s.PluginID, s.SourceID, s.ParentID, pos, s.TotalSec}
+		userID, pluginID, sourceID string
+		pos, total                 float64
+	}{s.UserID, s.PluginID, s.SourceID, pos, s.TotalSec}
 	s.mu.Unlock()
 
+	// UpdateProgressPosition, not UpsertProgress: this snapshot has no
+	// metadata (title/poster/plot/parent_id) to give a row, and SourceID is
+	// the *resolved stream* id, which isn't guaranteed to be the same id the
+	// client's own UpdateProgress heartbeat uses for this episode (a plugin
+	// can hand out a different id per source variant). Upserting here used
+	// to create a permanent blank "ghost" Continue Watching card whenever
+	// those ids diverged. See UpdateProgressPosition's doc comment.
 	core.SafeGo("stream/progress-snapshot", func() {
-		if err := DB.UpsertProgress(
+		if err := DB.UpdateProgressPosition(
 			snap.userID, snap.pluginID, snap.sourceID,
-			snap.parentID, "", "", "",
 			snap.pos, snap.total,
-			0, nil, "", 0,
 		); err != nil {
 			log.Printf("[stream/progress] %v", err)
 		}
