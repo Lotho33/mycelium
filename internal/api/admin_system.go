@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -32,6 +33,10 @@ func saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err := managers.Settings.Save(payload); err != nil {
 		http.Error(w, "Errore salvataggio", http.StatusInternalServerError)
 		return
+	}
+	if v, ok := payload["egress_ipv6"]; ok {
+		// Live: the next dial already uses the new family order.
+		core.SetEgressPreferIPv6(core.ParseBoolish(fmt.Sprint(v)))
 	}
 	if _, ok := payload["http_profile"]; ok {
 		// Rebuild the HLS-proxy upstream clients so the new profile applies
@@ -251,6 +256,9 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		// precompilare il campo e abilitare/disabilitare il bottone di
 		// aggiornamento senza un endpoint GET dedicato.
 		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", "Lotho33/pileus"),
+		// Preferenza IPv6 nelle connessioni dirette di mycelium (vedi
+		// core.egressPreferIPv6), modificabile dalla scheda Rete.
+		"egress_ipv6": core.EgressPreferIPv6(),
 		// Versione del build web di Pileus attualmente installato in
 		// data/pileus-web (dal suo version.json): "" = nessun build installato
 		// o file illeggibile.

@@ -363,13 +363,24 @@
         <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Rete</h2>
         <div class="space-y-4 max-w-2xl">
 
+            <!-- Preferenza IPv6 (core.SetEgressPreferIPv6) -->
+            <div class="card border rounded-xl p-4">
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" id="egress-ipv6" onchange="saveEgressIPv6(this)" class="mt-0.5 accent-sky-600">
+                    <span>
+                        <span class="text-sm font-semibold text-white">Preferisci IPv6 in uscita</span>
+                        <span class="block text-[11px] text-gray-600 mt-1">Le connessioni che mycelium apre direttamente verso i siti provano prima IPv6, poi IPv4. Utile solo se il server ha un IPv6 pubblico funzionante e l'IPv4 è condiviso (CGNAT) o bloccato da qualche CDN. Se il server non ha IPv6 lascialo spento. Non riguarda il traffico che passa da cobweb.</span>
+                    </span>
+                </label>
+            </div>
+
             <!-- Uscite di rete (egress registry) -->
             <div class="card border rounded-xl p-4">
                 <div class="flex items-center gap-2 mb-2 flex-wrap">
                     <span class="text-sm font-semibold text-white">Uscite di rete</span>
                     <button onclick="loadEgress()" class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Aggiorna</button>
                 </div>
-                <p class="text-[11px] text-gray-600 mb-3">Ogni plugin sceglie da quale uscita passa il suo flusso video (scheda <b>Plugin</b>). <b>Diretta</b> = IP del server. <b>warp</b> = tunnel Cloudflare WARP (container microwarp). Puoi aggiungere altri proxy SOCKS5/HTTP e attivarli/disattivarli senza toccare i plugin.</p>
+                <p class="text-[11px] text-gray-600 mb-3">Ogni plugin sceglie da quale uscita passa il suo flusso video (scheda <b>Plugin</b>). <b>Diretta</b> = IP del server. Puoi aggiungere proxy SOCKS5/HTTP o configurazioni WireGuard e attivarli/disattivarli senza toccare i plugin.</p>
                 <div id="egress-list" class="space-y-2 text-xs text-gray-500">Caricamento…</div>
                 <form onsubmit="addEgress(event)" class="mt-3 flex flex-wrap gap-2">
                     <input id="egress-name" placeholder="nome (es. hetzner)" required
@@ -381,7 +392,7 @@
 
                 <!-- WireGuard drag-and-drop (Fase B) -->
                 <div class="mt-3 pt-3 border-t border-gray-800/70">
-                    <p class="text-[11px] text-gray-600 mb-2">Oppure trascina una <b>configurazione WireGuard</b> (<code>.conf</code> di Mullvad, Proton, un peer tuo…): mycelium la salva e avvia un container <code>wireproxy-&lt;nome&gt;</code> dedicato. Puoi caricarne quante ne vuoi — dai un nome diverso a ognuna.</p>
+                    <p class="text-[11px] text-gray-600 mb-2">Oppure trascina una <b>configurazione WireGuard</b> (<code>.conf</code> di Mullvad, Proton, un peer tuo…): mycelium la salva e avvia un processo <code>wireproxy</code> dedicato. Puoi caricarne quante ne vuoi — dai un nome diverso a ognuna.</p>
                     <div class="flex flex-wrap gap-2 items-center">
                         <input id="wg-name" placeholder="nome (es. mullvad)" value="wg"
                             class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 w-32">

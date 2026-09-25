@@ -1486,6 +1486,9 @@ async function checkCoreVersion() {
     if (repoInput && document.activeElement !== repoInput) repoInput.value = d.pileus_web_repo || '';
     const pwBtn = document.getElementById('pileus-web-update-btn');
     if (pwBtn) pwBtn.disabled = !d.pileus_web_repo;
+    const ipv6 = document.getElementById('egress-ipv6');
+    if (ipv6 && typeof d.egress_ipv6 === 'boolean') ipv6.checked = d.egress_ipv6;
+
     // Versione del build web installato (version.json di data/pileus-web).
     const pwVer = document.getElementById('pileus-web-version');
     if (pwVer) {
@@ -1571,6 +1574,21 @@ async function updatePileusWebApp(force) {
     } else {
         showToast(d.detail || 'Errore aggiornamento.', 'error');
         if (status) status.textContent = d.detail || 'Errore aggiornamento.';
+    }
+}
+
+// Rete → "Preferisci IPv6 in uscita": salvato come setting, applicato a caldo.
+async function saveEgressIPv6(cb) {
+    const r = await apiFetch('/admin/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ egress_ipv6: cb.checked ? '1' : '0' }),
+    });
+    if (r?.ok) {
+        showToast(cb.checked ? 'IPv6 preferito in uscita.' : 'IPv4 preferito in uscita.', 'success');
+    } else {
+        cb.checked = !cb.checked;
+        showToast('Salvataggio non riuscito.', 'error');
     }
 }
 

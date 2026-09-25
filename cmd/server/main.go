@@ -140,6 +140,10 @@ func main() {
 	log.Println("[server] avvio...")
 
 	managers.Settings.Load()
+	// Dashboard setting (Rete → IPv6) wins over MYCELIUM_EGRESS_IPV6 once saved.
+	if v := managers.Settings.GetString("egress_ipv6", ""); v != "" {
+		core.SetEgressPreferIPv6(core.ParseBoolish(v))
+	}
 
 	if err := managers.InitDB(); err != nil {
 		log.Fatalf("[server] DB init failed: %v", err)

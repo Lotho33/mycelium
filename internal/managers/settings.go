@@ -133,6 +133,7 @@ var (
 		"http_profile",    // profilo fetch upstream: "standard" (default, net/http) | "browser" (profilo TLS/H2 mainstream per compatibilità CDN)
 		"prebuffer_",      // pre-buffer del flusso HLS: prebuffer_enabled / _segments_vod / _segments_live / _max_wait_ms / _max_bytes
 		"egress_profiles", // JSON: registry delle uscite di rete (vedi egress.go)
+		"egress_ipv6",     // "1"/"0": preferisci IPv6 nelle connessioni dirette (core.SetEgressPreferIPv6)
 	}
 	allowedPrefixesMu sync.RWMutex
 

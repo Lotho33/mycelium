@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,18 +37,40 @@ const (
 )
 
 // egressPreferIPv6 reports whether upstream CDN fetches should resolve+dial
-// AAAA first (with A fallback). Set MYCELIUM_EGRESS_IPV6=1 where the box's IPv4
-// egress is CGNAT'd / on a shared address range with a poor reputation but it
-// has a clean public IPv6 (a common home-server / Proxmox-CT situation): some
-// CDNs reject requests from the shared IPv4 while the same request over the
-// dedicated IPv6 goes through.
-var egressPreferIPv6 = sync.OnceValue(func() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MYCELIUM_EGRESS_IPV6"))) {
+// AAAA first (with A fallback). Useful where the box's IPv4 egress is CGNAT'd
+// / on a shared address range with a poor reputation but it has a clean
+// public IPv6 (a common home-server / Proxmox-CT situation): some CDNs reject
+// requests from the shared IPv4 while the same request over the dedicated
+// IPv6 goes through. Only affects connections mycelium dials itself (the
+// HLS relay through the browser sidecar resolves on its own).
+//
+// Initial value from MYCELIUM_EGRESS_IPV6; the dashboard setting
+// (egress_ipv6, applied via SetEgressPreferIPv6) overrides it live.
+func egressPreferIPv6() bool { return preferIPv6.Load() }
+
+var preferIPv6 = func() *atomic.Bool {
+	b := new(atomic.Bool)
+	b.Store(parseBoolish(os.Getenv("MYCELIUM_EGRESS_IPV6")))
+	return b
+}()
+
+// SetEgressPreferIPv6 switches the dial family preference at runtime.
+func SetEgressPreferIPv6(v bool) { preferIPv6.Store(v) }
+
+// EgressPreferIPv6 reports the current dial family preference.
+func EgressPreferIPv6() bool { return preferIPv6.Load() }
+
+// parseBoolish reads "1"/"true"/"yes"/"on" (any case) as true.
+func parseBoolish(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "1", "true", "yes", "on":
 		return true
 	}
 	return false
-})
+}
+
+// ParseBoolish is parseBoolish for callers outside core (settings values).
+func ParseBoolish(s string) bool { return parseBoolish(s) }
 
 // lookupHostCF resolves host via raw DNS UDP queries to Cloudflare/Google/Quad9.
 // It never falls back to the OS resolver, so Starlink IPv6 DNS is never consulted.
