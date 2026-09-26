@@ -82,7 +82,7 @@ func MDNSHostname() string {
 // server_https, applying a change needs a restart, since the socket is
 // opened at boot.
 func StartMDNS() {
-	if !core.ParseBoolish(managers.Settings.GetString("mdns_enabled", "true")) {
+	if !managers.Settings.GetBool("mdns_enabled", true) {
 		log.Printf("[mdns] disattivato da impostazioni")
 		return
 	}

@@ -236,6 +236,24 @@ func (s *SettingsManager) GetString(key string, def string) string {
 	return def
 }
 
+// GetBool reads a boolean-ish setting through core.ParseBoolish ("1"/"true"/
+// "yes"/"on", case-insensitive, mean true; anything else — including unset —
+// falls back to def). Exists because every boolean setting used to be read
+// ad hoc via GetString(key, "false") == "true", a literal string comparison
+// that silently never matches "1" — exactly what the dashboard's checkbox
+// pattern (egress_ipv6, server_https, mdns_enabled, …) actually writes. That
+// mismatch shipped as a real bug twice in the same day (server_https simply
+// never turning the HTTPS listener on, 2026-09-26) before this existed. Any
+// new boolean setting should go through this rather than reintroducing the
+// same ad hoc comparison.
+func (s *SettingsManager) GetBool(key string, def bool) bool {
+	raw := s.GetString(key, "")
+	if raw == "" {
+		return def
+	}
+	return core.ParseBoolish(raw)
+}
+
 func (s *SettingsManager) MasterAdminHash() string {
 	return s.GetString("master_admin_hash", "")
 }

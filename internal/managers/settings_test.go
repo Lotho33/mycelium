@@ -98,6 +98,49 @@ func TestSaveInternal_BypassesAllowlist(t *testing.T) {
 	}
 }
 
+// TestGetBool_AcceptsTheDashboardCheckboxConvention is the regression this
+// helper exists for: a dashboard checkbox (egress_ipv6, server_https,
+// mdns_enabled, …) writes "1"/"0" via Save, but a raw
+// GetString(key, "false") == "true" comparison — how every boolean setting
+// used to be read — never matches "1". That mismatch shipped as a real bug
+// (server_https's HTTPS listener silently never starting) before GetBool
+// existed.
+func TestGetBool_AcceptsTheDashboardCheckboxConvention(t *testing.T) {
+	withTempSettings(t)
+
+	if err := Settings.SaveInternal(map[string]any{"some_flag": "1"}); err != nil {
+		t.Fatalf("SaveInternal: %v", err)
+	}
+	if !Settings.GetBool("some_flag", false) {
+		t.Fatal(`GetBool must treat "1" (the dashboard checkbox convention) as true`)
+	}
+
+	if err := Settings.SaveInternal(map[string]any{"some_flag": "0"}); err != nil {
+		t.Fatalf("SaveInternal: %v", err)
+	}
+	if Settings.GetBool("some_flag", true) {
+		t.Fatal(`GetBool must treat "0" as false even when def is true`)
+	}
+
+	if err := Settings.SaveInternal(map[string]any{"legacy_flag": "true"}); err != nil {
+		t.Fatalf("SaveInternal: %v", err)
+	}
+	if !Settings.GetBool("legacy_flag", false) {
+		t.Fatal(`GetBool must still accept the literal "true" (env-var/legacy convention)`)
+	}
+}
+
+func TestGetBool_FallsBackToDefaultWhenUnset(t *testing.T) {
+	withTempSettings(t)
+
+	if !Settings.GetBool("never_set", true) {
+		t.Fatal("GetBool must return def=true for a key that was never set")
+	}
+	if Settings.GetBool("never_set", false) {
+		t.Fatal("GetBool must return def=false for a key that was never set")
+	}
+}
+
 func TestResetAll_ClearsFileAndInMemoryData(t *testing.T) {
 	withTempSettings(t)
 

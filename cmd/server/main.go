@@ -227,7 +227,7 @@ func main() {
 	// per chi deve tornare temporaneamente al comportamento in chiaro
 	// legacy (client più vecchi, debug di rete).
 	var tlsCert *tls.Certificate
-	if managers.Settings.GetString("pileus_grpc_tls", "true") == "true" {
+	if managers.Settings.GetBool("pileus_grpc_tls", true) {
 		cert, err := pileus.GenerateOrLoadTLSCert(managers.Settings.GetString, managers.Settings.SaveInternal)
 		if err != nil {
 			log.Printf("[server] generazione certificato TLS gRPC fallita, si prosegue in chiaro: %v", err)
@@ -354,7 +354,7 @@ func main() {
 	// api.MDNSHostname()/StartMDNS answers for below, so the cert and the
 	// name that actually resolves can never drift apart.
 	var httpsSrv *http.Server
-	if managers.Settings.GetString("server_https", "false") == "true" {
+	if managers.Settings.GetBool("server_https", false) {
 		httpsPort := managers.Settings.GetString("server_https_port", "8443")
 		cert, err := pileus.GenerateOrLoadWebTLSCert(api.MDNSHostname(), managers.Settings.GetString, managers.Settings.SaveInternal)
 		if err != nil {
