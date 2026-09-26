@@ -821,6 +821,93 @@ func (x *RenameDeviceResponse) GetOk() bool {
 	return false
 }
 
+// UnpairSelf lets a device deregister itself (e.g. "Cambia server" in
+// Pileus) instead of lingering forever in mycelium's device list until an
+// admin removes it by hand. No device_id field on purpose - like
+// RenameDevice, this always acts on the caller's own JWT-derived identity,
+// never an id supplied in the request, so a device can never unpair another
+// one. Profiles are untouched (device_id there is audit-only); if the
+// device ever comes back with a valid pairing code it just re-registers.
+type UnpairSelfRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnpairSelfRequest) Reset() {
+	*x = UnpairSelfRequest{}
+	mi := &file_auth_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnpairSelfRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnpairSelfRequest) ProtoMessage() {}
+
+func (x *UnpairSelfRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnpairSelfRequest.ProtoReflect.Descriptor instead.
+func (*UnpairSelfRequest) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{16}
+}
+
+type UnpairSelfResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnpairSelfResponse) Reset() {
+	*x = UnpairSelfResponse{}
+	mi := &file_auth_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnpairSelfResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnpairSelfResponse) ProtoMessage() {}
+
+func (x *UnpairSelfResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnpairSelfResponse.ProtoReflect.Descriptor instead.
+func (*UnpairSelfResponse) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *UnpairSelfResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 var File_auth_proto protoreflect.FileDescriptor
 
 const file_auth_proto_rawDesc = "" +
@@ -881,7 +968,10 @@ const file_auth_proto_rawDesc = "" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\"&\n" +
 	"\x14RenameDeviceResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xe7\x05\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x13\n" +
+	"\x11UnpairSelfRequest\"$\n" +
+	"\x12UnpairSelfResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xb0\x06\n" +
 	"\vAuthService\x12V\n" +
 	"\x0fAuthorizeDevice\x12 .mycelium.AuthorizeDeviceRequest\x1a!.mycelium.AuthorizeDeviceResponse\x12J\n" +
 	"\rCreateProfile\x12\x1e.mycelium.CreateProfileRequest\x1a\x19.mycelium.ProfileResponse\x12M\n" +
@@ -889,7 +979,9 @@ const file_auth_proto_rawDesc = "" +
 	"\rDeleteProfile\x12\x1e.mycelium.DeleteProfileRequest\x1a\x1f.mycelium.DeleteProfileResponse\x12J\n" +
 	"\rUpdateProfile\x12\x1e.mycelium.UpdateProfileRequest\x1a\x19.mycelium.ProfileResponse\x12Z\n" +
 	"\x15SetProfilePreferences\x12&.mycelium.SetProfilePreferencesRequest\x1a\x19.mycelium.ProfileResponse\x12P\n" +
-	"\fRefreshToken\x12\x1d.mycelium.RefreshTokenRequest\x1a!.mycelium.AuthorizeDeviceResponse\x12J\n" +
+	"\fRefreshToken\x12\x1d.mycelium.RefreshTokenRequest\x1a!.mycelium.AuthorizeDeviceResponse\x12G\n" +
+	"\n" +
+	"UnpairSelf\x12\x1b.mycelium.UnpairSelfRequest\x1a\x1c.mycelium.UnpairSelfResponse\x12J\n" +
 	"\vListDevices\x12\x1c.mycelium.ListDevicesRequest\x1a\x1d.mycelium.ListDevicesResponse\x12M\n" +
 	"\fRenameDevice\x12\x1d.mycelium.RenameDeviceRequest\x1a\x1e.mycelium.RenameDeviceResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
 
@@ -905,7 +997,7 @@ func file_auth_proto_rawDescGZIP() []byte {
 	return file_auth_proto_rawDescData
 }
 
-var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_auth_proto_goTypes = []any{
 	(*AuthorizeDeviceRequest)(nil),       // 0: mycelium.AuthorizeDeviceRequest
 	(*AuthorizeDeviceResponse)(nil),      // 1: mycelium.AuthorizeDeviceResponse
@@ -923,6 +1015,8 @@ var file_auth_proto_goTypes = []any{
 	(*ListDevicesResponse)(nil),          // 13: mycelium.ListDevicesResponse
 	(*RenameDeviceRequest)(nil),          // 14: mycelium.RenameDeviceRequest
 	(*RenameDeviceResponse)(nil),         // 15: mycelium.RenameDeviceResponse
+	(*UnpairSelfRequest)(nil),            // 16: mycelium.UnpairSelfRequest
+	(*UnpairSelfResponse)(nil),           // 17: mycelium.UnpairSelfResponse
 }
 var file_auth_proto_depIdxs = []int32{
 	3,  // 0: mycelium.ListProfilesResponse.profiles:type_name -> mycelium.ProfileResponse
@@ -934,19 +1028,21 @@ var file_auth_proto_depIdxs = []int32{
 	8,  // 6: mycelium.AuthService.UpdateProfile:input_type -> mycelium.UpdateProfileRequest
 	9,  // 7: mycelium.AuthService.SetProfilePreferences:input_type -> mycelium.SetProfilePreferencesRequest
 	10, // 8: mycelium.AuthService.RefreshToken:input_type -> mycelium.RefreshTokenRequest
-	12, // 9: mycelium.AuthService.ListDevices:input_type -> mycelium.ListDevicesRequest
-	14, // 10: mycelium.AuthService.RenameDevice:input_type -> mycelium.RenameDeviceRequest
-	1,  // 11: mycelium.AuthService.AuthorizeDevice:output_type -> mycelium.AuthorizeDeviceResponse
-	3,  // 12: mycelium.AuthService.CreateProfile:output_type -> mycelium.ProfileResponse
-	5,  // 13: mycelium.AuthService.ListProfiles:output_type -> mycelium.ListProfilesResponse
-	7,  // 14: mycelium.AuthService.DeleteProfile:output_type -> mycelium.DeleteProfileResponse
-	3,  // 15: mycelium.AuthService.UpdateProfile:output_type -> mycelium.ProfileResponse
-	3,  // 16: mycelium.AuthService.SetProfilePreferences:output_type -> mycelium.ProfileResponse
-	1,  // 17: mycelium.AuthService.RefreshToken:output_type -> mycelium.AuthorizeDeviceResponse
-	13, // 18: mycelium.AuthService.ListDevices:output_type -> mycelium.ListDevicesResponse
-	15, // 19: mycelium.AuthService.RenameDevice:output_type -> mycelium.RenameDeviceResponse
-	11, // [11:20] is the sub-list for method output_type
-	2,  // [2:11] is the sub-list for method input_type
+	16, // 9: mycelium.AuthService.UnpairSelf:input_type -> mycelium.UnpairSelfRequest
+	12, // 10: mycelium.AuthService.ListDevices:input_type -> mycelium.ListDevicesRequest
+	14, // 11: mycelium.AuthService.RenameDevice:input_type -> mycelium.RenameDeviceRequest
+	1,  // 12: mycelium.AuthService.AuthorizeDevice:output_type -> mycelium.AuthorizeDeviceResponse
+	3,  // 13: mycelium.AuthService.CreateProfile:output_type -> mycelium.ProfileResponse
+	5,  // 14: mycelium.AuthService.ListProfiles:output_type -> mycelium.ListProfilesResponse
+	7,  // 15: mycelium.AuthService.DeleteProfile:output_type -> mycelium.DeleteProfileResponse
+	3,  // 16: mycelium.AuthService.UpdateProfile:output_type -> mycelium.ProfileResponse
+	3,  // 17: mycelium.AuthService.SetProfilePreferences:output_type -> mycelium.ProfileResponse
+	1,  // 18: mycelium.AuthService.RefreshToken:output_type -> mycelium.AuthorizeDeviceResponse
+	17, // 19: mycelium.AuthService.UnpairSelf:output_type -> mycelium.UnpairSelfResponse
+	13, // 20: mycelium.AuthService.ListDevices:output_type -> mycelium.ListDevicesResponse
+	15, // 21: mycelium.AuthService.RenameDevice:output_type -> mycelium.RenameDeviceResponse
+	12, // [12:22] is the sub-list for method output_type
+	2,  // [2:12] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -963,7 +1059,7 @@ func file_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_proto_rawDesc), len(file_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -26,6 +26,7 @@ const (
 	AuthService_UpdateProfile_FullMethodName         = "/mycelium.AuthService/UpdateProfile"
 	AuthService_SetProfilePreferences_FullMethodName = "/mycelium.AuthService/SetProfilePreferences"
 	AuthService_RefreshToken_FullMethodName          = "/mycelium.AuthService/RefreshToken"
+	AuthService_UnpairSelf_FullMethodName            = "/mycelium.AuthService/UnpairSelf"
 	AuthService_ListDevices_FullMethodName           = "/mycelium.AuthService/ListDevices"
 	AuthService_RenameDevice_FullMethodName          = "/mycelium.AuthService/RenameDevice"
 )
@@ -41,6 +42,7 @@ type AuthServiceClient interface {
 	UpdateProfile(ctx context.Context, in *UpdateProfileRequest, opts ...grpc.CallOption) (*ProfileResponse, error)
 	SetProfilePreferences(ctx context.Context, in *SetProfilePreferencesRequest, opts ...grpc.CallOption) (*ProfileResponse, error)
 	RefreshToken(ctx context.Context, in *RefreshTokenRequest, opts ...grpc.CallOption) (*AuthorizeDeviceResponse, error)
+	UnpairSelf(ctx context.Context, in *UnpairSelfRequest, opts ...grpc.CallOption) (*UnpairSelfResponse, error)
 	ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*ListDevicesResponse, error)
 	RenameDevice(ctx context.Context, in *RenameDeviceRequest, opts ...grpc.CallOption) (*RenameDeviceResponse, error)
 }
@@ -123,6 +125,16 @@ func (c *authServiceClient) RefreshToken(ctx context.Context, in *RefreshTokenRe
 	return out, nil
 }
 
+func (c *authServiceClient) UnpairSelf(ctx context.Context, in *UnpairSelfRequest, opts ...grpc.CallOption) (*UnpairSelfResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnpairSelfResponse)
+	err := c.cc.Invoke(ctx, AuthService_UnpairSelf_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *authServiceClient) ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*ListDevicesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListDevicesResponse)
@@ -154,6 +166,7 @@ type AuthServiceServer interface {
 	UpdateProfile(context.Context, *UpdateProfileRequest) (*ProfileResponse, error)
 	SetProfilePreferences(context.Context, *SetProfilePreferencesRequest) (*ProfileResponse, error)
 	RefreshToken(context.Context, *RefreshTokenRequest) (*AuthorizeDeviceResponse, error)
+	UnpairSelf(context.Context, *UnpairSelfRequest) (*UnpairSelfResponse, error)
 	ListDevices(context.Context, *ListDevicesRequest) (*ListDevicesResponse, error)
 	RenameDevice(context.Context, *RenameDeviceRequest) (*RenameDeviceResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
@@ -186,6 +199,9 @@ func (UnimplementedAuthServiceServer) SetProfilePreferences(context.Context, *Se
 }
 func (UnimplementedAuthServiceServer) RefreshToken(context.Context, *RefreshTokenRequest) (*AuthorizeDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RefreshToken not implemented")
+}
+func (UnimplementedAuthServiceServer) UnpairSelf(context.Context, *UnpairSelfRequest) (*UnpairSelfResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnpairSelf not implemented")
 }
 func (UnimplementedAuthServiceServer) ListDevices(context.Context, *ListDevicesRequest) (*ListDevicesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDevices not implemented")
@@ -340,6 +356,24 @@ func _AuthService_RefreshToken_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_UnpairSelf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnpairSelfRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).UnpairSelf(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_UnpairSelf_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).UnpairSelf(ctx, req.(*UnpairSelfRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthService_ListDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListDevicesRequest)
 	if err := dec(in); err != nil {
@@ -410,6 +444,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RefreshToken",
 			Handler:    _AuthService_RefreshToken_Handler,
+		},
+		{
+			MethodName: "UnpairSelf",
+			Handler:    _AuthService_UnpairSelf_Handler,
 		},
 		{
 			MethodName: "ListDevices",

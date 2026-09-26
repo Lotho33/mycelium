@@ -313,6 +313,26 @@ func (h *AuthHandler) RenameDevice(ctx context.Context, req *gen.RenameDeviceReq
 	return &gen.RenameDeviceResponse{Ok: true}, nil
 }
 
+// UnpairSelf lets a device deregister itself from mycelium — Pileus calls
+// this from "Cambia server" so a device doesn't linger forever in the
+// dashboard's device list once the person has moved to a different server.
+// No device_id in the request, same reasoning as RenameDevice above: the id
+// always comes from the caller's own JWT, never from the request body, so a
+// device can only ever unpair itself. Reuses DeleteDevice verbatim — same
+// function the admin dashboard's "Elimina" button calls, safe for profiles
+// (device_id there is audit-only, no FK cascade).
+func (h *AuthHandler) UnpairSelf(ctx context.Context, _ *gen.UnpairSelfRequest) (*gen.UnpairSelfResponse, error) {
+	deviceID, err := h.deviceFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := DeleteDevice(deviceID); err != nil {
+		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+	}
+	log.Printf("[pileus/auth] device %s si è smarcato (cambio server)", deviceID)
+	return &gen.UnpairSelfResponse{Ok: true}, nil
+}
+
 // RenameDeviceAdmin is the dashboard-side counterpart to the gRPC RenameDevice
 // (which a Pileus client calls on itself): lets the admin give a device a
 // human name ("TV salotto") from the device list instead of everyone having to
