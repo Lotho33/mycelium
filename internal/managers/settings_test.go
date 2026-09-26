@@ -34,6 +34,30 @@ func TestIsAllowedKey_PileusKeys(t *testing.T) {
 	}
 }
 
+// TestIsAllowedKey_ServerHttpsAndMDNS is the actual regression for a real
+// bug: these four keys got a dashboard UI (admin.html's Rete tab) and a
+// saveServerHttps()/saveMdns() JS handler POSTing to the generic
+// /admin/settings/save, but were never added to this allowlist — every save
+// attempt failed with "chiave di configurazione non consentita" (a 500 from
+// saveSettings), which is exactly how the user found this: enabling the
+// optional HTTPS port from the dashboard 500'd every time.
+func TestIsAllowedKey_ServerHttpsAndMDNS(t *testing.T) {
+	for _, k := range []string{"server_https", "server_https_port", "mdns_enabled", "mdns_hostname"} {
+		if !isAllowedKey(k) {
+			t.Errorf("%s must be writable from the dashboard's Rete tab", k)
+		}
+	}
+	// The web-facing TLS cert/key these settings gate the generation of must
+	// stay OUT of the generic allowlist — same class of secret as
+	// pileus_grpc_tls_cert/_key above, written only via SaveInternal from
+	// main.go's GenerateOrLoadWebTLSCert call, never from this endpoint.
+	for _, k := range []string{"mycelium_web_tls_cert", "mycelium_web_tls_key"} {
+		if isAllowedKey(k) {
+			t.Errorf("%s must not be in the generic settings allowlist", k)
+		}
+	}
+}
+
 func TestSave_RejectsMasterAdminHash(t *testing.T) {
 	withTempSettings(t)
 

@@ -134,6 +134,8 @@ var (
 		"prebuffer_",      // pre-buffer del flusso HLS: prebuffer_enabled / _segments_vod / _segments_live / _max_wait_ms / _max_bytes
 		"egress_profiles", // JSON: registry delle uscite di rete (vedi egress.go)
 		"egress_ipv6",     // "1"/"0": preferisci IPv6 nelle connessioni dirette (core.SetEgressPreferIPv6)
+		"server_https",    // "server_https"/"server_https_port": porta HTTPS opzionale (main.go), niente di sensibile — il certificato stesso resta sotto i prefissi pileus_/mycelium_web_tls_ esclusi qui sotto
+		"mdns_",           // mdns_enabled/mdns_hostname (e il futuro mdns_ip): risponditore mDNS opzionale, vedi internal/api/mdns.go
 	}
 	allowedPrefixesMu sync.RWMutex
 
