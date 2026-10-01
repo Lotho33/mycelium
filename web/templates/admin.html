@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="it" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0d12">
+    <title>Mycelium Admin</title>
+    <link rel="icon" href="/static/icon-192.png">
+    <link rel="stylesheet" href="/static/tailwind.css">
+    <style>
+        :root { --card-bg: #141820; --card-border: #1e2530; --panel-bg: #0d1017; --accent: #7c6af7; }
+        html, body { background: #0a0d12; -webkit-tap-highlight-color: transparent; }
+        .card { background: var(--card-bg); border-color: var(--card-border); }
+        .panel { background: var(--panel-bg); }
+        .code-editor {
+            font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+            font-size: 12px; line-height: 1.6; tab-size: 4;
+            background: #060810; color: #c9d1d9;
+            border: 1px solid #1e2530; border-radius: 8px;
+            resize: vertical; min-height: 320px; width: 100%;
+            padding: 12px 16px; outline: none;
+        }
+        .code-editor:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
+        .log-line { display: block; }
+        .spinner { border: 2px solid #1e2530; border-top-color: #38bdf8; border-radius: 50%;
+                   width: 14px; height: 14px; animation: spin .6s linear infinite; display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .pulse-dot { animation: pdot 1.4s ease-in-out infinite; }
+        @keyframes pdot { 0%,100%{opacity:1} 50%{opacity:.3} }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+        /* Drawer: off-canvas on mobile, docked on desktop */
+        #sidebar { transition: transform .25s ease; }
+        @supports (padding: env(safe-area-inset-top)) {
+            .safe-t { padding-top: env(safe-area-inset-top); }
+            .safe-b { padding-bottom: env(safe-area-inset-bottom); }
+            .safe-l { padding-left: env(safe-area-inset-left); }
+        }
+        .nav-item { display:flex; align-items:center; gap:.75rem; width:100%; padding:.7rem .85rem;
+                    border-radius:.6rem; font-size:.875rem; font-weight:600; color:#9ca3af;
+                    transition:background .15s, color .15s; text-align:left; }
+        .nav-item:hover { background:#1a1f2b; color:#e5e7eb; }
+        .nav-item.active { background:rgba(124,106,247,.14); color:#c7bdff; }
+        .nav-item svg { width:18px; height:18px; flex-shrink:0; }
+    </style>
+</head>
+<body class="text-gray-200 font-sans antialiased min-h-screen lg:pl-64">
+
+<!-- ── Toast (z above modals) ── -->
+<div id="toast-container" class="fixed top-4 right-4 z-[80] space-y-2 max-w-[calc(100vw-2rem)] sm:max-w-xs"></div>
+
+<!-- ── Install overlay ── -->
+<div id="install-overlay" class="hidden fixed inset-0 bg-black/70 z-[70] flex flex-col items-center justify-center gap-3 backdrop-blur-sm">
+    <div class="w-10 h-10 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
+    <p class="text-white font-semibold">Installazione in corso…</p>
+    <p class="text-gray-400 text-sm">Non chiudere la pagina</p>
+</div>
+
+<!-- ════════════════ NAV BACKDROP (mobile) ════════════════ -->
+<div id="nav-backdrop" onclick="closeNav()"
+     class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"></div>
+
+<!-- ════════════════ SIDE DRAWER ════════════════ -->
+<aside id="sidebar"
+       class="fixed inset-y-0 left-0 w-64 z-50 -translate-x-full lg:translate-x-0
+              flex flex-col border-r border-gray-800 bg-[#0d1017] safe-t safe-b safe-l">
+
+    <div class="flex items-center gap-2.5 px-4 py-4 border-b border-gray-800">
+        <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+             style="background:linear-gradient(135deg,#7c6af7,#5a4fd4)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+            </svg>
+        </div>
+        <div class="leading-tight">
+            <div class="text-sm font-bold text-white">Mycelium</div>
+            <div class="text-[11px] text-gray-500">Admin Node</div>
+        </div>
+        <button onclick="closeNav()" class="ml-auto lg:hidden text-gray-500 hover:text-white p-1" aria-label="Chiudi menu">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto px-2.5 py-3 space-y-1">
+        <button class="nav-item active" id="nav-btn-plugins" onclick="switchTab('plugins')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6M6 15v6M18 3v6M18 15v6M6 9a3 3 0 0 0 0 6M18 9a3 3 0 0 1 0 6"/></svg>
+            Plugin
+        </button>
+        <button class="nav-item" id="nav-btn-devices" onclick="switchTab('devices')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/></svg>
+            Dispositivi
+        </button>
+        <button class="nav-item" id="nav-btn-users" onclick="switchTab('users')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Utenti
+        </button>
+        <button class="nav-item" id="nav-btn-offline" onclick="switchTab('offline')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download offline
+        </button>
+        <button class="nav-item" id="nav-btn-vpn" onclick="switchTab('vpn')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Rete
+        </button>
+        <button class="nav-item" id="nav-btn-settings" onclick="switchTab('settings')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.31.22.65.22 1s-.08.69-.22 1z"/></svg>
+            Impostazioni
+        </button>
+        <button class="nav-item" id="nav-btn-logs" onclick="switchTab('logs')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+            Log di Sistema
+        </button>
+
+        <div class="pt-2 mt-2 border-t border-gray-800/70"></div>
+
+        <button class="nav-item" id="nav-btn-download" onclick="switchTab('download')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>
+            iOS / macOS
+        </button>
+    </nav>
+
+    <div class="px-2.5 py-3 border-t border-gray-800">
+        <button onclick="logout()" class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+            Esci
+        </button>
+    </div>
+</aside>
+
+<!-- ════════════════ TOP BAR (mobile) ════════════════ -->
+<header class="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-3 py-2.5 border-b border-gray-800 bg-[#0a0d12]/95 backdrop-blur safe-t">
+    <button onclick="openNav()" class="p-2 -ml-1 text-gray-300 hover:text-white" aria-label="Apri menu">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <span id="topbar-title" class="text-sm font-bold text-white">Plugin</span>
+    <div class="ml-auto flex items-center gap-3 text-[11px] font-mono text-gray-500">
+        <span>CPU <span id="top-cpu" class="text-gray-300">—</span></span>
+        <span>RAM <span id="top-mem" class="text-gray-300">—</span></span>
+    </div>
+</header>
+
+<!-- ════════════════ MAIN CONTENT ════════════════ -->
+<main class="px-3 sm:px-6 py-4 sm:py-6 max-w-5xl mx-auto">
+
+    <!-- ════════════════ TAB: PLUGIN ════════════════ -->
+    <div id="tab-plugins">
+        <!-- Server status -->
+        <div class="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs font-mono text-gray-500 mb-4 pb-3 border-b border-gray-800/60">
+            <span>mycelium <span class="text-gray-300">v<span id="ov-core-version">—</span></span></span>
+            <span id="update-banner" class="hidden flex items-center gap-2">
+                <span class="text-amber-400">↑ <span id="update-version"></span></span>
+                <button onclick="triggerCoreUpdate()" id="update-btn"
+                    class="bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 text-[10px] px-2 py-0.5 rounded transition font-bold">Aggiorna</button>
+            </span>
+            <span>CPU <span id="agg-cpu" class="text-gray-300">—</span></span>
+            <span>RAM <span id="agg-mem" class="text-gray-300">—</span></span>
+            <span>Uptime <span id="agg-uptime" class="text-gray-300">—</span></span>
+        </div>
+
+        <div class="flex items-center gap-2 mb-4">
+            <h2 class="hidden lg:block text-lg font-bold text-white">Plugin</h2>
+            <button onclick="loadPlugins()" class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Aggiorna</button>
+        </div>
+
+        <!-- Upload bar -->
+        <div class="card border rounded-xl p-4 mb-5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <input type="file" id="lua_plugin_input" accept=".zip" class="hidden">
+            <label for="lua_plugin_input"
+                class="flex-1 border border-dashed border-gray-700 hover:border-sky-600 text-gray-500 hover:text-sky-400
+                       text-sm px-4 py-2.5 rounded-lg cursor-pointer transition text-center font-mono"
+                id="lua_plugin_label">
+                Scegli plugin .zip …
+            </label>
+            <button onclick="uploadLuaPlugin()" id="lua_upload_btn" disabled
+                class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+                       text-white text-sm px-5 py-2.5 rounded-lg font-semibold transition whitespace-nowrap">
+                Installa
+            </button>
+        </div>
+
+        <!-- Plugin list -->
+        <div id="plugins-container" class="space-y-2">
+            <div class="animate-pulse space-y-2">
+                <div class="h-14 bg-gray-800/50 rounded-xl border border-gray-800"></div>
+                <div class="h-14 bg-gray-800/30 rounded-xl border border-gray-800 opacity-60"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: DEVICES ════════════════ -->
+    <div id="tab-devices" class="hidden">
+        <div class="flex items-center flex-wrap gap-3 mb-4">
+            <h2 class="hidden lg:block text-lg font-bold text-white">Dispositivi</h2>
+
+            <!-- Pair a Pileus device -->
+            <div class="w-full lg:w-auto lg:ml-auto">
+                <div id="pairing-idle">
+                    <button onclick="generatePairingCode()"
+                        class="w-full lg:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full
+                               text-sm font-semibold bg-emerald-900/40 hover:bg-emerald-900/70 text-emerald-300 transition">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg>
+                        Abbina un dispositivo
+                    </button>
+                </div>
+                <div id="pairing-active" class="hidden flex w-full lg:w-auto items-center justify-center flex-wrap gap-x-3 gap-y-1
+                            px-4 py-2 rounded-full panel border border-gray-800">
+                    <span id="pairing-code" class="text-xl font-mono font-bold text-white tracking-[0.25em]">——————</span>
+                    <span id="pairing-countdown" class="text-[11px] text-gray-500">—</span>
+                    <button onclick="generatePairingCode()"
+                        class="text-[11px] text-gray-500 hover:text-gray-300 transition">Rigenera</button>
+                </div>
+                <div id="pairing-done" class="hidden flex w-full lg:w-auto items-center justify-center gap-2
+                            px-4 py-2.5 rounded-full text-sm font-semibold bg-emerald-900/30 text-emerald-400">
+                    Dispositivo accoppiato
+                </div>
+            </div>
+        </div>
+
+        <!-- Paired Pileus devices -->
+        <div class="card border rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="text-sm font-semibold text-white">Dispositivi Pileus</span>
+                <button onclick="loadPileusDevices()" class="text-[11px] text-gray-500 hover:text-gray-300 transition ml-auto">Aggiorna</button>
+            </div>
+            <p class="text-[11px] text-gray-600 mb-2">Revocare un dispositivo invalida subito i suoi token (il player dovrà ri-abbinarsi). I profili restano.</p>
+            <div id="pileus-devices" class="text-xs text-gray-400">—</div>
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: USERS ════════════════ -->
+    <div id="tab-users" class="hidden">
+        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Utenti</h2>
+
+        <div class="card border rounded-xl p-4 mb-4">
+            <span class="text-sm font-semibold text-white">Nuovo profilo</span>
+            <p class="text-[11px] text-gray-600 mt-1 mb-3">Condiviso tra tutti i dispositivi accoppiati — non serve crearlo da ogni dispositivo separatamente.</p>
+            <div class="flex items-center gap-3 flex-wrap">
+                <input id="new-profile-name" type="text" placeholder="Nome"
+                    class="flex-1 min-w-[160px] bg-[#0d1017] border border-gray-800 rounded-lg px-3 py-2 text-sm text-white
+                           focus:outline-none focus:border-[#7c6af7]">
+                <button onclick="createPileusProfile()"
+                    class="bg-sky-600 hover:bg-sky-500 text-white text-sm px-4 py-2 rounded-lg font-semibold transition">
+                    Crea
+                </button>
+            </div>
+        </div>
+
+        <div class="card border rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="text-sm font-semibold text-white">Profili</span>
+                <button onclick="loadPileusProfiles()" class="text-[11px] text-gray-500 hover:text-gray-300 transition ml-auto">Aggiorna</button>
+            </div>
+            <div id="pileus-profiles" class="text-xs text-gray-400">—</div>
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: OFFLINE DOWNLOADS ════════════════ -->
+    <div id="tab-offline" class="hidden">
+        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Download offline</h2>
+
+        <div class="card border rounded-xl p-4 mb-4">
+            <span class="text-sm font-semibold text-white">Spazio</span>
+            <p class="text-[11px] text-gray-600 mt-1 mb-3">I download vengono preparati qui sul server e poi scaricati dai dispositivi. Pensato anche per memorie piccole (eMMC): un download parte solo se ci sta nella quota <em>e</em> lascia libero il margine indicato sul disco, e si ferma da solo se lo supera.</p>
+            <div id="dl-usage" class="text-xs text-gray-400 mb-3">—</div>
+            <div class="grid grid-cols-2 gap-3 text-xs">
+                <label class="flex flex-col gap-1 text-gray-500">Quota massima (GB)
+                    <input id="dl-quota" type="number" min="1" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
+                </label>
+                <label class="flex flex-col gap-1 text-gray-500">Spazio libero minimo sul disco (GB)
+                    <input id="dl-minfree" type="number" min="0" step="0.5" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
+                </label>
+                <label class="flex flex-col gap-1 text-gray-500">Elimina i file pronti dopo (giorni, 0 = mai)
+                    <input id="dl-retention" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
+                </label>
+                <label class="flex items-center gap-2 text-gray-400 mt-5">
+                    <input id="dl-enabled" type="checkbox" class="accent-sky-600" onchange="saveDownloadSettings()"> Download attivi
+                </label>
+            </div>
+        </div>
+
+        <div class="card border rounded-xl p-4 mb-4">
+            <span class="text-sm font-semibold text-white">Comportamento</span>
+            <div class="mt-3 space-y-3 text-xs">
+                <label class="flex items-start gap-2 text-gray-400">
+                    <input id="dl-pause" type="checkbox" class="accent-sky-600 mt-0.5" onchange="saveDownloadSettings()">
+                    <span>Metti in pausa i download mentre qualcuno sta guardando<span class="block text-[11px] text-gray-600">Ripartono da soli, dal punto raggiunto, quando nessuno guarda più: così non tolgono banda a chi è davanti alla TV.</span></span>
+                </label>
+                <label class="flex items-start gap-2 text-gray-400">
+                    <input id="dl-delete-fetched" type="checkbox" class="accent-sky-600 mt-0.5" onchange="saveDownloadSettings()">
+                    <span>Elimina dal server appena il dispositivo ha scaricato il file<span class="block text-[11px] text-gray-600">Risparmia spazio. Se lo stesso file serve anche a un altro profilo resta finché serve. Da una TV che guarda dal server non viene mai cancellato così.</span></span>
+                </label>
+                <label class="flex flex-col gap-1 text-gray-500 max-w-[220px]">Velocità massima di download (Mbit/s, 0 = nessun limite)
+                    <input id="dl-maxmbps" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
+                </label>
+                <label class="flex flex-col gap-1 text-gray-500 max-w-[320px]">Ritmo massimo rispetto alla riproduzione (volte, 0 = nessun limite)
+                    <input id="dl-pace" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 max-w-[220px]" onchange="saveDownloadSettings()">
+                    <span class="text-[11px] text-gray-600">Con 4 un episodio di 45 minuti si scarica in circa 11. Scaricare tutto in una raffica fa scattare i limiti di alcune sorgenti, che poi smettono di rispondere.</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="card border rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="text-sm font-semibold text-white">Download</span>
+                <button onclick="loadDownloadsAdmin()" class="text-[11px] text-gray-500 hover:text-gray-300 transition ml-auto">Aggiorna</button>
+            </div>
+            <div id="dl-list" class="text-xs text-gray-400">—</div>
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: SETTINGS ════════════════ -->
+    <div id="tab-settings" class="hidden">
+        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Impostazioni</h2>
+        <div class="space-y-4 max-w-2xl">
+
+            <!-- Security -->
+            <div class="card border rounded-xl p-4">
+                <span class="text-sm font-semibold text-white">Sicurezza</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-3">Cambia la password dell'account admin. Richiede la password attuale.</p>
+                <form onsubmit="changeAdminPassword(event)" class="space-y-2 max-w-sm">
+                    <input id="pw-current" type="password" placeholder="Password attuale" required autocomplete="current-password"
+                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <input id="pw-new" type="password" placeholder="Nuova password (min. 8 caratteri)" required minlength="8" autocomplete="new-password"
+                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <button type="submit"
+                        class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cambia password</button>
+                </form>
+            </div>
+
+            <!-- Maintenance -->
+            <div class="card border rounded-xl p-4">
+                <span class="text-sm font-semibold text-white">Manutenzione</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-2">Svuota la cache in memoria (risultati browse/search). I plugin la ripopolano alla richiesta successiva.</p>
+                <button onclick="clearCache()"
+                    class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Svuota cache</button>
+            </div>
+
+            <!-- Danger zone -->
+            <div class="card border border-red-500/40 rounded-xl p-4">
+                <span class="text-sm font-semibold text-red-400">Zona pericolosa</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-3">Azioni distruttive e irreversibili. Ognuna richiede di reinserire la password admin.</p>
+
+                <div class="space-y-3">
+                    <div>
+                        <button onclick="wipeProfiles()"
+                            class="bg-red-900/60 hover:bg-red-800 text-red-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cancella dati profili</button>
+                        <p class="text-[11px] text-gray-600 mt-1">Elimina tutti i profili, la cronologia di visione e i secret per-profilo dei plugin. I dispositivi accoppiati restano.</p>
+                    </div>
+                    <div>
+                        <button onclick="wipePluginData()"
+                            class="bg-red-900/60 hover:bg-red-800 text-red-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cancella dati plugin</button>
+                        <p class="text-[11px] text-gray-600 mt-1">FLUSHDB su Redis, svuota la cache immagini WebP e i file cache su disco dei plugin. I plugin restano installati e configurati; ricostruiscono le cache alla sincronizzazione successiva.</p>
+                    </div>
+                    <div class="pt-3 border-t border-red-500/20">
+                        <button onclick="factoryReset()"
+                            class="bg-red-700 hover:bg-red-600 text-white text-sm px-4 py-2.5 rounded-lg font-semibold transition">Reset di fabbrica</button>
+                        <p class="text-[11px] text-gray-600 mt-1">Cancella <b>tutto</b>: profili, dispositivi accoppiati, dati/cache dei plugin, i plugin stessi e la password admin. Come alla primissima installazione — si torna alla pagina di setup. Irreversibile.</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: PENDING CHALLENGES ════════════════ -->
+    <!-- ════════════════ TAB: VPN ════════════════ -->
+    <div id="tab-vpn" class="hidden">
+        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Rete</h2>
+        <div class="space-y-4 max-w-2xl">
+
+            <!-- IPv6 preference -->
+            <div class="card border rounded-xl p-4">
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" id="egress-ipv6" onchange="saveEgressIPv6(this)" class="mt-0.5 accent-sky-600">
+                    <span>
+                        <span class="text-sm font-semibold text-white">Preferisci IPv6 in uscita</span>
+                        <span class="block text-[11px] text-gray-600 mt-1">Le connessioni che mycelium apre direttamente verso i siti provano prima IPv6, poi IPv4. Utile solo se il server ha un IPv6 pubblico funzionante e l'IPv4 è condiviso (CGNAT) o bloccato da qualche CDN. Se il server non ha IPv6 lascialo spento. Non riguarda il traffico inoltrato al servizio browser.</span>
+                    </span>
+                </label>
+            </div>
+
+            <!-- Service restart -->
+            <div class="card border rounded-xl p-4">
+                <div class="flex items-start justify-between gap-3">
+                    <span>
+                        <span class="text-sm font-semibold text-white">Riavvia il servizio</span>
+                        <span class="block text-[11px] text-gray-600 mt-1">Riavvia mycelium in modo pulito. Interrompe per qualche secondo tutte le connessioni attive (incluso lo streaming in corso); riparte da solo subito dopo.</span>
+                    </span>
+                    <button onclick="restartService()" class="shrink-0 text-xs font-semibold text-amber-400 hover:text-amber-300 border border-amber-900/60 hover:border-amber-700 px-3 py-1.5 rounded-lg transition">Riavvia</button>
+                </div>
+            </div>
+
+            <!-- Network exits (egress registry) -->
+            <div class="card border rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-2 flex-wrap">
+                    <span class="text-sm font-semibold text-white">Uscite di rete</span>
+                    <button onclick="loadEgress()" class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Aggiorna</button>
+                </div>
+                <p class="text-[11px] text-gray-600 mb-3">Ogni plugin sceglie da quale uscita passa il suo flusso video (scheda <b>Plugin</b>). <b>Diretta</b> = IP del server. Puoi aggiungere proxy SOCKS5/HTTP o configurazioni WireGuard e attivarli/disattivarli senza toccare i plugin.</p>
+                <div id="egress-list" class="space-y-2 text-xs text-gray-500">Caricamento…</div>
+                <form onsubmit="addEgress(event)" class="mt-3 flex flex-wrap gap-2">
+                    <input id="egress-name" placeholder="nome (es. hetzner)" required
+                        class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 w-32">
+                    <input id="egress-url" placeholder="socks5://host:porta" required
+                        class="flex-1 min-w-[10rem] bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Aggiungi</button>
+                </form>
+
+                <!-- WireGuard drag-and-drop -->
+                <div class="mt-3 pt-3 border-t border-gray-800/70">
+                    <p class="text-[11px] text-gray-600 mb-2">Oppure trascina una <b>configurazione WireGuard</b> (<code>.conf</code> di Mullvad, Proton, un peer tuo…): mycelium la salva e avvia un processo <code>wireproxy</code> dedicato. Puoi caricarne quante ne vuoi — dai un nome diverso a ognuna.</p>
+                    <div class="flex flex-wrap gap-2 items-center">
+                        <input id="wg-name" placeholder="nome (es. mullvad)" value="wg"
+                            class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 w-32">
+                        <input type="file" id="wg-file" accept=".conf,text/plain" class="hidden" onchange="submitWgFile(this.files[0])">
+                        <button type="button" onclick="document.getElementById('wg-file').click()"
+                            class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Scegli .conf</button>
+                    </div>
+                    <div id="wg-drop"
+                        class="mt-2 border border-dashed border-gray-700 rounded-lg px-3 py-4 text-center text-[11px] text-gray-600 transition"
+                        ondragover="event.preventDefault();this.classList.add('border-sky-500','text-sky-400')"
+                        ondragleave="this.classList.remove('border-sky-500','text-sky-400')"
+                        ondrop="wgDrop(event)">
+                        Trascina qui il file <code>.conf</code>
+                    </div>
+                </div>
+            </div>
+
+
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: DOWNLOAD iOS ════════════════ -->
+    <div id="tab-download" class="hidden">
+        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">iOS / macOS</h2>
+        <div class="max-w-md space-y-5">
+
+            <div class="card border rounded-2xl p-5">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+                         style="background:linear-gradient(135deg,#7c6af7,#5a4fd4)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>
+                    </div>
+                    <div>
+                        <div class="text-white font-semibold">Pileus per iPhone / iPad</div>
+                        <div class="text-xs text-gray-500">Installazione senza App Store</div>
+                    </div>
+                </div>
+                <ol class="space-y-3 text-sm text-gray-400">
+                    <li class="flex gap-3"><span class="text-purple-400 font-bold">1.</span> Apri <a id="dl-app-link" href="/app/" class="text-purple-400 underline break-all">/app/</a> in <b class="text-gray-200">Safari</b>.</li>
+                    <li class="flex gap-3"><span class="text-purple-400 font-bold">2.</span> Tocca <b class="text-gray-200">Condividi</b> (il quadrato con la freccia in su).</li>
+                    <li class="flex gap-3"><span class="text-purple-400 font-bold">3.</span> Scorri e tocca <b class="text-gray-200">"Aggiungi a schermata Home"</b>.</li>
+                    <li class="flex gap-3"><span class="text-purple-400 font-bold">4.</span> Tocca <b class="text-gray-200">"Aggiungi"</b>. L'icona compare sulla Home.</li>
+                </ol>
+            </div>
+            <a href="/install" target="_blank"
+               class="block text-center bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold px-4 py-3 rounded-xl transition">
+                Apri la guida a schermo intero
+            </a>
+            <p class="text-[11px] text-gray-600 text-center">Una volta installata, l'app parte a schermo intero come un'app nativa. La stessa procedura vale per Mac (Safari → Condividi → Aggiungi al Dock).</p>
+
+            <!-- Pileus web app -->
+            <div class="card border rounded-xl p-4 text-left">
+                <span class="text-sm font-semibold text-white">Pileus web app</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-3">Scarica l'ultimo build web di Pileus dalle GitHub Release del repo configurato e lo installa in <code>data/pileus-web/</code> (servito su <code>/app</code>). La versione precedente resta in <code>data/pileus-web.bak/</code>.</p>
+                <form onsubmit="savePileusWebRepo(event)" class="flex flex-wrap gap-2 mb-3">
+                    <input id="pileus-web-repo" placeholder="owner/repo (es. Lotho33/pileus)"
+                        class="flex-1 min-w-[12rem] bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
+                    <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Salva repo</button>
+                </form>
+                <button type="button" onclick="updatePileusWebApp()" id="pileus-web-update-btn" disabled
+                    class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
+                           text-white text-sm px-4 py-2.5 rounded-lg font-semibold transition">Aggiorna app web Pileus</button>
+                <p class="text-[11px] text-gray-500 mt-3">Versione installata: <span id="pileus-web-version" class="text-gray-300 font-semibold">—</span></p>
+                <p id="pileus-web-status" class="text-[11px] text-gray-600 mt-2">Configura il repo Pileus qui sopra per abilitare l'aggiornamento.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════════════════ TAB: SYSTEM LOG ════════════════ -->
+    <div id="tab-logs" class="hidden">
+        <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-white">Log di Sistema</span>
+                <span id="log-live-dot" class="inline-block w-2 h-2 rounded-full bg-gray-700"></span>
+            </div>
+            <button onclick="reconnectLogSSE()"
+                class="text-xs text-gray-500 hover:text-white border border-gray-800 hover:border-gray-600 px-3 py-1.5 rounded-lg transition">
+                Riconnetti
+            </button>
+        </div>
+        <div class="card border rounded-xl overflow-hidden">
+            <pre id="log-output"
+                class="panel p-4 text-xs font-mono h-[60vh] lg:h-[520px] overflow-auto whitespace-pre-wrap leading-relaxed text-gray-500">Caricamento log…</pre>
+        </div>
+        <p class="text-xs text-gray-700 mt-2">Ultime 300 righe · Live via SSE</p>
+    </div>
+
+</main>
+
+<!-- ════════════════ EDITOR MODAL ════════════════ -->
+<div id="editor-modal" class="hidden fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm">
+    <div class="w-full max-w-4xl card border rounded-2xl shadow-2xl flex flex-col" style="max-height:92vh">
+        <!-- Modal header -->
+        <div class="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-gray-800 gap-2">
+            <div class="flex items-center gap-2 sm:gap-3 min-w-0">
+                <span class="text-sm font-bold text-white truncate" id="editor-plugin-name">—</span>
+                <span class="text-xs text-gray-500 font-mono hidden sm:inline" id="editor-plugin-id">—</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                <select id="editor-file-select"
+                    onchange="loadEditorFile()"
+                    class="bg-gray-900 border border-gray-700 text-gray-300 text-xs font-mono px-2 py-1.5 rounded-lg focus:outline-none focus:border-blue-500 max-w-[38vw] sm:max-w-none">
+                </select>
+                <button onclick="saveEditorFile()" id="editor-save-btn"
+                    class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 sm:px-4 py-1.5 rounded-lg font-semibold transition">
+                    Salva
+                </button>
+                <button onclick="closeEditor()"
+                    class="text-gray-500 hover:text-white text-xs px-2 transition">Chiudi</button>
+            </div>
+        </div>
+        <!-- Editor info bar -->
+        <div id="editor-info-bar" class="px-5 py-1.5 border-b border-gray-800/60 text-xs text-gray-600 font-mono hidden">
+            <span id="editor-save-status"></span>
+            <span class="ml-3 text-gray-700">Hot-reload automatico al salvataggio</span>
+        </div>
+        <!-- Textarea -->
+        <div class="flex-1 overflow-auto p-3 sm:p-4">
+            <textarea id="editor-textarea" class="code-editor" spellcheck="false"
+                placeholder="Caricamento…"></textarea>
+        </div>
+    </div>
+</div>
+
+<script src="/static/admin.js"></script>
+</body>
+</html>

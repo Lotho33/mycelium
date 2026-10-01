@@ -1,0 +1,6 @@
+/* Dashboard CSS source: run scripts/build-css.sh to regenerate
+   web/static/tailwind.css after adding Tailwind classes to
+   web/templates/*.html or web/static/admin.js. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

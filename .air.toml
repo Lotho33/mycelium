@@ -1,0 +1,22 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/main ./cmd/server"
+  bin = "./tmp/main"
+  delay = 1000
+  exclude_dir = ["tmp", "vendor", "web", "plugins"]
+  include_ext = ["go"]
+  # send_interrupt + kill_delay: SIGTERM first, so the server's graceful
+  # shutdown closes open gRPC connections cleanly on every rebuild.
+  kill_delay = "2s"
+  rerun = false
+  rerun_delay = 500
+  send_interrupt = true
+
+[log]
+  main_only = false
+  time = false
+
+[misc]
+  clean_on_exit = false

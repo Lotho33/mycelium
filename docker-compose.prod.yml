@@ -1,0 +1,109 @@
+# Server stack: pulls the prebuilt mycelium image and lets Watchtower update
+# it on every new release tag. Point MYCELIUM_IMAGE at your registry in a
+# .env next to this file (see deploy/stack.env.example).
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Optional services (a browser service, a VPN egress proxy) are not defined
+# here: add them with a second, local compose file merged at deploy time, or
+# run them standalone, and point MYCELIUM_BROWSER_URL / VPN_PROXY_URL at them.
+# Without a VPN egress, every plugin without direct_egress: true fails closed
+# on its network calls (by design — see internal/managers/egress.go).
+#
+# ── network_mode: host ──────────────────────────────────────────────────────
+#   * the Pileus LAN discovery (UDP broadcast on :51900) only works this way —
+#     Docker does not deliver broadcasts to a bridged container;
+#   * ResolveStream can autodetect the host's real IP for the video proxy
+#     URLs — no server_host to set by hand.
+# The services bind directly on the host and talk over 127.0.0.1; redis
+# binds loopback-only. Fine on a dedicated VM/container.
+#
+# Pin a version: MYCELIUM_TAG=<version> in .env, then remove the Watchtower
+# label below. Full walk-through: docs/deploy-selfhosted.md.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    network_mode: host
+    mem_limit: 64m
+    memswap_limit: 64m
+    command: redis-server --bind 127.0.0.1 --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "set", "__healthcheck__", "1", "EX", "10"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mycelium:
+    image: ${MYCELIUM_IMAGE:-ghcr.io/lotho33/mycelium}:${MYCELIUM_TAG:-latest}
+    container_name: mycelium
+    restart: unless-stopped
+    network_mode: host
+    mem_limit: 768m
+    memswap_limit: 768m
+    labels:
+      # Watchtower only updates containers carrying this label.
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # Installed plugins and their runtime caches.
+      - mycelium_plugins:/app/plugins
+      # Config, database, logs, downloads, WireGuard egress configs.
+      - ./data:/app/data
+    environment:
+      - MYCELIUM_BASE=/app
+      - REDIS_ADDR=127.0.0.1:6379
+      - MYCELIUM_DOCKER=1
+      - MYCELIUM_BROWSER_URL=${MYCELIUM_BROWSER_URL:-}
+      - MYCELIUM_BROWSER_API_KEY=${MYCELIUM_BROWSER_API_KEY:-}
+      - VPN_PROXY_URL=${VPN_PROXY_URL:-}
+      # Empty: autodetected (host networking). Set it behind a reverse proxy.
+      - MYCELIUM_SERVER_HOST=${MYCELIUM_SERVER_HOST:-}
+      # Dial upstream hosts over IPv6 first (IPv4 fallback). Only useful when
+      # the host's IPv4 is shared (CGNAT) and it has a public IPv6.
+      - MYCELIUM_EGRESS_IPV6=${MYCELIUM_EGRESS_IPV6:-0}
+      # The server drops root at start and runs as 10001:10001 by default
+      # (MYCELIUM_PUID/MYCELIUM_PGID to change it, MYCELIUM_RUN_AS_ROOT=1 to
+      # opt out).
+      - TZ=${TZ:-UTC}
+      - GOMEMLIMIT=600MiB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # WireGuard egress needs no service here: for each .conf uploaded from the
+  # dashboard (Settings → VPN → network exits) mycelium runs the bundled
+  # userspace `wireproxy` binary as a child process, with its SOCKS5 listener
+  # on 127.0.0.1:1081..1099. No Docker socket, no extra capabilities.
+
+  # Polls the registry every 5 min and recreates labelled containers when
+  # their tag has a newer digest. Reads the host's Docker credentials (the
+  # file must exist, see deploy/stack.env.example).
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    environment:
+      - DOCKER_API_VERSION=1.40
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_ROLLING_RESTART=true
+      - TZ=${TZ:-UTC}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_CONFIG_JSON:-${HOME}/.docker/config.json}:/config.json:ro
+
+volumes:
+  redis_data:
+  mycelium_plugins:

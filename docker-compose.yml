@@ -1,0 +1,79 @@
+# Build-from-source stack (development box / trying it out). For a server
+# that pulls prebuilt images and auto-updates, see docker-compose.prod.yml
+# and docs/deploy-selfhosted.md.
+#
+#   docker compose up -d --build
+#
+# Optional services (a browser service for plugins that need one, a VPN
+# egress proxy) are not defined here: run them separately and point
+# MYCELIUM_BROWSER_URL / VPN_PROXY_URL at them (see README "Configuration").
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Hard cap, no swap: on small hosts a clean restart beats silent
+    # degradation.
+    mem_limit: 64m
+    memswap_limit: 64m
+    command: redis-server --appendonly yes --maxmemory 48mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "set", "__healthcheck__", "1", "EX", "10"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mycelium:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: dev
+    image: mycelium:latest
+    restart: unless-stopped
+    mem_limit: 400m
+    memswap_limit: 400m
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+      - "8000:8000"
+      # LAN discovery responder for Pileus (internal/api/discovery.go).
+      - "51900:51900/udp"
+    volumes:
+      - ./plugins:/app/plugins
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - MYCELIUM_BASE=/app
+      - REDIS_ADDR=redis:6379
+      - MYCELIUM_DOCKER=1
+      # Optional browser service (plugins using mycelium.browser.*).
+      - MYCELIUM_BROWSER_URL=${MYCELIUM_BROWSER_URL:-}
+      - MYCELIUM_BROWSER_API_KEY=${MYCELIUM_BROWSER_API_KEY:-}
+      # Optional VPN egress (SOCKS5/HTTP proxy). Plugins without
+      # direct_egress: true fail closed while none is configured — by design.
+      - VPN_PROXY_URL=${VPN_PROXY_URL:-}
+      # Bridge mode: the address clients use to reach this box, for the video
+      # proxy URLs (or set it from the dashboard).
+      - MYCELIUM_SERVER_HOST=${MYCELIUM_SERVER_HOST:-}
+      # The server drops root at start (entrypoint.sh); here ./plugins is a
+      # bind mount, so run as the host user that edits it.
+      - MYCELIUM_PUID=${MYCELIUM_PUID:-1000}
+      - MYCELIUM_PGID=${MYCELIUM_PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - GOMEMLIMIT=350MiB
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  redis_data:

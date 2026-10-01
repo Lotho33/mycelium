@@ -1,0 +1,48 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ..:/workspace/mycelium-core:cached,z
+    working_dir: /workspace/mycelium-core
+    command: sleep infinity
+    # Published even when started from a terminal (podman-compose / docker
+    # compose) rather than from the VS Code UI, which forwards on its own.
+    ports:
+      - "8000:8000"
+      - "50051:50051"
+      # LAN discovery responder for Pileus (internal/api/discovery.go).
+      - "51900:51900/udp"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - MYCELIUM_BASE=/workspace/mycelium-core
+      - MYCELIUM_DOCKER=1
+      - CGO_ENABLED=0
+      # Optional, both off by default — see README "Configuration":
+      #   MYCELIUM_BROWSER_URL=http://host.docker.internal:<port>   browser service
+      #   VPN_PROXY_URL=socks5://host.docker.internal:1080           VPN egress proxy
+      # Plugins without direct_egress are VPN-routed and fail closed while no
+      # proxy is configured — by design: better "doesn't work" than "works
+      # around the VPN".
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  redis_data:

@@ -1,0 +1,27 @@
+# Keep the build context small: a local `docker compose build` sees the whole
+# working tree, including .git, data/ and tmp/.
+
+.git
+.gitignore
+.claude
+.devcontainer
+.air.toml
+
+# runtime data / logs / local db
+data
+tmp
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# the image ships no plugins (installed at runtime into the volume) — never
+# let a local plugins/ directory end up in a build
+plugins
+
+# not consumed by the image
+docker-compose*.yml
+README.md
+docs/*.md
+.env
+.env.example
