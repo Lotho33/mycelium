@@ -116,6 +116,39 @@ func TestServeGRPCWeb_ForwardsAndReframesTrailers(t *testing.T) {
 	}
 }
 
+// A trailers-only error response puts grpc-status in the headers: the bridge
+// must still emit it as the trailer frame, or the client sees a bare 200 with
+// no status at all.
+func TestServeGRPCWeb_TrailersOnlyErrorBecomesTrailerFrame(t *testing.T) {
+	addr := startH2CServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/grpc+proto")
+		w.Header().Set("Grpc-Status", "16")
+		w.Header().Set("Grpc-Message", "invalid or expired pairing code")
+		w.WriteHeader(http.StatusOK)
+	})
+	setGRPCTarget(t, addr, false)
+	initGRPCWebBridge()
+
+	req := httptest.NewRequest(http.MethodPost, "/mycelium.AuthService/AuthorizeDevice", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/grpc-web+proto")
+	rec := httptest.NewRecorder()
+	serveGRPCWeb(rec, req)
+
+	body := rec.Body.Bytes()
+	if len(body) < 5 || body[0] != 0x80 {
+		t.Fatalf("want a single trailer frame, got % x", body)
+	}
+	if n := binary.BigEndian.Uint32(body[1:5]); int(n) != len(body)-5 {
+		t.Fatalf("trailer length prefix = %d, body has %d payload bytes", n, len(body)-5)
+	}
+	payload := string(body[5:])
+	for _, want := range []string{"grpc-status: 16\r\n", "grpc-message: invalid or expired pairing code\r\n"} {
+		if !strings.Contains(payload, want) {
+			t.Errorf("trailer payload %q missing %q", payload, want)
+		}
+	}
+}
+
 // x-http-host / x-http-scheme are synthesised from X-Forwarded-* (or the
 // request itself) only when the browser didn't already send them, and
 // X-Forwarded-For is always overwritten with the observed socket peer — an

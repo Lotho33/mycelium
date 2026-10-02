@@ -215,9 +215,21 @@ func serveGRPCWeb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// After the body is fully read, resp.Trailer is populated by the HTTP/2 client.
-	if len(resp.Trailer) > 0 {
+	// A trailers-only response (an RPC that fails before sending any message)
+	// carries the status in the headers instead; the client still needs it in
+	// the trailer frame.
+	trailer := resp.Trailer
+	if len(trailer) == 0 {
+		trailer = http.Header{}
+		for _, k := range []string{"Grpc-Status", "Grpc-Message", "Grpc-Status-Details-Bin"} {
+			if vs := resp.Header.Values(k); len(vs) > 0 {
+				trailer[k] = vs
+			}
+		}
+	}
+	if len(trailer) > 0 {
 		var sb strings.Builder
-		for k, vs := range resp.Trailer {
+		for k, vs := range trailer {
 			for _, v := range vs {
 				sb.WriteString(strings.ToLower(k))
 				sb.WriteString(": ")
