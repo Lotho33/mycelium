@@ -292,14 +292,13 @@ show *why* a plugin isn't ready yet.
 
 By default every plugin call (HTTP, browser, and the downstream stream
 relay) is forced through the configured proxy/VPN and **fails closed** if none
-is set — the plugin's real IP can't leak by forgetting a flag. Opt out with
+is set — traffic never silently goes out directly because a flag was forgotten. Opt out with
 `direct_egress: true` for a source on your own LAN or one that blocks the
 proxy's exit IP.
 
-The HLS proxy's own upstream fetches use Go's `net/http` by default. If a CDN
-rejects that (its TLS/HTTP2 fingerprint isn't a mainstream browser's), an
-operator can switch the whole instance to a browser-compatible profile with
-`MYCELIUM_HTTP_PROFILE=browser` or the `http_profile` setting.
+The HLS proxy's own upstream fetches use Go's `net/http`, or the optional
+browser service's `/v1/fetch` relay when one is configured
+(`MYCELIUM_HTTP_PROFILE=standard` forces the direct path).
 
 ---
 

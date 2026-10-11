@@ -22,6 +22,8 @@ var (
 	segmentClient *http.Client
 )
 
+// proxyUserAgent is the User-Agent of the image proxy's fetches: a common
+// desktop browser string, since many image hosts reject unknown clients.
 const proxyUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 // resetUpstreamClients drops the cached upstream clients so the next request
@@ -49,7 +51,7 @@ func getProxySession() *http.Client {
 		proxySession = &http.Client{
 			Timeout: 15 * time.Second,
 			Jar:     jar,
-			Transport: newUTLSTransport(utlsTransportOpts{
+			Transport: newUpstreamTransport(upstreamTransportOpts{
 				MaxIdleConns:        50,
 				MaxIdleConnsPerHost: 10,
 			}),
@@ -66,7 +68,7 @@ func getSegmentClient() *http.Client {
 		segmentClient = &http.Client{
 			Timeout: 60 * time.Second,
 			Jar:     jar,
-			Transport: newUTLSTransport(utlsTransportOpts{
+			Transport: newUpstreamTransport(upstreamTransportOpts{
 				MaxIdleConns:          100,
 				MaxIdleConnsPerHost:   20,
 				IdleConnTimeout:       120 * time.Second,
@@ -92,13 +94,13 @@ func vpnClients(proxyURL string) (*http.Client, *http.Client) {
 	defer vpnMu.Unlock()
 	if vpnSession == nil || vpnAddr != proxyURL {
 		jar1, _ := cookiejar.New(nil)
-		vpnSession = &http.Client{Timeout: 15 * time.Second, Jar: jar1, Transport: newUTLSProxyTransport(proxyURL, utlsTransportOpts{
+		vpnSession = &http.Client{Timeout: 15 * time.Second, Jar: jar1, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
 			MaxIdleConns:        50,
 			MaxIdleConnsPerHost: 10,
 		})}
 
 		jar2, _ := cookiejar.New(nil)
-		vpnSegment = &http.Client{Timeout: 60 * time.Second, Jar: jar2, Transport: newUTLSProxyTransport(proxyURL, utlsTransportOpts{
+		vpnSegment = &http.Client{Timeout: 60 * time.Second, Jar: jar2, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   20,
 			IdleConnTimeout:       120 * time.Second,

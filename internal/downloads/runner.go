@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"os/exec"
@@ -256,19 +257,27 @@ func (m *Manager) runBlob(ctx context.Context, b *blob, upgrade bool) error {
 	fetched := already
 	lastPersist := time.Time{}
 	count := 0
-	for _, li := range locals {
-		pace := pacer{factor: paceFactor()}
-		for ri := range li.res {
+	// Like a player: every track in content order, the video track setting
+	// the pace (see pacer).
+	pace := newPlayerPacer(paceFactor())
+	paced := pacedInput(locals)
+	for _, it := range interleaveResources(locals) {
+		li, ri := it.li, it.ri
+		{
 			path := filepath.Join(work, li.res[ri].Name)
 			if fileExists(path) {
-				pace.skip(li.res[ri])
+				if li == paced {
+					pace.skip(li.res[ri])
+				}
 				continue
 			}
 			if err := m.waitWhileStreaming(ctx, b.ID); err != nil {
 				return err
 			}
-			if err := pace.wait(ctx, li.res[ri]); err != nil {
-				return err
+			if li == paced {
+				if err := pace.wait(ctx, li.res[ri]); err != nil {
+					return err
+				}
 			}
 			n, err := m.fetchResource(ctx, li, ri, work, headers)
 			if err != nil {
@@ -463,19 +472,41 @@ func (m *Manager) download(ctx context.Context, u, path string, headers map[stri
 }
 
 // pacer keeps a job's segment fetches at most factor× faster than the
-// content plays (see paceFactor): it waits before a segment until the wall
-// time since the first fetched segment is at least (content time)/factor.
-// Segments already on disk (a resumed job) don't count.
+// content plays (see paceFactor), the way a player at that playback speed
+// would fetch: it waits before a segment until the wall time since the first
+// fetched segment is at least (content time − burst)/factor. Segments already
+// on disk (a resumed job) don't count.
 type pacer struct {
-	factor       float64
+	factor float64
+	// burst is content (seconds) fetched up front without waiting, like a
+	// player filling its buffer at start.
+	burst float64
+	// credit caps how far behind schedule the pacer may fall: after a pause
+	// (someone streaming) or slow retries it resumes the normal rhythm
+	// instead of catching up at full speed. 0 = uncapped.
+	credit time.Duration
+	// jitter scales each wait (nil = exact), spreading the requests over time
+	// as a player's buffer refills do. Waits target an absolute schedule, so
+	// the average rate doesn't drift.
+	jitter       func() float64
 	start        time.Time
 	contentStart float64 // playlist time where this run's fetching began
 	lastEnd      float64
 }
 
+// newPlayerPacer is the pacer the runner uses.
+func newPlayerPacer(factor float64) pacer {
+	return pacer{
+		factor: factor,
+		burst:  30,
+		credit: 10 * time.Second,
+		jitter: func() float64 { return 0.7 + 0.6*rand.Float64() },
+	}
+}
+
 func (p *pacer) skip(r localResource) {
 	if r.Kind == "segment" && r.End > 0 {
-		p.lastEnd = r.End
+		p.lastEnd = max(p.lastEnd, r.End)
 	}
 }
 
@@ -488,9 +519,18 @@ func (p *pacer) delay(r localResource, now time.Time) time.Duration {
 		p.start, p.contentStart = now, p.lastEnd
 		return 0
 	}
+	ahead := p.lastEnd - p.contentStart - p.burst
+	if ahead <= 0 {
+		return 0
+	}
 	// This segment may start once the previous ones "played" at factor×.
-	due := time.Duration((p.lastEnd - p.contentStart) / p.factor * float64(time.Second))
-	if elapsed := now.Sub(p.start); elapsed < due {
+	due := time.Duration(ahead / p.factor * float64(time.Second))
+	elapsed := now.Sub(p.start)
+	if p.credit > 0 && elapsed-due > p.credit {
+		p.start = now.Add(-(due + p.credit))
+		elapsed = due + p.credit
+	}
+	if elapsed < due {
 		return due - elapsed
 	}
 	return 0
@@ -499,7 +539,10 @@ func (p *pacer) delay(r localResource, now time.Time) time.Duration {
 func (p *pacer) wait(ctx context.Context, r localResource) error {
 	d := p.delay(r, time.Now())
 	if r.Kind == "segment" && r.End > 0 {
-		p.lastEnd = r.End
+		p.lastEnd = max(p.lastEnd, r.End)
+	}
+	if d > 0 && p.jitter != nil {
+		d = time.Duration(float64(d) * p.jitter())
 	}
 	if d <= 0 {
 		return nil
@@ -510,6 +553,47 @@ func (p *pacer) wait(ctx context.Context, r localResource) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// pacedInput is the track that sets the pace: the video one (else the
+// first). Audio and subtitle tracks ride along in content order; pacing them
+// too would count the same playback time twice, and a subtitle track is
+// often one segment spanning the whole content.
+func pacedInput(locals []*localInput) *localInput {
+	for _, li := range locals {
+		if li.Kind == "video" {
+			return li
+		}
+	}
+	if len(locals) > 0 {
+		return locals[0]
+	}
+	return nil
+}
+
+type fetchItem struct {
+	li *localInput
+	ri int
+	at float64 // content time where the resource is needed
+}
+
+// interleaveResources orders every input's resources by the content time
+// they are needed at (a key or init section with the segment after it), as a
+// player fetching video and audio side by side would.
+func interleaveResources(locals []*localInput) []fetchItem {
+	var items []fetchItem
+	for _, li := range locals {
+		at := 0.0
+		for ri, r := range li.res {
+			items = append(items, fetchItem{li: li, ri: ri, at: at})
+			if r.Kind == "segment" && r.End > 0 {
+				at = r.End
+			}
+		}
+	}
+	// Stable: equal times keep input order, and each input its own order.
+	sort.SliceStable(items, func(i, j int) bool { return items[i].at < items[j].at })
+	return items
 }
 
 // throttle paces reads to the max download speed setting (0 = unlimited).

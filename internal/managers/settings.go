@@ -114,12 +114,13 @@ var (
 		"lua:",              // Lua plugin settings: lua:{pluginID}:global:{key}
 		// No generic "pileus_" prefix: it would cover the master secret and the TLS
 		// key. Writable pileus_* keys are listed by exact name in allowedExactKeys.
-		"vpn_proxy_url",   // VPN proxy address, restored at boot
-		"http_profile",    // upstream fetch path: "standard" forces direct fetches
-		"prebuffer_",      // HLS pre-buffer: prebuffer_enabled/_segments_vod/_segments_live/_max_wait_ms/_max_bytes
-		"egress_profiles", // JSON: network exit registry (egress.go)
-		"egress_ipv6",     // "1"/"0": prefer IPv6 on direct connections
-		"download_",       // offline downloads (internal/downloads)
+		"vpn_proxy_url",    // VPN proxy address, restored at boot
+		"http_profile",     // upstream fetch path: "standard" forces direct fetches
+		"browser_service_", // browser service address/API key (BrowserServiceConfig)
+		"prebuffer_",       // HLS pre-buffer: prebuffer_enabled/_segments_vod/_segments_live/_max_wait_ms/_max_bytes
+		"egress_profiles",  // JSON: network exit registry (egress.go)
+		"egress_ipv6",      // "1"/"0": prefer IPv6 on direct connections
+		"download_",        // offline downloads (internal/downloads)
 	}
 	allowedPrefixesMu sync.RWMutex
 

@@ -44,15 +44,21 @@ type browserAPI interface {
 	WaitInterceptVia(ctx context.Context, req *gen.WaitInterceptRequest, proxyURL string) (*gen.WaitInterceptResponse, error)
 }
 
-// currentBrowserClient returns managers.BrowserClient as a browserAPI, or a
-// true nil interface when unset (a typed nil pointer would defeat the
+// currentBrowserClient returns managers.BrowserClient() as a browserAPI, or
+// a true nil interface when unset (a typed nil pointer would defeat the
 // "not available" check).
 func currentBrowserClient() browserAPI {
-	if managers.BrowserClient == nil {
+	bc := managers.BrowserClient()
+	if bc == nil {
 		return nil
 	}
-	return managers.BrowserClient
+	return bc
 }
+
+// defaultPluginUserAgent is sent by mycelium.network.* when the plugin sets
+// no User-Agent of its own: a common desktop browser string, since many sites
+// answer an unknown client with an error page.
+const defaultPluginUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
 
 // maxSleepMillis caps mycelium.sleep(ms) around the entrypoint budget.
 const maxSleepMillis = int(defaultEntrypointTimeout / time.Millisecond)
@@ -82,7 +88,7 @@ type SDKOpts struct {
 	PluginID        string
 	PluginDir       string
 	Redis           *managers.RedisRepo
-	Browser         browserAPI
+	Browser         browserAPI // fixed client (tests); nil = managers.BrowserClient() at call time
 	LogBuf          *managers.PluginLogBuffer
 	HTTPClient      *http.Client // direct client (no proxy)
 	ProxyHTTPClient *http.Client // single-proxy client, used when ProxyClientFor is unset
@@ -244,7 +250,7 @@ func buildNetworkModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 				req.Header.Set(k, v)
 			}
 			if req.Header.Get("User-Agent") == "" {
-				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+				req.Header.Set("User-Agent", defaultPluginUserAgent)
 			}
 
 			resp, err = client.Do(req)
@@ -488,7 +494,14 @@ func buildJSONModule(L *lua.LState) *lua.LTable {
 
 func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable {
 	t := L.NewTable()
-	bm := opts.Browser
+	// Resolved per call, not per LState: the browser service can be
+	// (re)configured from the dashboard while plugins are loaded.
+	browser := func() browserAPI {
+		if opts.Browser != nil {
+			return opts.Browser
+		}
+		return currentBrowserClient()
+	}
 
 	// VPN-routed calls send their browser traffic through the VPN too, decided
 	// per call from callScope. blocked means "must use a proxy, none available".
@@ -508,6 +521,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		triggerURL := L.CheckString(1)
 		pattern := L.CheckString(2)
 		timeoutSec := L.OptInt(3, 30)
+		bm := browser()
 		if bm == nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LNil)
@@ -553,6 +567,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 	t.RawSetString("navigate", L.NewFunction(func(L *lua.LState) int {
 		url := L.CheckString(1)
 		timeoutSec := L.OptInt(2, 30)
+		bm := browser()
 		if bm == nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LNil)
@@ -589,6 +604,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		url := L.CheckString(1)
 		js := L.CheckString(2)
 		timeoutSec := L.OptInt(3, 30)
+		bm := browser()
 		if bm == nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString("browser service not available"))

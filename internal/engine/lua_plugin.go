@@ -553,7 +553,6 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 			PluginID:        mf.ID,
 			PluginDir:       dir,
 			Redis:           managers.Redis,
-			Browser:         currentBrowserClient(),
 			LogBuf:          logBuf,
 			HTTPClient:      direct,
 			ProxyHTTPClient: m.proxyClient,

@@ -21,7 +21,7 @@ func signedKeyURL(upstreamURL string) string {
 // useLoopbackPlaylistClient swaps getProxySession()'s underlying transport
 // for a plain, unguarded http.Client for the duration of a test.
 // upstreamPlaylistClient(useVPN=false, ...) returns getProxySession(), whose
-// default transport (newUTLSTransport) blocks loopback via
+// default transport (newUpstreamTransport) blocks loopback via
 // core.CheckURLNotSSRF — same reasoning as useLoopbackSegmentClient
 // (proxy_challenge_test.go), just for the playlist/key client ProxyKey uses.
 func useLoopbackPlaylistClient(t *testing.T) {

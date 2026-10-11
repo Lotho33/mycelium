@@ -558,3 +558,57 @@ func TestPacer(t *testing.T) {
 		t.Fatal("pace 0 must mean unlimited")
 	}
 }
+
+func TestPlayerPacerBurstAndCredit(t *testing.T) {
+	seg := func(end float64) localResource { return localResource{Kind: "segment", End: end} }
+	p := pacer{factor: 2, burst: 30, credit: 10 * time.Second}
+	t0 := time.Now()
+	p.delay(seg(6), t0) // first fetch starts the clock
+	// Within the first 30 s of content: no wait (buffer fill).
+	for _, end := range []float64{6, 12, 18, 24, 30} {
+		p.lastEnd = end
+		if d := p.delay(seg(end+6), t0); d != 0 {
+			t.Fatalf("burst: segment after %vs waited %v", end, d)
+		}
+	}
+	// 36 s of content = 6 s past the burst → due at 3 s at 2×.
+	p.lastEnd = 36
+	if d := p.delay(seg(42), t0.Add(time.Second)); d != 2*time.Second {
+		t.Fatalf("after burst: wait %v, want 2s", d)
+	}
+	// A long pause (someone was streaming): the schedule is far behind, but
+	// only 10 s of credit may be spent catching up, not the whole pause.
+	p.lastEnd = 60 // due at 15 s
+	now := t0.Add(10 * time.Minute)
+	if d := p.delay(seg(66), now); d != 0 {
+		t.Fatalf("after pause: wait %v, want 0", d)
+	}
+	p.lastEnd = 100 // 40 s of content more = 20 s at 2×; credit was 10 s
+	if d := p.delay(seg(106), now); d != 10*time.Second {
+		t.Fatalf("after pause: wait %v, want 10s (no full-speed catch-up)", d)
+	}
+}
+
+func TestInterleaveResourcesFollowsContentTime(t *testing.T) {
+	video := &localInput{ffInput: ffInput{Kind: "video"}, res: []localResource{
+		{Name: "v-map", Kind: "map"},
+		{Name: "v1", Kind: "segment", End: 6}, {Name: "v2", Kind: "segment", End: 12}, {Name: "v3", Kind: "segment", End: 18},
+	}}
+	audio := &localInput{ffInput: ffInput{Kind: "audio"}, res: []localResource{
+		{Name: "a1", Kind: "segment", End: 10}, {Name: "a2", Kind: "segment", End: 20},
+	}}
+	subs := &localInput{ffInput: ffInput{Kind: "subtitle"}, res: []localResource{
+		{Name: "s1", Kind: "segment", End: 18},
+	}}
+	var got []string
+	for _, it := range interleaveResources([]*localInput{audio, video, subs}) {
+		got = append(got, it.li.res[it.ri].Name)
+	}
+	want := "a1,v-map,v1,s1,v2,a2,v3" // needed at 0,0,0,0 then 6,10,12
+	if strings.Join(got, ",") != want {
+		t.Fatalf("order %v, want %s", got, want)
+	}
+	if pacedInput([]*localInput{audio, video, subs}) != video {
+		t.Fatal("the video track must set the pace")
+	}
+}

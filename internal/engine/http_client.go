@@ -13,7 +13,8 @@ import (
 )
 
 // NewPluginHTTPClient returns the *http.Client behind mycelium.network.*:
-//   - uTLS with a Chrome ClientHello, ALPN forced to http/1.1;
+//   - TLS via uTLS with its standard browser preset, ALPN forced to
+//     http/1.1 (the transport has no HTTP/2 when it dials TLS itself);
 //   - optional proxy (proxyURL "socks5://host:1080" or "http://host:8888",
 //     "" = direct): with one, every connection goes through it and a proxy
 //     failure fails the request, never falling back to direct;

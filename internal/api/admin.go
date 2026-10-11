@@ -37,10 +37,12 @@ func AdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/plugins/info", auth(getPluginsInfo))
 	mux.HandleFunc("GET /admin/enricher-bindings", auth(getEnricherBindings))
 	mux.HandleFunc("GET /admin/info", auth(getAdminInfo))
+	mux.HandleFunc("GET /admin/browser-service/health", auth(browserServiceHealth))
 	// Generic egress proxy URL (VPN_PROXY_URL is the primary knob).
 	mux.HandleFunc("POST /admin/vpn", auth(setVPNProxy))
 	mux.HandleFunc("POST /admin/vpn/test", auth(testVPNConnection))
 	mux.HandleFunc("GET /admin/logs/stream", auth(getLogsSSE))
+	mux.HandleFunc("GET /admin/events", auth(getAdminEvents))
 	mux.HandleFunc("POST /admin/core/update", auth(coreUpdate))
 	// Graceful self-restart — for settings only read once at boot; see
 	// restartService.

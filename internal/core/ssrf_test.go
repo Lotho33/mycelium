@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -85,6 +87,8 @@ func TestGuardedDialContextPinsResolvedIPPreventingRebinding(t *testing.T) {
 	calls := 0
 	orig := lookupIPAddr
 	defer func() { lookupIPAddr = orig }()
+	guardDNSCache.Delete("rebind.example")
+	t.Cleanup(func() { guardDNSCache.Delete("rebind.example") })
 	lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
 		idx := calls
 		if idx >= len(answers) {
@@ -184,5 +188,86 @@ func TestBlockedProxyIP_BlockPrivateCoversCGNAT(t *testing.T) {
 	proxyBlockPrivate = false
 	if BlockedProxyIP(net.ParseIP("100.64.0.1")) {
 		t.Error("CGNAT must stay allowed by default, like RFC1918")
+	}
+}
+
+// fakeDNS swaps both guard resolvers for the test and clears the cache.
+func fakeDNS(t *testing.T, public, local func(context.Context, string) ([]net.IPAddr, error)) {
+	t.Helper()
+	origPub, origLocal := lookupIPAddr, lookupIPAddrLocal
+	lookupIPAddr, lookupIPAddrLocal = public, local
+	clear := func() { guardDNSCache.Range(func(k, _ any) bool { guardDNSCache.Delete(k); return true }) }
+	clear()
+	t.Cleanup(func() {
+		lookupIPAddr, lookupIPAddrLocal = origPub, origLocal
+		clear()
+	})
+}
+
+func TestGuardLookupFallsBackToLocalResolverAndCaches(t *testing.T) {
+	pubCalls, localCalls := 0, 0
+	fakeDNS(t,
+		func(context.Context, string) ([]net.IPAddr, error) {
+			pubCalls++
+			return nil, &net.DNSError{Err: "no such host", Name: "jellyfin", IsNotFound: true}
+		},
+		func(context.Context, string) ([]net.IPAddr, error) {
+			localCalls++
+			return []net.IPAddr{{IP: net.ParseIP("172.18.0.5")}}, nil
+		},
+	)
+	for i := 0; i < 3; i++ {
+		ips, err := guardLookup(context.Background(), "jellyfin")
+		if err != nil || len(ips) != 1 || ips[0].IP.String() != "172.18.0.5" {
+			t.Fatalf("guardLookup = %v, %v; want the local resolver's answer", ips, err)
+		}
+	}
+	if pubCalls != 1 || localCalls != 1 {
+		t.Fatalf("resolver calls public=%d local=%d, want 1/1 (later lookups from cache)", pubCalls, localCalls)
+	}
+}
+
+func TestGuardLookupDoesNotCacheFailures(t *testing.T) {
+	calls := 0
+	fail := func(context.Context, string) ([]net.IPAddr, error) {
+		calls++
+		return nil, &net.DNSError{Err: "timeout", Name: "x", IsTimeout: true}
+	}
+	fakeDNS(t, fail, fail)
+	for i := 0; i < 2; i++ {
+		if _, err := guardLookup(context.Background(), "cdn.example"); err == nil {
+			t.Fatal("want an error")
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("resolver calls = %d, want 4 (no negative caching)", calls)
+	}
+}
+
+func TestGuardedDialContextFallsThroughToOtherFamily(t *testing.T) {
+	fakeDNS(t,
+		func(context.Context, string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("2001:4860::1")}, {IP: net.ParseIP("93.184.216.34")}}, nil
+		},
+		func(context.Context, string) ([]net.IPAddr, error) { return nil, errors.New("unused") },
+	)
+	orig := egressPreferIPv6()
+	SetEgressPreferIPv6(true)
+	t.Cleanup(func() { SetEgressPreferIPv6(orig) })
+
+	var dialed []string
+	base := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		if strings.HasPrefix(addr, "[") {
+			return nil, errors.New("network unreachable")
+		}
+		return nil, nil
+	}
+	if _, err := GuardedDialContext(base)(context.Background(), "tcp", "cdn.example:443"); err != nil {
+		t.Fatalf("dial errored: %v", err)
+	}
+	want := []string{"[2001:4860::1]:443", "93.184.216.34:443"}
+	if strings.Join(dialed, ",") != strings.Join(want, ",") {
+		t.Fatalf("dialed %v, want %v", dialed, want)
 	}
 }

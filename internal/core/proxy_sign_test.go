@@ -9,7 +9,7 @@ func TestProxySignRoundTrip(t *testing.T) {
 	SetProxySignKey([]byte("test-master-secret"))
 	defer SetProxySignKey(nil)
 
-	raw := "https://box.local:8080/proxy/playlist.m3u8?data=aHR0cHM&origin=aHR0cA&cookies=Yz1k&vpn=1&egr=mullvad&uid=sess123"
+	raw := "https://box.local:8080/proxy/playlist.m3u8?data=aHR0cHM&origin=aHR0cA&cookies=Yz1k&vpn=1&egr=exit1&uid=sess123"
 	signed := AppendProxySig(raw)
 
 	u, err := url.Parse(signed)

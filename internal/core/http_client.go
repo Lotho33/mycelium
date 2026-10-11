@@ -228,6 +228,12 @@ func CFDialContext(ctx context.Context, network, addr string) (net.Conn, error) 
 	if err != nil {
 		return nil, err
 	}
+	// A literal IP (e.g. from GuardedDialContext, which already picked the
+	// family): one dial, not the same address twice.
+	if net.ParseIP(host) != nil {
+		d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+		return d.DialContext(ctx, network, addr)
+	}
 
 	// Preferred family first, then the other one (no AAAA, or a black-holed
 	// family).

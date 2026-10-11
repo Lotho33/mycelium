@@ -94,7 +94,7 @@ func TestNewPluginHTTPClientDirectAllowsPublicTarget(t *testing.T) {
 // caller-supplied proxy is NOT wrapped by the SSRF guard: the proxy itself
 // resolves and dials the real destination (see core.ProxyDialer), so a local
 // IP check here would inspect only the proxy's own address, not the target —
-// same reasoning as newUTLSProxyTransport in internal/api/upstream_transport.go.
+// same reasoning as newUpstreamProxyTransport in internal/api/upstream_transport.go.
 // A bogus proxy URL is used so the test needs no real listener; the assertion
 // is only that failure comes from core.ProxyDialer's own scheme handling, not
 // from the SSRF guard rejecting the (unrelated, non-loopback) proxy host.

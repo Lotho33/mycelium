@@ -643,7 +643,28 @@ async function uploadLuaPlugin() {
 }
 
 // ─── Plugin list ──────────────────────────────────────────────────────────────
+// loadPlugins is called on load, after every action and on every live update
+// (/admin/events): with the same plugins on screen it updates only the cards
+// whose data changed, and a card with its drawer open gets only a new header
+// (state and buttons), so settings being typed and the live log stay put.
+// Calls are serialised: one arriving mid-run schedules one more run.
+let _pluginsSig = null;       // ids+types on screen, in order
+let _pluginSnap = {};         // pid → JSON of the data its card was built from
+let _pluginsBusy = false, _pluginsAgain = false;
 async function loadPlugins() {
+    if (_pluginsBusy) { _pluginsAgain = true; return; }
+    _pluginsBusy = true;
+    try {
+        do {
+            _pluginsAgain = false;
+            await _loadPluginsOnce();
+        } while (_pluginsAgain);
+    } finally {
+        _pluginsBusy = false;
+    }
+}
+
+async function _loadPluginsOnce() {
     await loadEgress(); // popola _egressProfiles per la <select> "Uscita" delle card
     const [infoR, bindR] = await Promise.all([
         apiFetch('/admin/plugins/info'),
@@ -656,11 +677,6 @@ async function loadPlugins() {
     const availProviders   = bindData.providers || [];
 
     const cont = document.getElementById('plugins-container');
-    cont.innerHTML = '';
-    if (!Object.keys(schemas).length) {
-        cont.innerHTML = `<p class="text-gray-600 text-sm text-center py-8">Nessun plugin installato.</p>`;
-        return;
-    }
 
     const lua = {}, providers = {}, enrichers = {};
     for (const [pid, d] of Object.entries(schemas)) {
@@ -668,6 +684,42 @@ async function loadPlugins() {
         else if (d.plugin_type === 'enricher') enrichers[pid] = d;
         else providers[pid] = d;
     }
+    const ordered = [
+        ...Object.entries(lua).map(([p, d]) => [p, d, false]),
+        ...Object.entries(providers).map(([p, d]) => [p, d, false]),
+        ...Object.entries(enrichers).map(([p, d]) => [p, d, true]),
+    ];
+    const snapOf = (pid, d) => JSON.stringify([d, enricherBindings[pid] || [], availProviders, _egressProfiles]);
+    const sig = ordered.map(([p, d]) => p + ':' + d.plugin_type).join('|');
+
+    // Same plugins as on screen: update only what changed.
+    if (sig === _pluginsSig) {
+        for (const [pid, d, isEnr] of ordered) {
+            const snap = snapOf(pid, d);
+            if (snap === _pluginSnap[pid]) continue;
+            _pluginSnap[pid] = snap;
+            patchPluginCard(pid, buildCard(pid, d, isEnr, enricherBindings, availProviders));
+        }
+        return;
+    }
+
+    // Plugins added or removed: rebuild, reopening the drawers that were open.
+    const reopen = {};
+    cont.querySelectorAll('[id^="drawer-"]').forEach(dr => {
+        if (dr.classList.contains('hidden')) return;
+        const pid = dr.id.slice('drawer-'.length);
+        const active = cont.querySelector(`[id^="ptab-${CSS.escape(pid)}-"].text-blue-400`);
+        reopen[pid] = active ? active.dataset.tab : 'log';
+    });
+    Object.keys(_pluginLogSSE).forEach(disconnectPluginLogSSE);
+    _pluginsSig = sig;
+    _pluginSnap = {};
+    cont.innerHTML = '';
+    if (!ordered.length) {
+        cont.innerHTML = `<p class="text-gray-600 text-sm text-center py-8">Nessun plugin installato.</p>`;
+        return;
+    }
+    for (const [pid, d] of ordered) _pluginSnap[pid] = snapOf(pid, d);
 
     const secHdr = (label, color) => {
         const d = document.createElement('div');
@@ -679,6 +731,29 @@ async function loadPlugins() {
     if (Object.keys(lua).length)       { cont.appendChild(secHdr('Plugin Lua','text-sky-500')); for (const [p,d] of Object.entries(lua))       cont.appendChild(buildCard(p,d,false,enricherBindings,availProviders)); }
     if (Object.keys(providers).length) { cont.appendChild(secHdr('Provider','text-blue-500'));    for (const [p,d] of Object.entries(providers)) cont.appendChild(buildCard(p,d,false,enricherBindings,availProviders)); }
     if (Object.keys(enrichers).length) { cont.appendChild(secHdr('Enricher','text-purple-500'));  for (const [p,d] of Object.entries(enrichers)) cont.appendChild(buildCard(p,d,true, enricherBindings,availProviders)); }
+    for (const [pid, tab] of Object.entries(reopen)) {
+        const dr = document.getElementById(`drawer-${pid}`);
+        if (!dr) continue;
+        dr.classList.remove('hidden');
+        switchPluginTab(pid, tab);
+    }
+}
+
+// patchPluginCard swaps a card for its fresh build. With the drawer open, or
+// while a field in it has focus, only the header is swapped (see loadPlugins).
+function patchPluginCard(pid, fresh) {
+    const old = document.getElementById(fresh.id);
+    if (!old) return;
+    const drawer = document.getElementById(`drawer-${pid}`);
+    const open = drawer && !drawer.classList.contains('hidden');
+    if (!open && !old.contains(document.activeElement)) {
+        disconnectPluginLogSSE(pid);
+        old.replaceWith(fresh);
+        return;
+    }
+    old.className = fresh.className;
+    old.dataset.enabled = fresh.dataset.enabled;
+    old.replaceChild(fresh.firstElementChild, old.firstElementChild);
 }
 
 // ─── Card builder ─────────────────────────────────────────────────────────────
@@ -851,6 +926,9 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     // drawer — its settings must stay perfectly readable so you can configure
     // it before turning it on. (isOff computed after rState, below.)
     card.className = `card border ${borderCls} rounded-xl overflow-hidden transition-opacity`;
+    // Read by the click handler: a live header update (patchPluginCard) keeps
+    // this card element but changes the state.
+    card.dataset.enabled = isEnabled ? '1' : '0';
 
     const resId     = 'plugin-res-'     + esc(pid.replace(/\./g,'-'));
 
@@ -970,7 +1048,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             case 'save-egress':    savePluginEgress(pid, btn); break;
             case 'switch-tab':     switchPluginTab(pid, btn.dataset.tab); break;
             case 'open-editor':    openEditor(pid, data.plugin_name || pid); break;
-            case 'toggle-status':  if (!_installing) togglePluginStatus(pid, !isEnabled); break;
+            case 'toggle-status':  if (!_installing) togglePluginStatus(pid, card.dataset.enabled !== '1'); break;
             case 'uninstall':      if (!_installing) doUninstallPlugin(pid, isLua); break;
             case 'wipe-data':      if (!_installing) doWipePluginData(pid, data.plugin_name || pid); break;
             case 'stop':           if (!_installing) doStopPlugin(pid); break;
@@ -1396,6 +1474,7 @@ async function checkCoreVersion() {
     if (pwBtn) pwBtn.disabled = !d.pileus_web_repo;
     const ipv6 = document.getElementById('egress-ipv6');
     if (ipv6 && typeof d.egress_ipv6 === 'boolean') ipv6.checked = d.egress_ipv6;
+    renderBrowserService(d);
 
     const dlSet = (id, v, def) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v ?? def; };
     dlSet('dl-quota', d.download_quota_gb, 20);
@@ -1404,7 +1483,7 @@ async function checkCoreVersion() {
     const dlEn = document.getElementById('dl-enabled');
     if (dlEn && typeof d.download_enabled === 'boolean') dlEn.checked = d.download_enabled;
     dlSet('dl-maxmbps', d.download_max_mbps, 0);
-    dlSet('dl-pace', d.download_pace, 4);
+    dlSet('dl-pace', d.download_pace, 2);
     const dlPause = document.getElementById('dl-pause');
     if (dlPause && typeof d.download_pause_while_streaming === 'boolean') dlPause.checked = d.download_pause_while_streaming;
     const dlDel = document.getElementById('dl-delete-fetched');
@@ -1513,6 +1592,83 @@ async function saveEgressIPv6(cb) {
     }
 }
 
+// Network → "Browser service": URL/API key settings that override
+// MYCELIUM_BROWSER_URL / MYCELIUM_BROWSER_API_KEY. The key is never sent back
+// by the server, only whether one is set.
+function renderBrowserService(d) {
+    const urlIn = document.getElementById('bs-url');
+    if (!urlIn) return;
+    if (document.activeElement !== urlIn) urlIn.value = d.browser_service_url || '';
+    const env = document.getElementById('bs-env');
+    if (d.browser_service_url_env) {
+        env.textContent = (d.browser_service_url ? 'Ignorato, prevale il valore qui sopra — ' : 'In uso — ')
+            + 'MYCELIUM_BROWSER_URL=' + d.browser_service_url_env;
+        env.classList.remove('hidden');
+    } else {
+        env.classList.add('hidden');
+    }
+    document.getElementById('bs-key-state').textContent = d.browser_service_key_set
+        ? 'Chiave salvata qui.'
+        : (d.browser_service_key_env_set ? 'Chiave da MYCELIUM_BROWSER_API_KEY.' : 'Nessuna chiave.');
+    document.getElementById('bs-key-clear').classList.toggle('hidden', !d.browser_service_key_set);
+    const st = document.getElementById('bs-status');
+    st.textContent = d.browser_service_active ? '● configurato' : '○ non configurato';
+    st.className = 'text-[11px] ' + (d.browser_service_active ? 'text-sky-400' : 'text-gray-500');
+}
+
+async function postBrowserService(body) {
+    const r = await apiFetch('/admin/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!r?.ok) {
+        showToast(await apiErrorMessage(r, 'Salvataggio non riuscito.'), 'error');
+        return false;
+    }
+    await checkCoreVersion();
+    return true;
+}
+
+async function saveBrowserService(e) {
+    e.preventDefault();
+    const body = { browser_service_url: document.getElementById('bs-url').value.trim() };
+    const keyIn = document.getElementById('bs-key');
+    if (keyIn.value.trim()) body.browser_service_api_key = keyIn.value.trim();
+    if (await postBrowserService(body)) {
+        keyIn.value = '';
+        showToast('Servizio browser aggiornato.', 'success');
+        testBrowserService();
+    }
+}
+
+async function clearBrowserServiceKey(e) {
+    e.preventDefault();
+    if (await postBrowserService({ browser_service_api_key: '' })) {
+        showToast('Chiave rimossa.', 'success');
+    }
+}
+
+async function testBrowserService() {
+    const st = document.getElementById('bs-status');
+    st.textContent = 'verifica…';
+    st.className = 'text-[11px] text-gray-500';
+    const r = await apiFetch('/admin/browser-service/health');
+    const d = r?.ok ? await r.json() : null;
+    if (!d) {
+        st.textContent = 'verifica non riuscita';
+        st.className = 'text-[11px] text-red-400';
+    } else if (!d.configured) {
+        st.textContent = '○ non configurato';
+    } else if (d.error) {
+        st.textContent = '● non raggiungibile: ' + d.error;
+        st.className = 'text-[11px] text-red-400';
+    } else {
+        st.textContent = d.ready ? '● raggiungibile' + (d.engine ? ' (' + d.engine + ')' : '') : '● raggiungibile, motore non pronto';
+        st.className = 'text-[11px] ' + (d.ready ? 'text-emerald-400' : 'text-amber-400');
+    }
+}
+
 // Network → "Restart": the server exits cleanly and the container restart
 // policy brings it back; the page reloads by itself.
 async function restartService() {
@@ -1533,8 +1689,69 @@ function scheduleResourcePoll() {
     setTimeout(scheduleResourcePoll, _activeTab === 'plugins' ? 5000 : 20000);
 }
 
+// ─── Live updates ─────────────────────────────────────────────────────────────
+// /admin/events says which section changed (admin_events.go); the page
+// reloads just that one. Sections not on screen are reloaded when opened
+// (switchTab). A reload is held back while a field of that section has focus
+// and runs when it loses it, so nothing being typed is overwritten.
+let _liveES = null;
+const _livePending = {};
+const _liveTimers = {};
+const _liveSections = {
+    plugins:   { tab: 'plugins', load: () => loadPlugins(), always: true },
+    egress:    { tab: 'vpn',     load: () => loadEgress() },
+    devices:   { tab: 'devices', load: () => loadPileusDevices() },
+    profiles:  { tab: 'users',   load: () => loadPileusProfiles() },
+    downloads: { tab: 'offline', load: () => loadDownloadsAdmin() },
+};
+
+function _liveEditing(tabId) {
+    const ae = document.activeElement;
+    const tab = document.getElementById(`tab-${tabId}`);
+    return !!(tab && ae && tab.contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName));
+}
+
+function liveRefresh(topic) {
+    const sec = _liveSections[topic];
+    if (!sec) return;
+    if (!sec.always && _activeTab !== sec.tab) return;
+    // Plugins handle focus per card (patchPluginCard).
+    if (topic !== 'plugins' && _liveEditing(sec.tab)) { _livePending[topic] = true; return; }
+    // Coalesce bursts (several changes in one tick).
+    clearTimeout(_liveTimers[topic]);
+    _liveTimers[topic] = setTimeout(() => { delete _livePending[topic]; sec.load(); }, 150);
+}
+
+document.addEventListener('focusout', () => setTimeout(() => {
+    for (const topic of Object.keys(_livePending)) {
+        if (!_liveEditing(_liveSections[topic].tab)) liveRefresh(topic);
+    }
+}, 0));
+
+function connectLive() {
+    if (_liveES || document.hidden) return;
+    _liveES = new EventSource('/admin/events');
+    _liveES.onmessage = e => {
+        let topic;
+        try { topic = JSON.parse(e.data).topic; } catch { return; }
+        if (topic === '*') Object.keys(_liveSections).forEach(liveRefresh);
+        else liveRefresh(topic);
+    };
+    // EventSource reconnects by itself; on a 401 (session over) it gives up
+    // and the next user action goes to the login page.
+}
+
+function disconnectLive() {
+    if (_liveES) { _liveES.close(); _liveES = null; }
+}
+
+// A hidden tab doesn't keep the server's watcher busy; back in view it
+// reconnects and the first message ("*") resyncs everything.
+document.addEventListener('visibilitychange', () => document.hidden ? disconnectLive() : connectLive());
+
 window.onload = () => {
     loadPlugins();
+    connectLive();
     checkCoreVersion();
     scheduleResourcePoll();
     loadPileusDevices();
@@ -1618,7 +1835,7 @@ async function saveDownloadSettings() {
             download_pause_while_streaming: document.getElementById('dl-pause').checked ? '1' : '0',
             download_delete_after_fetch: document.getElementById('dl-delete-fetched').checked ? '1' : '0',
             download_max_mbps: num('dl-maxmbps', 0),
-            download_pace: num('dl-pace', 4),
+            download_pace: num('dl-pace', 2),
         }),
     });
     if (r?.ok) { showToast('Salvato.', 'success'); loadDownloadsAdmin(); }

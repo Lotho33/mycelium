@@ -128,8 +128,8 @@ environment variable:
 | `MYCELIUM_SERVER_HOST`  | autodetected            | Address clients use for proxy/download URLs, e.g. `192.168.1.10:8000` or `https://media.example.com` |
 | `MYCELIUM_TRUSTED_PROXY_CIDRS` | loopback         | Reverse proxies whose `X-Forwarded-*` headers are trusted |
 | `MYCELIUM_STATIC_PAIRING_CODE` | —                | Reusable pairing code (≥ 10 chars) for a public demo instance; see [docs/deploy-selfhosted.md](docs/deploy-selfhosted.md) |
-| `MYCELIUM_BROWSER_URL`  | —                       | Base URL of an optional browser service (see [Browser service](#browser-service)) |
-| `MYCELIUM_BROWSER_API_KEY` | —                    | Sent as `X-Api-Key` to the browser service |
+| `MYCELIUM_BROWSER_URL`  | —                       | Base URL of an optional browser service (see [Browser service](#browser-service)); overridable from the dashboard (Network → Browser service) |
+| `MYCELIUM_BROWSER_API_KEY` | —                    | Sent as `X-Api-Key` to the browser service; overridable from the dashboard too |
 | `VPN_PROXY_URL`         | —                       | Proxy for plugin traffic, e.g. `socks5://proxy:1080` or `http://host:8888` |
 | `MYCELIUM_HTTP_PROFILE` | —                       | `standard` forces direct upstream fetches even with a browser service configured |
 | `MYCELIUM_DEBUG`        | —                       | `1` enables verbose logging |

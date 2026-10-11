@@ -189,8 +189,8 @@ func buildProxyRequest(method, targetURL, origin, cookiesRaw, xhdrRaw string) (*
 
 	// UA policy:
 	//   - normally force compatUA, so UA and client hints agree;
-	//   - keep the captured UA when a session-verification cookie
-	//     (cf_clearance) is present: it is bound to the UA it was issued to;
+	//   - keep the captured UA when the site's session cookie (cf_clearance)
+	//     is present: the site binds that session to the UA it was issued to;
 	//   - keep it when resolve_stream sets the X-Force-User-Agent sentinel:
 	//     some upstreams bind their stream token to the exact UA. A sniffed UA
 	//     alone is not trusted (it can be inconsistent with compatUA's client

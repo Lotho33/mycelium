@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -29,6 +31,14 @@ func saveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Body non valido", http.StatusBadRequest)
 		return
 	}
+	_, browserURLChanged := payload[managers.BrowserURLSetting]
+	_, browserKeyChanged := payload[managers.BrowserAPIKeySetting]
+	if browserURLChanged {
+		if err := validateBrowserServiceURL(fmt.Sprint(payload[managers.BrowserURLSetting])); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if err := managers.Settings.Save(payload); err != nil {
 		http.Error(w, "Errore salvataggio", http.StatusInternalServerError)
 		return
@@ -37,7 +47,12 @@ func saveSettings(w http.ResponseWriter, r *http.Request) {
 		// Applies to the next dial.
 		core.SetEgressPreferIPv6(core.ParseBoolish(fmt.Sprint(v)))
 	}
-	if _, ok := payload["http_profile"]; ok {
+	if browserURLChanged || browserKeyChanged {
+		// Reconnect now; the relay-or-direct choice is made when the upstream
+		// clients are built, so rebuild them too.
+		managers.ApplyBrowserServiceConfig()
+		resetUpstreamClients()
+	} else if _, ok := payload["http_profile"]; ok {
 		// Rebuild the proxy's upstream clients so the change applies at once.
 		resetUpstreamClients()
 	}
@@ -158,6 +173,38 @@ func clearCacheHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// validateBrowserServiceURL accepts "" (= fall back to the environment) or an
+// absolute http(s) URL with a host.
+func validateBrowserServiceURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("indirizzo del servizio browser non valido: serve un URL http(s)://host:porta")
+	}
+	return nil
+}
+
+// browserServiceHealth probes the configured browser service (/health).
+func browserServiceHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	bc := managers.BrowserClient()
+	if bc == nil {
+		json.NewEncoder(w).Encode(map[string]any{"configured": false})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	ready, engine, err := bc.Health(ctx)
+	out := map[string]any{"configured": true, "ready": ready, "engine": engine}
+	if err != nil {
+		out["error"] = core.RedactURLError(err).Error()
+	}
+	json.NewEncoder(w).Encode(out)
+}
+
 // effectiveServerHost returns the configured server host: the setting, else
 // MYCELIUM_SERVER_HOST.
 func effectiveServerHost() string {
@@ -202,13 +249,25 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 			}
 			return ""
 		}(),
+		// Browser service: the dashboard setting, whether the environment sets
+		// one too (used when the setting is empty), and whether a key is set.
+		// The key itself is never sent back.
+		"browser_service_url":         managers.Settings.GetString(managers.BrowserURLSetting, ""),
+		"browser_service_url_env":     strings.TrimSpace(os.Getenv("MYCELIUM_BROWSER_URL")),
+		"browser_service_key_set":     managers.Settings.GetString(managers.BrowserAPIKeySetting, "") != "",
+		"browser_service_key_env_set": os.Getenv("MYCELIUM_BROWSER_API_KEY") != "",
+		"browser_service_active":      managers.BrowserClient() != nil,
 		// Upstream path of the HLS proxy: "browser-relay" when a browser service is
-		// configured, unless MYCELIUM_HTTP_PROFILE=standard.
+		// configured, "standard" when MYCELIUM_HTTP_PROFILE=standard forces the
+		// direct path, "direct" with no browser service.
 		"http_profile": func() string {
-			if strings.EqualFold(os.Getenv("MYCELIUM_HTTP_PROFILE"), "standard") {
+			switch {
+			case httpProfileStandard():
 				return "standard"
+			case relayEnabled():
+				return "browser-relay"
 			}
-			return "browser-relay"
+			return "direct"
 		}(),
 		// Offline downloads: effective values with defaults.
 		"download_enabled":               managers.Settings.GetString("download_enabled", "1") != "0",
@@ -216,7 +275,7 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		"download_min_free_gb":           settingNumber("download_min_free_gb", 3),
 		"download_retention_days":        settingNumber("download_retention_days", 7),
 		"download_max_mbps":              settingNumber("download_max_mbps", 0),
-		"download_pace":                  settingNumber("download_pace", 4),
+		"download_pace":                  settingNumber("download_pace", 2),
 		"download_pause_while_streaming": managers.Settings.GetString("download_pause_while_streaming", "1") != "0",
 		"download_delete_after_fetch":    managers.Settings.GetString("download_delete_after_fetch", "0") == "1",
 	})

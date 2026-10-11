@@ -155,5 +155,9 @@ func adminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			// Live dashboards: show the write's effect now (admin_events.go).
+			adminEvents.Poke()
+		}
 	}
 }

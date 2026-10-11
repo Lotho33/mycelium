@@ -174,13 +174,9 @@ func main() {
 	// internal/managers/browser_client.go) used by mycelium.browser.* and, for
 	// upstream fetches, by the HLS proxy. Not configured: those SDK calls fail
 	// closed and upstream fetches go out directly.
-	if browserURL := strings.TrimSpace(os.Getenv("MYCELIUM_BROWSER_URL")); browserURL != "" {
-		if err := managers.ConnectBrowserClient(browserURL, os.Getenv("MYCELIUM_BROWSER_API_KEY")); err != nil {
-			log.Printf("[server] browser service client setup failed: %v", err)
-		}
-	} else {
-		log.Printf("[server] servizio browser non configurato (MYCELIUM_BROWSER_URL): mycelium.browser.* non disponibile, fetch upstream diretti")
-	}
+	// Address and key: dashboard setting first, else MYCELIUM_BROWSER_URL /
+	// MYCELIUM_BROWSER_API_KEY.
+	managers.ApplyBrowserServiceConfig()
 
 	if strings.TrimSpace(os.Getenv("MYCELIUM_STATIC_PAIRING_CODE")) != "" {
 		if pileus.StaticPairingCode() == "" {

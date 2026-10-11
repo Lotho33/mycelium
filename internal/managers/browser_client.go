@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Lotho33/stipes-sdk/sdk/gen"
@@ -34,11 +35,57 @@ func (e *BrowserAPIError) Error() string {
 	return fmt.Sprintf("browser service: HTTP %d: %s", e.Status, e.Msg)
 }
 
-// BrowserClient is the process-wide client of the optional browser service,
+// browserClient is the process-wide client of the optional browser service,
 // a separate process reached over HTTP/JSON: navigate/eval/sniff/fetch plus
 // a readiness probe. It maps stipes-sdk's gen types to that API. Nil until
-// ConnectBrowserClient.
-var BrowserClient *BrowserServiceClient
+// ConnectBrowserClient; replaced at runtime when the dashboard changes the
+// service address, hence atomic.
+var browserClient atomic.Pointer[BrowserServiceClient]
+
+// BrowserClient returns the current browser service client, nil when none
+// is configured. Callers should read it once per operation.
+func BrowserClient() *BrowserServiceClient { return browserClient.Load() }
+
+// SetBrowserClient replaces the current client (nil = none); for tests.
+func SetBrowserClient(c *BrowserServiceClient) { browserClient.Store(c) }
+
+// Settings keys for the browser service, editable from the dashboard
+// (Network tab). They take precedence over MYCELIUM_BROWSER_URL /
+// MYCELIUM_BROWSER_API_KEY, so a deployment whose environment still carries
+// outdated variable names can be fixed without editing the compose file.
+const (
+	BrowserURLSetting    = "browser_service_url"
+	BrowserAPIKeySetting = "browser_service_api_key"
+)
+
+// BrowserServiceConfig returns the effective browser service URL and API
+// key: the dashboard setting when set, else the environment.
+func BrowserServiceConfig() (url, apiKey string) {
+	url = strings.TrimSpace(Settings.GetString(BrowserURLSetting, ""))
+	if url == "" {
+		url = strings.TrimSpace(os.Getenv("MYCELIUM_BROWSER_URL"))
+	}
+	apiKey = strings.TrimSpace(Settings.GetString(BrowserAPIKeySetting, ""))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("MYCELIUM_BROWSER_API_KEY"))
+	}
+	return url, apiKey
+}
+
+// ApplyBrowserServiceConfig (re)connects the browser client from
+// BrowserServiceConfig, or drops it when no URL is configured. Requests
+// already in flight finish on the client they started with.
+func ApplyBrowserServiceConfig() {
+	url, apiKey := BrowserServiceConfig()
+	if url == "" {
+		browserClient.Store(nil)
+		log.Printf("[server] servizio browser non configurato: mycelium.browser.* non disponibile, fetch upstream diretti")
+		return
+	}
+	if err := ConnectBrowserClient(url, apiKey); err != nil {
+		log.Printf("[server] browser service client setup failed: %v", err)
+	}
+}
 
 // BrowserServiceClient is an HTTP client for the browser service's /v1 API.
 type BrowserServiceClient struct {
@@ -89,7 +136,7 @@ func ConnectBrowserClient(addr, apiKey string) error {
 		apiKey:  apiKey,
 		http:    client,
 	}
-	BrowserClient = bc
+	browserClient.Store(bc)
 	core.SafeGo("managers/browser-client-health-check", func() {
 		// Uses bc, not the package var a later call could replace.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

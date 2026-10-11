@@ -118,7 +118,7 @@ func maxBytesPerSec() int64     { return int64(settingFloat("download_max_mbps",
 
 // paceFactor caps how many times faster than real time segments are fetched
 // (0 = no cap): some sources throttle a whole episode pulled in one burst.
-func paceFactor() float64 { return settingFloat("download_pace", 4) }
+func paceFactor() float64 { return settingFloat("download_pace", 2) }
 
 // ─── manager ─────────────────────────────────────────────────────────────────
 

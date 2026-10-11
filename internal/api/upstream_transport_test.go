@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"mycelium/internal/managers"
 )
@@ -221,9 +223,56 @@ func TestRelayRoundTripper_SendsAPIKey(t *testing.T) {
 // the duration of the test.
 func useRelay(t *testing.T, url, key string) {
 	t.Helper()
-	orig := managers.BrowserClient
-	t.Cleanup(func() { managers.BrowserClient = orig })
+	orig := managers.BrowserClient()
+	t.Cleanup(func() { managers.SetBrowserClient(orig) })
 	if err := managers.ConnectBrowserClient(url, key); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRelayRoundTripper_HeaderTimeoutFailsTheAttempt(t *testing.T) {
+	release := make(chan struct{})
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer relay.Close()
+	defer close(release)
+	useRelay(t, relay.URL, "")
+
+	rt := &relayRoundTripper{headerTimeout: 50 * time.Millisecond}
+	req, _ := http.NewRequest(http.MethodGet, "https://93.184.216.34/seg/1.ts", nil)
+	start := time.Now()
+	_, err := rt.RoundTrip(req)
+	if err == nil || !strings.Contains(err.Error(), "no response headers") {
+		t.Fatalf("RoundTrip err = %v, want a header timeout", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("RoundTrip took %s, want ~50ms", d)
+	}
+}
+
+func TestRelayRoundTripper_HeaderTimeoutDoesNotCutTheBody(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		time.Sleep(150 * time.Millisecond) // longer than headerTimeout
+		io.WriteString(w, "segment-bytes")
+	}))
+	defer relay.Close()
+	useRelay(t, relay.URL, "")
+
+	rt := &relayRoundTripper{headerTimeout: 50 * time.Millisecond}
+	req, _ := http.NewRequest(http.MethodGet, "https://93.184.216.34/seg/1.ts", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != "segment-bytes" {
+		t.Fatalf("body = %q, %v; want the full body", body, err)
 	}
 }

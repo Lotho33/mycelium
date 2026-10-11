@@ -263,38 +263,16 @@ func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("upstream %d", resp.StatusCode)
 	}
-	if encrypted {
-		// Ciphertext: cache verbatim, refusing only an obvious text page.
-		body, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
-		if err != nil {
-			return nil, err
-		}
-		if looksLikeTextPage(body) {
-			return nil, fmt.Errorf("encrypted segment is a text page (content-type %q)", resp.Header.Get("Content-Type"))
-		}
-		return body, nil
-	}
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/") || ct == "" {
-		return io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
-	}
-	// Any other content type may wrap real MPEG-TS/fMP4 (the containers
-	// ProxySegment unwraps): look for the media inside before deciding.
-	head, off, _, serr := sniffMediaStart(resp.Body)
-	if serr != nil {
-		return nil, serr
-	}
-	if off < 0 {
-		if strings.HasPrefix(ct, "text/") || strings.HasPrefix(ct, "application/json") {
-			return nil, fmt.Errorf("non-video content-type %q", ct)
-		}
-		off = 0 // no detectable signature: keep raw
-	}
-	rest, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
 	if err != nil {
 		return nil, err
 	}
-	return append(head[off:], rest...), nil
+	// Same normalisation as ProxySegment, so a warm hit serves the same bytes.
+	v := normalizeSegment(body, resp.Header.Get("Content-Type"), segURL, encrypted)
+	if v.reject != "" {
+		return nil, fmt.Errorf("%s (content-type %q)", v.reject, resp.Header.Get("Content-Type"))
+	}
+	return v.body, nil
 }
 
 func isMasterPlaylist(b []byte) bool {
