@@ -37,7 +37,9 @@ var Segments = &segCache{
 	items:    make(map[string]*segCacheEntry),
 	lru:      list.New(),
 	maxBytes: 96 << 20, // ceiling across every stream
-	ttl:      90 * time.Second,
+	// Long enough for a read-ahead fetch (made ~45s before the player needs
+	// it) to still be there.
+	ttl: 3 * time.Minute,
 }
 
 // SegmentCacheConfigure overrides the ceiling / TTL. A zero argument keeps the
@@ -52,6 +54,14 @@ func SegmentCacheConfigure(maxBytes int, ttl time.Duration) {
 		Segments.ttl = ttl
 	}
 	Segments.evictLocked()
+}
+
+// Has reports whether url is cached (and not expired), without copying it.
+func (c *segCache) Has(url string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.items[url]
+	return ok && time.Now().Before(e.expiresAt)
 }
 
 // Get returns a copy of the cached body for url, or (nil, false) on miss or

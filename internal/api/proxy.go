@@ -287,6 +287,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	var rewritten []string
 	var lastExtInf float64
+	var raSegs []raSeg // this media playlist's segments, for the read-ahead
 	// After #EXT-X-KEY the segments are ciphertext, whatever their extension or
 	// Content-Type: ProxySegment must relay them without sniffing.
 	encrypted := false
@@ -338,6 +339,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			if sess != nil && lastExtInf > 0 && !rendition {
 				sess.UpdateSegDuration(lastExtInf)
 			}
+			segDur := lastExtInf
 			lastExtInf = 0
 
 			absURI := proxyURLJoin(playlistBase, line)
@@ -359,9 +361,21 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 				endpoint = "playlist.m3u8"
 				encSuffix = childSuffix()
 			}
+			if endpoint == "segment.ts" && !isMaster {
+				raSegs = append(raSegs, raSeg{url: absURI, dur: segDur, enc: encrypted})
+			}
 			rewritten = append(rewritten, core.AppendProxySig(fmt.Sprintf("%s/%s?data=%s&origin=%s&cookies=%s%s%s%s%s",
 				proxyBase, endpoint, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix, encSuffix)))
 		}
+	}
+
+	// VOD only (a live window slides on its own), and not byte ranges of
+	// shared files (those go through Range requests, outside the cache).
+	if len(raSegs) > 0 && bytes.Contains(content, []byte("#EXT-X-ENDLIST")) && !bytes.Contains(content, []byte("#EXT-X-BYTERANGE")) {
+		readAheadRegister(&raList{
+			segs: raSegs, origin: realOrigin, cookiesRaw: cookiesRaw, xhdrRaw: xhdrRaw,
+			useVPN: useVPN, egr: egr,
+		})
 	}
 
 	out := strings.Join(rewritten, "\n")
@@ -400,6 +414,10 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	sess, ok := claimProxySession(w, uidRaw)
 	if !ok {
 		return
+	}
+	if playerRange == "" {
+		// Fetch what follows into the warm cache (proxy_readahead.go).
+		readAheadFrom(realURL)
 	}
 	if q.Get("nr") == "1" {
 		// Not a main-rendition segment (alternate audio, init section, part):

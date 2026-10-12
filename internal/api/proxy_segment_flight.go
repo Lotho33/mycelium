@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Shared segment fetches. A player that times out on a slow segment (ExoPlayer
-// gives up after ~8s) asks for the same URL again; without sharing, the first
+// Shared segment fetches. A player that times out on a slow segment (after
+// its read timeout) asks for the same URL again; without sharing, the first
 // fetch was cancelled with the player's request and the retry started from
 // zero. Now the first request for a URL leads an upstream fetch that is not
 // tied to its player connection: a retry arriving meanwhile waits for it, and
@@ -15,11 +15,12 @@ import (
 // to the warm cache (managers.Segments), where the retry finds them.
 
 // segmentAttemptTTFB bounds how long one upstream attempt may wait for
-// response headers: short on the first attempt, so a stuck connection is
-// retried while the player is still waiting, longer on the following ones.
-// Vars so tests can shrink them.
+// response headers. The first attempt is not cut short: a CDN fetching a
+// missed segment from its origin is slow for every request of that URL, so
+// an early retry only adds requests (the read-ahead, proxy_readahead.go, is
+// what hides those misses). Vars so tests can shrink them.
 var (
-	segmentFirstAttemptTTFB = 7 * time.Second
+	segmentFirstAttemptTTFB = 15 * time.Second
 	segmentRetryAttemptTTFB = 15 * time.Second
 )
 

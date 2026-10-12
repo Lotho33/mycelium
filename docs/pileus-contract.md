@@ -216,7 +216,8 @@ All optional, all with sane defaults. Settable via the admin settings store
 | `prebuffer_segments_live`  | `MYCELIUM_PREBUFFER_SEGMENTS_LIVE`| `1`        | segments to pre-fetch for live (0 = skip for live) |
 | `prebuffer_max_wait_ms`    | `MYCELIUM_PREBUFFER_MAX_WAIT_MS`  | `8000`     | hard cap on the whole pre-buffer; `{result}` is sent anyway on hit |
 | `prebuffer_max_bytes`      | `MYCELIUM_PREBUFFER_MAX_BYTES`    | `12000000` | stop pre-fetching once this many segment bytes are buffered |
-| `prebuffer_cache_mb`       | `MYCELIUM_PREBUFFER_CACHE_MB`     | `96`       | ceiling of the shared warm-segment cache (LRU, ~90 s TTL) |
+| `prebuffer_cache_mb`       | `MYCELIUM_PREBUFFER_CACHE_MB`     | `96`       | ceiling of the shared warm-segment cache (LRU, ~3 min TTL) |
+| `prebuffer_readahead_secs` | `MYCELIUM_PREBUFFER_READAHEAD_SECS` | `45`     | during VOD playback, media seconds fetched ahead of each segment request into the warm cache, so a slow CDN miss is absorbed before the player needs it (0 = off) |
 
 Cancellation: the pre-buffer inherits the RPC's `context.Context`. If the user
 backs out of the player mid-resolve, it stops promptly and the RPC returns the
