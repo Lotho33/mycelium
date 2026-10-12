@@ -56,19 +56,48 @@ func stdTransport(opts upstreamTransportOpts) *nethttp.Transport {
 		IdleConnTimeout:       opts.IdleConnTimeout,
 		ResponseHeaderTimeout: opts.ResponseHeaderTimeout,
 		ForceAttemptHTTP2:     true,
+		// Every request to a host shares one HTTP/2 connection: a connection
+		// stalled at the TCP level (loss, then exponential backoff) would hold
+		// all of them. Ping it when it goes quiet and drop it if it doesn't
+		// answer.
+		HTTP2: &nethttp.HTTP2Config{
+			SendPingTimeout: 10 * time.Second,
+			PingTimeout:     5 * time.Second,
+		},
 	}
 }
 
-// stripPinUA removes the internal pinUAHeader marker before a request goes
-// out on the plain net/http path (which keeps the UA as-is anyway).
-type stripPinUA struct{ rt nethttp.RoundTripper }
+// freshConnHeader is an internal marker (never sent upstream) asking for a
+// new connection instead of a pooled one: set on a retry after a stall,
+// since the pooled HTTP/2 connection may be the thing stuck.
+const freshConnHeader = "X-Mycelium-Fresh-Conn"
 
-func (s stripPinUA) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
-	if req.Header.Get(pinUAHeader) != "" {
+// directTransport is the plain net/http path. It strips the internal
+// markers (pinUAHeader: the UA is kept as-is here anyway) and serves a
+// freshConnHeader request on a one-off connection.
+type directTransport struct{ t *nethttp.Transport }
+
+func (d directTransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	fresh := req.Header.Get(freshConnHeader) != ""
+	if fresh || req.Header.Get(pinUAHeader) != "" {
 		req = req.Clone(req.Context())
 		req.Header.Del(pinUAHeader)
+		req.Header.Del(freshConnHeader)
 	}
-	return s.rt.RoundTrip(req)
+	if !fresh {
+		return d.t.RoundTrip(req)
+	}
+	// Drop the pooled connections that are idle (the stalled request was
+	// cancelled, so a stuck connection usually is), then dial a connection of
+	// its own that closes with the response.
+	d.t.CloseIdleConnections()
+	ft := d.t.Clone()
+	ft.DisableKeepAlives = true
+	resp, err := ft.RoundTrip(req)
+	if err != nil {
+		ft.CloseIdleConnections()
+	}
+	return resp, err
 }
 
 // newUpstreamTransport builds the transport for direct (non-proxied) upstream
@@ -80,7 +109,7 @@ func newUpstreamTransport(opts upstreamTransportOpts) nethttp.RoundTripper {
 		// SSRF guard on the direct path (the relay checks in RoundTrip; a proxy
 		// resolves the target itself).
 		t.DialContext = core.GuardedDialContext(core.CFDialContext)
-		return stripPinUA{t}
+		return directTransport{t}
 	}
 	return &relayRoundTripper{headerTimeout: opts.ResponseHeaderTimeout}
 }
@@ -94,7 +123,7 @@ func newUpstreamProxyTransport(proxyURL string, opts upstreamTransportOpts) neth
 	if !relayEnabled() {
 		t := stdTransport(opts)
 		t.DialContext = core.ProxyDialer(proxyURL)
-		return stripPinUA{t}
+		return directTransport{t}
 	}
 	return &relayRoundTripper{proxyURL: proxyURL, headerTimeout: opts.ResponseHeaderTimeout}
 }
@@ -153,7 +182,7 @@ func (t *relayRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, 
 	hdr := make(map[string]string, len(req.Header))
 	for k, vs := range req.Header {
 		lk := strings.ToLower(k)
-		if len(vs) == 0 || relayDropHeaders[lk] || lk == strings.ToLower(pinUAHeader) {
+		if len(vs) == 0 || relayDropHeaders[lk] || lk == strings.ToLower(pinUAHeader) || lk == strings.ToLower(freshConnHeader) {
 			continue
 		}
 		if !keepUA && (lk == "user-agent" || strings.HasPrefix(lk, "sec-ch-ua")) {
@@ -178,6 +207,11 @@ func (t *relayRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, 
 	}
 	if t.proxyURL != "" {
 		payload["proxy_url"] = t.proxyURL
+	}
+	if req.Header.Get(freshConnHeader) != "" {
+		// The relay rebuilds its pooled client for this egress (older relays
+		// ignore the field).
+		payload["fresh_conn"] = true
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {

@@ -162,8 +162,12 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	realURL := proxyB64Decode(dataRaw)
 	realOrigin := proxyB64Decode(originRaw)
 	childIdx := q.Get("vi") // set on children of a master
+	// rt=a: an alternate rendition (audio/subtitles/I-frames) of a master —
+	// its segments don't count toward the session's position estimate.
+	rendition := q.Get("rt") == "a"
 
-	if _, ok := claimProxySession(w, uidRaw); !ok {
+	sess, ok := claimProxySession(w, uidRaw)
+	if !ok {
 		return
 	}
 
@@ -269,7 +273,8 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	// Children of a master carry sid + their index so a failing variant reload
 	// can be recovered in place (proxy_playlist_recover.go).
-	master := sidRaw != "" && isMasterPlaylist(content)
+	isMaster := isMasterPlaylist(content)
+	master := sidRaw != "" && isMaster
 	nextChild := 0
 	childSuffix := func() string {
 		if !master {
@@ -311,21 +316,27 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 					case "key":
 						replacement = fmt.Sprintf("%s/key.key?data=%s&origin=%s&cookies=%s%s%s%s", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix)
 					case "segment":
-						// Init sections and parts are binary: they go through the segment proxy.
-						replacement = fmt.Sprintf("%s/segment.ts?data=%s&origin=%s&cookies=%s%s%s%s", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix)
+						// Init sections and parts are binary: they go through the segment
+						// proxy, but aren't whole segments of playback (nr=1).
+						replacement = fmt.Sprintf("%s/segment.ts?data=%s&origin=%s&cookies=%s%s%s%s&nr=1", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix)
 					default:
-						replacement = fmt.Sprintf("%s/playlist.m3u8?data=%s&origin=%s&cookies=%s%s%s%s%s", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix, childSuffix())
+						rtSuffix := ""
+						if isMaster {
+							// A URI tag in a master names an alternate rendition, never the
+							// main variant (those are plain URI lines).
+							rtSuffix = "&rt=a"
+						}
+						replacement = fmt.Sprintf("%s/playlist.m3u8?data=%s&origin=%s&cookies=%s%s%s%s%s%s", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix, childSuffix(), rtSuffix)
 					}
 					line = strings.Replace(line, m[1], core.AppendProxySig(replacement), 1)
 				}
 			}
 			rewritten = append(rewritten, line)
 		} else {
-			// Segment URL: update the session's segment duration.
-			if uidRaw != "" && lastExtInf > 0 {
-				if s, ok := managers.Sessions.Get(uidRaw); ok {
-					s.UpdateSegDuration(lastExtInf)
-				}
+			// Segment URL: update the session's segment duration (main rendition
+			// only).
+			if sess != nil && lastExtInf > 0 && !rendition {
+				sess.UpdateSegDuration(lastExtInf)
 			}
 			lastExtInf = 0
 
@@ -339,6 +350,9 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			encSuffix := ""
 			if encrypted && endpoint == "segment.ts" {
 				encSuffix = "&enc=1"
+			}
+			if rendition && endpoint == "segment.ts" {
+				encSuffix += "&nr=1"
 			}
 			if master {
 				// Every URI line of a master is a variant playlist.
@@ -378,10 +392,19 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	useVPN := q.Get("vpn") == "1"
 	egr := q.Get("egr")
 	encrypted := q.Get("enc") == "1"
+	// A byte range from the player (EXT-X-BYTERANGE, a seek in a progressive
+	// file) is forwarded upstream and relayed as it comes: no warm cache, no
+	// shared fetch, no normalisation (all three work on whole segments).
+	playerRange := playerByteRange(r.Header.Get("Range"))
 
 	sess, ok := claimProxySession(w, uidRaw)
 	if !ok {
 		return
+	}
+	if q.Get("nr") == "1" {
+		// Not a main-rendition segment (alternate audio, init section, part):
+		// it must not move the session's position estimate.
+		sess = nil
 	}
 
 	// Warm-cache hit: the ResolveStream pre-buffer, or a shared fetch whose
@@ -405,29 +428,46 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 			sess.RecordFetch()
 		}
 	}
-	if body, ok := managers.Segments.Get(realURL); ok {
-		serveCached(body, "warm-cache")
-		return
-	}
-
-	// Join a fetch of the same segment already under way (typically this
-	// player's own earlier request, which it gave up on).
-	flight, leader := joinSegFlight(realURL)
-	if !leader {
-		select {
-		case <-flight.done:
-		case <-r.Context().Done():
-			flight.waiters.Add(-1)
-			return
-		}
-		flight.waiters.Add(-1)
+	var flight *segFlight // set when this request leads a shared fetch
+	if playerRange == "" {
 		if body, ok := managers.Segments.Get(realURL); ok {
-			serveCached(body, "shared-fetch")
+			serveCached(body, "warm-cache")
 			return
 		}
-		flight = nil // the leader failed or kept it: fetch on our own
-	} else {
-		defer flight.finish(realURL)
+
+		// Join a fetch of the same segment already under way (typically this
+		// player's own earlier request, which it gave up on).
+		f, leader := joinSegFlight(realURL)
+		if leader {
+			flight = f
+			defer flight.finish(realURL)
+		} else {
+			select {
+			case <-f.done:
+			case <-f.ready:
+				// The leader is streaming it: read along from byte 0.
+				if serveJoined(w, r, f.stream, start, realURL, sess) {
+					f.waiters.Add(-1)
+					return
+				}
+				// Couldn't join (its start is gone, or it failed): wait for the end.
+				select {
+				case <-f.done:
+				case <-r.Context().Done():
+					f.waiters.Add(-1)
+					return
+				}
+			case <-r.Context().Done():
+				f.waiters.Add(-1)
+				return
+			}
+			f.waiters.Add(-1)
+			if body, ok := managers.Segments.Get(realURL); ok {
+				serveCached(body, "shared-fetch")
+				return
+			}
+			// The leader failed or kept it: fetch on our own.
+		}
 	}
 	// abandon: the player is gone and nobody waits for these bytes.
 	abandon := func() bool {
@@ -470,18 +510,35 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	const maxAttempts = 4
 	var resp *http.Response
 	var fullBody []byte // the whole segment, when it fit in segmentBufferLimit
+	// Set when the body's head shows clean media: relayed as it arrives (see
+	// proxy_segment_stream.go).
+	var streamHead []byte
+	var streamCT string
+	ranged := false // relaying the upstream answer to playerRange
+	// stalled: the previous attempt got no answer or was cut — retry on a new
+	// connection, the pooled one may be what is stuck.
+	stalled := false
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// A fresh request per attempt (net/http doesn't allow reusing one).
 		req, err := buildProxyRequest(http.MethodGet, realURL, realOrigin, q.Get("cookies"), q.Get("xhdr"))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
+		}
+		if stalled {
+			req.Header.Set(freshConnHeader, "1")
+		}
+		if playerRange != "" {
+			req.Header.Set("Range", playerRange)
 		}
 		// Cancelled when the retry budget is spent (or, for a follower fetching
 		// on its own, when its player disconnects), or when this attempt gets
-		// no response headers in time.
-		attemptCtx, attemptCancel := context.WithCancel(budgetCtx)
+		// no response headers in time. The budget stops applying once the body
+		// is streamed (stopBudget): that may last as long as bytes keep coming
+		// (a long progressive file), and segStream watches for a stalled body.
+		attemptCtx, attemptCancel := context.WithCancel(parentCtx)
 		defer attemptCancel() // the body may stream past this iteration
+		stopBudget := context.AfterFunc(budgetCtx, attemptCancel)
 		ttfb := segmentAttemptTTFB(attempt)
 		ttfbTimer := time.AfterFunc(ttfb, attemptCancel)
 		req = req.WithContext(attemptCtx)
@@ -509,8 +566,9 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upstream timeout", http.StatusBadGateway)
 				return
 			}
+			stalled = true
 			if attempt < maxAttempts {
-				log.Printf("[proxy/segment] fetch error (attempt %d/%d) url=%s: %v", attempt, maxAttempts, logURL(realURL), doErr)
+				log.Printf("[proxy/segment] fetch error (attempt %d/%d), retrying on a new connection url=%s: %v", attempt, maxAttempts, logURL(realURL), doErr)
 				select {
 				case <-time.After(retryBackoff(attempt)):
 				case <-budgetCtx.Done():
@@ -524,6 +582,15 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if playerRange != "" && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			// The player asked past the end: its answer, not an upstream failure.
+			if cr := resp.Header.Get("Content-Range"); cr != "" {
+				w.Header().Set("Content-Range", cr)
+			}
+			resp.Body.Close()
+			http.Error(w, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			// Record a CDN challenge on the segment itself (see noteChallengeIfAny).
 			noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
@@ -547,11 +614,44 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Buffer the segment before answering: a connection dropping halfway is
-		// still retryable, and the CDN slot is released before the (possibly slow)
-		// write to the player. Bodies over segmentBufferLimit are streamed.
-		buf, complete, rerr := readSegmentBounded(resp.Body, segmentBufferLimit)
+		if playerRange != "" {
+			if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
+				log.Printf("[proxy/segment] range request answered with an HTML page — rejecting url=%s", logURL(realURL))
+				noteChallengeIfAny(resp, realURL, challengeEgressLabel(useVPN, egr))
+				resp.Body.Close()
+				http.Error(w, "non-video segment", http.StatusBadGateway)
+				return
+			}
+			stopBudget()
+			ranged = true
+			break
+		}
+
+		// The head tells clean media, relayed as it arrives, from a body to
+		// normalise as a whole (buffered: a connection dropping halfway is still
+		// retryable, and the CDN slot is released before the write to the
+		// player). Bodies over segmentBufferLimit are streamed either way.
+		var buf []byte
+		var complete bool
+		head, headComplete, rerr := readSegmentHead(resp.Body)
+		switch {
+		case rerr != nil:
+			buf = head
+		case headComplete:
+			buf, complete = head, true
+		default:
+			if sct, ok := streamableSegment(head, resp.Header.Get("Content-Type"), realURL, encrypted); ok {
+				streamHead, streamCT = head, sct
+			} else {
+				buf, complete, rerr = readSegmentBounded(io.MultiReader(bytes.NewReader(head), resp.Body), segmentBufferLimit)
+			}
+		}
+		if streamHead != nil {
+			stopBudget()
+			break
+		}
 		if rerr != nil {
+			stalled = true
 			resp.Body.Close()
 			if abandon() {
 				log.Printf("[proxy/segment] client disconnected after %s while reading upstream url=%s", time.Since(start).Round(time.Millisecond), logURL(realURL))
@@ -584,10 +684,24 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		}
 		break
 	}
+	if streamHead != nil || ranged {
+		st := &segStream{
+			w: w, r: r, start: start, realURL: realURL, resp: resp, head: streamHead,
+			ct: streamCT, encrypt: encrypted, flight: flight, sess: sess,
+			release: gateRelease, ctx: parentCtx, client: segClient,
+			origin: realOrigin, cookies: q.Get("cookies"), xhdr: q.Get("xhdr"),
+			resumeOK: !resp.Uncompressed, rangeEnd: -1,
+		}
+		if ranged {
+			st.setRanged(resp)
+		}
+		st.run()
+		return
+	}
 	defer resp.Body.Close()
 
-	// Buffered segment (nearly always): normalise it as a whole — see
-	// segment_normalize.go.
+	// Buffered segment (its head needed more than a pass-through): normalise
+	// it as a whole — see segment_normalize.go.
 	if fullBody != nil {
 		v := normalizeSegment(fullBody, resp.Header.Get("Content-Type"), realURL, encrypted)
 		if v.reject != "" {
@@ -604,11 +718,14 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		for _, n := range v.notes {
 			log.Printf("[proxy/segment] %s url=%s", n, logURL(realURL))
 		}
+		kept := false
 		if flight != nil && (r.Context().Err() != nil || flight.waiters.Load() > 0) {
 			// Someone will ask for these bytes again: keep them for the retry.
 			managers.Segments.Put(realURL, v.body)
+			kept = true
 			if r.Context().Err() != nil {
 				log.Printf("[proxy/segment] player gone after %s, segment kept for its retry url=%s", time.Since(start).Round(time.Millisecond), logURL(realURL))
+				return
 			}
 		}
 		if v.ct == "" {
@@ -622,7 +739,11 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[proxy/segment] ok url=%s", logURL(realURL))
 		}
 		if _, err := w.Write(v.body); err != nil && r.Context().Err() != nil {
-			log.Printf("[proxy/segment] client disconnected mid-stream after %s url=%s", time.Since(start).Round(time.Millisecond), logURL(realURL))
+			if flight != nil && !kept {
+				// Gone while being served: its retry finds the bytes here.
+				managers.Segments.Put(realURL, v.body)
+			}
+			log.Printf("[proxy/segment] player closed the request after %s (seek, quality switch or retry) url=%s", time.Since(start).Round(time.Millisecond), logURL(realURL))
 		}
 		if sess != nil {
 			sess.RecordFetch()
@@ -809,7 +930,7 @@ func ProxyKey(w http.ResponseWriter, r *http.Request) {
 
 	req, err := buildProxyRequest(http.MethodGet, realURL, realOrigin, q.Get("cookies"), q.Get("xhdr"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	// Cancelled when the player disconnects.

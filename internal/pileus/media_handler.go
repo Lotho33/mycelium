@@ -378,6 +378,7 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 			SourceID:  req.StreamId,
 			IsLive:    isLive,
 			TotalSec:  totalSec,
+			StartSec:  req.StartPositionSec,
 		})
 	}
 

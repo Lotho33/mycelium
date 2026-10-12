@@ -152,3 +152,21 @@ func TestBuildProxyRequest_DropsAcceptEncoding(t *testing.T) {
 		t.Errorf("accept-encoding leaked from xhdr: %q", req.Header.Get("accept-encoding"))
 	}
 }
+
+// A captured Range or validator is not replayed: on every segment it would
+// cut the body or draw a 304.
+func TestBuildProxyRequest_DropsRangeAndValidators(t *testing.T) {
+	xhdr := b64url(`{"Range":"bytes=12345-","If-None-Match":"\"abc\"","if-modified-since":"Mon, 01 Jan 2024 00:00:00 GMT","If-Range":"\"abc\"","X-Custom":"kept"}`)
+	req, err := buildProxyRequest("GET", "https://cdn.example/seg.ts", "", "", xhdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"Range", "If-None-Match", "If-Modified-Since", "If-Range"} {
+		if v := req.Header.Get(h); v != "" {
+			t.Errorf("%s replayed upstream: %q", h, v)
+		}
+	}
+	if req.Header.Get("X-Custom") != "kept" {
+		t.Error("other captured headers must still be replayed")
+	}
+}

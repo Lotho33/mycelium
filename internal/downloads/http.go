@@ -48,13 +48,15 @@ func sign(id string, exp int64, ver string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// signedFilePath is "/downloads/file?id=…&v=…&exp=…&sig=…". v is the file
-// version the URL was minted for (fileVersion): an upgraded file gets new
-// links, so a resumed download never mixes two files.
+// signedFilePath is "/downloads/file.mkv?id=…&v=…&exp=…&sig=…". v is the
+// file version the URL was minted for (fileVersion): an upgraded file gets
+// new links, so a resumed download never mixes two files. The extension is
+// for players that pick a demuxer from the URL (Pileus on Android opened an
+// extension-less link as HLS); /downloads/file still serves older links.
 func signedFilePath(id, ver string, exp time.Time) string {
 	e := exp.Unix()
 	q := url.Values{"id": {id}, "v": {ver}, "exp": {strconv.FormatInt(e, 10)}, "sig": {sign(id, e, ver)}}
-	return "/downloads/file?" + q.Encode()
+	return "/downloads/file.mkv?" + q.Encode()
 }
 
 func verifyFileQuery(q url.Values, now time.Time) (id, ver string, ok bool) {
@@ -105,7 +107,7 @@ func pad2(n int32) string {
 	return strconv.Itoa(int(n))
 }
 
-// ServeFile is GET /downloads/file: the finished file, with Range support
+// ServeFile is GET /downloads/file(.mkv): the finished file, with Range support
 // (http.ServeContent), so device download managers can resume and a TV can
 // seek while playing straight from the server.
 func (m *Manager) ServeFile(w http.ResponseWriter, r *http.Request) {

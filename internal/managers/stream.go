@@ -142,6 +142,9 @@ type StreamSession struct {
 	SourceID  string
 	IsLive    bool
 	TotalSec  float64 // 0 when unknown
+	// StartSec is where playback opened (the resume point): the position
+	// estimate counts segments from there.
+	StartSec float64
 
 	mu          sync.Mutex
 	segDuration float64 // average segment duration (s)
@@ -181,7 +184,7 @@ func (s *StreamSession) RecordFetch() {
 		s.mu.Unlock()
 		return
 	}
-	pos := float64(s.segsFetched) * s.segDuration
+	pos := s.StartSec + float64(s.segsFetched)*s.segDuration
 	interval := max(1, int(30.0/s.segDuration))
 	if s.segsFetched%interval != 0 {
 		s.mu.Unlock()

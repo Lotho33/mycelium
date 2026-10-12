@@ -33,6 +33,24 @@ func segmentAttemptTTFB(attempt int) time.Duration {
 type segFlight struct {
 	done    chan struct{}
 	waiters atomic.Int32
+	// ready is closed once the leader streams the segment (stream is set):
+	// a follower then reads along instead of waiting for the end.
+	ready  chan struct{}
+	stream *segFlightStream
+}
+
+// segFlightStream is what a follower needs to read along a streamed
+// segment (see serveJoined).
+type segFlightStream struct {
+	pipe          *segPipe
+	ct            string
+	contentLength int64
+}
+
+// publish makes the leader's streamed segment available to followers.
+func (f *segFlight) publish(st *segFlightStream) {
+	f.stream = st
+	close(f.ready)
 }
 
 var segFlights sync.Map // upstream URL → *segFlight
@@ -40,7 +58,7 @@ var segFlights sync.Map // upstream URL → *segFlight
 // joinSegFlight returns the in-flight fetch for key, creating it (leader =
 // true) when there is none. A follower is counted in waiters.
 func joinSegFlight(key string) (f *segFlight, leader bool) {
-	nf := &segFlight{done: make(chan struct{})}
+	nf := &segFlight{done: make(chan struct{}), ready: make(chan struct{})}
 	if v, loaded := segFlights.LoadOrStore(key, nf); loaded {
 		f = v.(*segFlight)
 		f.waiters.Add(1)

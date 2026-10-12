@@ -65,9 +65,12 @@ func getSegmentClient() *http.Client {
 	defer upstreamMu.Unlock()
 	if segmentClient == nil {
 		jar, _ := cookiejar.New(nil)
+		// No total Timeout: it would cut a streamed body that is still flowing
+		// (a long progressive file). Each attempt bounds its wait for headers,
+		// buffering is bounded by the retry budget, and a streamed body by
+		// segmentBodyIdle (proxy_segment_stream.go).
 		segmentClient = &http.Client{
-			Timeout: 60 * time.Second,
-			Jar:     jar,
+			Jar: jar,
 			Transport: newUpstreamTransport(upstreamTransportOpts{
 				MaxIdleConns:          100,
 				MaxIdleConnsPerHost:   20,
@@ -100,7 +103,8 @@ func vpnClients(proxyURL string) (*http.Client, *http.Client) {
 		})}
 
 		jar2, _ := cookiejar.New(nil)
-		vpnSegment = &http.Client{Timeout: 60 * time.Second, Jar: jar2, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
+		// No total Timeout: see getSegmentClient.
+		vpnSegment = &http.Client{Jar: jar2, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   20,
 			IdleConnTimeout:       120 * time.Second,

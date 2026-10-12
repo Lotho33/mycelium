@@ -3,6 +3,7 @@ package downloads
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,10 @@ func TestSignedFilePath(t *testing.T) {
 	defer SetSignKey(nil)
 	now := time.Now()
 	p := signedFilePath("abc", "v1", now.Add(time.Hour))
+	// Players that pick a demuxer from the URL need the extension.
+	if !regexp.MustCompile(`\.mkv(\?|$)`).MatchString(p) {
+		t.Fatalf("signed path %q has no .mkv extension before the query", p)
+	}
 	req := httptest.NewRequest(http.MethodGet, p, nil)
 	if id, ver, ok := verifyFileQuery(req.URL.Query(), now); !ok || id != "abc" || ver != "v1" {
 		t.Fatal("valid signature refused")

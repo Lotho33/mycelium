@@ -138,6 +138,12 @@ func sameRegistrableDomain(a, b string) bool {
 // to keep the request's User-Agent instead of substituting its own profile.
 const pinUAHeader = "X-Mycelium-Pin-UA"
 
+// xhdrNotReplayed lists the captured headers buildProxyRequest drops.
+var xhdrNotReplayed = map[string]bool{
+	"accept-encoding": true, "range": true, "if-range": true,
+	"if-none-match": true, "if-modified-since": true,
+}
+
 // buildProxyRequest builds an upstream request: a coherent browser baseline
 // (setBrowserBaselineHeaders), overlaid with the headers captured for the
 // stream (xhdrRaw, base64url JSON) when present.
@@ -160,8 +166,10 @@ func buildProxyRequest(method, targetURL, origin, cookiesRaw, xhdrRaw string) (*
 			var hdrs map[string]string
 			if jerr := json.Unmarshal([]byte(decoded), &hdrs); jerr == nil {
 				for k, v := range hdrs {
-					// net/http handles accept-encoding (see setBrowserBaselineHeaders).
-					if strings.EqualFold(k, "accept-encoding") {
+					// net/http handles accept-encoding (see setBrowserBaselineHeaders);
+					// a captured range or validator belonged to that one browser fetch,
+					// and replayed on every segment it would cut them or draw a 304.
+					if xhdrNotReplayed[strings.ToLower(k)] {
 						continue
 					}
 					if strings.EqualFold(k, "x-force-user-agent") {

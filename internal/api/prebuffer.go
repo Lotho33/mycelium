@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -137,6 +138,12 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 	start := opts.StartSec
 	if opts.IsLive {
 		start = 0 // a live window has no fixed timeline to seek into
+	}
+	if bytes.Contains(mediaBody, []byte("#EXT-X-BYTERANGE")) {
+		// Segments are ranges of shared files: the player asks for them with
+		// Range, which bypasses the warm cache — fetching whole files here
+		// (once per segment line) would only waste the line.
+		return res
 	}
 	targets := segmentURLs(mediaURL, mediaBody, opts.MaxSegments, start)
 	encrypted := playlistEncrypted(mediaBody)

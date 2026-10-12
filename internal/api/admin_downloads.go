@@ -9,13 +9,17 @@ import (
 // RegisterDownloadRoutes mounts the public file endpoint (signed URLs minted
 // by ListDownloads) and the dashboard's download admin.
 func RegisterDownloadRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /downloads/file", func(w http.ResponseWriter, r *http.Request) {
+	serveFile := func(w http.ResponseWriter, r *http.Request) {
 		if downloads.M == nil {
 			http.Error(w, "download non attivi", http.StatusServiceUnavailable)
 			return
 		}
 		downloads.M.ServeFile(w, r)
-	})
+	}
+	// .mkv: what signed links use now; the bare path serves links minted
+	// before.
+	mux.HandleFunc("GET /downloads/file.mkv", serveFile)
+	mux.HandleFunc("GET /downloads/file", serveFile)
 	auth := adminAuthMiddleware
 	mux.HandleFunc("GET /admin/downloads", auth(listDownloadsAdmin))
 	mux.HandleFunc("DELETE /admin/downloads/{id}", auth(deleteDownloadAdmin))
