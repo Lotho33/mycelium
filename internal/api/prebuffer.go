@@ -179,6 +179,10 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 	})
 
 	// ── 4. fetch segments sequentially (mirrors how a player ramps up) ─────
+	// The first two bodies (an init section and/or the first segment) also
+	// give the variant's real dimensions (hls_resolution.go).
+	var probeURLs []string
+	var probeBodies [][]byte
 	for _, segURL := range targets {
 		if ctx.Err() != nil {
 			res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
@@ -194,6 +198,10 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 			break
 		}
 		managers.Segments.Put(segURL, body)
+		if len(probeBodies) < 2 {
+			probeURLs = append(probeURLs, segURL)
+			probeBodies = append(probeBodies, body)
+		}
 		d, b := prog.add(len(body))
 		safeEmit(managers.PrefetchProgress{Phase: "segment", Done: d, Total: total, Bytes: b})
 		if opts.MaxBytes > 0 && b >= opts.MaxBytes {
@@ -203,6 +211,19 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 
 	close(stopHB)
 	<-hbDone
+
+	if mediaURL != rawURL && len(probeBodies) > 0 {
+		// Bounded on its own: the pre-buffer's deadline may be nearly spent,
+		// and this needs at most a key fetch.
+		pctx, pcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		for i, body := range probeBodies {
+			if w, h, ok := probeVariantDims(pctx, plClient, opts, mediaURL, mediaBody, probeURLs[i], body); ok {
+				rememberVariantDims(mediaURL, w, h)
+				break
+			}
+		}
+		pcancel()
+	}
 
 	res.Segments, res.Bytes = prog.snapshot()
 	safeEmit(managers.PrefetchProgress{Phase: "done", Done: res.Segments, Total: total, Bytes: res.Bytes})

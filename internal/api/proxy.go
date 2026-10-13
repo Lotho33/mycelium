@@ -291,12 +291,15 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	// After #EXT-X-KEY the segments are ciphertext, whatever their extension or
 	// Content-Type: ProxySegment must relay them without sniffing.
 	encrypted := false
-	for _, line := range lines {
+	for li, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
+			if isMaster && strings.HasPrefix(line, "#EXT-X-STREAM-INF") {
+				line = fixVariantResolution(line, lines[li+1:], playlistBase)
+			}
 			if strings.HasPrefix(line, "#EXT-X-KEY") {
 				encrypted = keyLineEncrypts(line)
 			}
@@ -386,6 +389,29 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	fmt.Fprint(w, out)
+}
+
+// fixVariantResolution corrects an #EXT-X-STREAM-INF line's RESOLUTION when
+// the variant it introduces (the next URI line in rest) was measured to be
+// different (hls_resolution.go).
+func fixVariantResolution(line string, rest []string, playlistBase string) string {
+	for _, next := range rest {
+		next = strings.TrimSpace(next)
+		if next == "" || strings.HasPrefix(next, "#") {
+			continue
+		}
+		variantURL := proxyURLJoin(playlistBase, next)
+		w, h, ok := lookupVariantDims(variantURL)
+		if !ok {
+			return line
+		}
+		fixed, declared, changed := correctStreamInfResolution(line, w, h)
+		if changed {
+			log.Printf("[proxy/playlist] variant declares RESOLUTION %q, its stream is %dx%d — corrected url=%s", declared, w, h, logURL(variantURL))
+		}
+		return fixed
+	}
+	return line
 }
 
 // ProxySegment relays one media segment (or init section) from upstream.

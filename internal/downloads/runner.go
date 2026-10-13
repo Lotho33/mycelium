@@ -112,13 +112,25 @@ func buildFFmpegArgs(inputs []ffInput, inputOpts []string, out, title string) []
 		args = append(args, "-c:s", "srt")
 	}
 	args = append(args, meta...)
-	if aIdx > 0 {
-		args = append(args, "-disposition:a:0", "default")
+	// Default tracks: the user's first audio and subtitle choices (inputs
+	// come in preference order); the rest are selectable, not default. With
+	// muxed audio, infer_no_subs marks the first video and audio track.
+	disposition := func(i int) string {
+		if i == 0 {
+			return "default"
+		}
+		return "0"
+	}
+	for i := 0; i < aIdx; i++ {
+		args = append(args, fmt.Sprintf("-disposition:a:%d", i), disposition(i))
+	}
+	for i := 0; i < sIdx; i++ {
+		args = append(args, fmt.Sprintf("-disposition:s:%d", i), disposition(i))
 	}
 	if title != "" {
 		args = append(args, "-metadata", "title="+title)
 	}
-	return append(args, "-f", "matroska", out)
+	return append(args, "-default_mode", "infer_no_subs", "-f", "matroska", out)
 }
 
 func streamMeta(kind string, idx int, in ffInput) []string {

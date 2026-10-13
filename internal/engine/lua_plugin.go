@@ -1397,6 +1397,19 @@ func (m *LuaPluginManager) Has(pluginID string) bool {
 	return ok
 }
 
+// EntrypointInfo reports whether pluginID is loaded, whether its manifest
+// maps entrypoint ep, and its version (a cache key for what it returns).
+func (m *LuaPluginManager) EntrypointInfo(pluginID, ep string) (loaded, declared bool, version string) {
+	m.mu.RLock()
+	p, ok := m.plugins[pluginID]
+	m.mu.RUnlock()
+	if !ok {
+		return false, false, ""
+	}
+	_, declared = p.Manifest.Entrypoints[ep]
+	return true, declared, p.Manifest.Version
+}
+
 // GetMeta returns manifest info for all loaded Lua plugins.
 func (m *LuaPluginManager) GetMeta() []LuaManifest {
 	m.mu.RLock()

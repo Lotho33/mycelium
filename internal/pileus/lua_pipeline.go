@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"mycelium/internal/engine"
 	"mycelium/pkg/models"
@@ -25,6 +27,9 @@ var debugLog = os.Getenv("MYCELIUM_DEBUG") == "1"
 type luaPipelineProvider struct{ id string }
 
 func (p *luaPipelineProvider) GetCatalog(ctx context.Context, catalogID string, page int) ([]*gen.CatalogItem, bool, error) {
+	// The home opens a plugin's catalogs first: have its search filters ready
+	// by the time the search screen asks.
+	p.warmSearchFilters()
 	lms, hasMore, err := luaCallLuaMetasPaged(ctx, p.id, engine.EPGetCatalog, map[string]any{
 		"catalog_id": catalogID,
 		"page":       page,
@@ -35,20 +40,122 @@ func (p *luaPipelineProvider) GetCatalog(ctx context.Context, catalogID string, 
 	return luaMetasToCatalogItems(lms), hasMore, nil
 }
 
+// GetSearchFilters serves the plugin's filters from a server-side cache
+// (filled on first use, or warmed by the plugin's first catalog request), so
+// opening a search screen doesn't wait on a plugin busy with the home's
+// catalogs. A plugin that declares filters but can't produce them now
+// answers UNAVAILABLE — never an empty list, which reads as "no filters".
 func (p *luaPipelineProvider) GetSearchFilters(ctx context.Context) ([]*gen.SearchFilter, error) {
-	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, p.id, engine.EPGetSearchFilters, map[string]any{}, profileIDFromCtx(ctx))
-	if err != nil {
-		// Still no filters rather than a failed search screen, but logged.
-		log.Printf("[pileus/search] %s get_search_filters: %v", p.id, err)
+	loaded, declared, version := engine.LuaPlugins.EntrypointInfo(p.id, engine.EPGetSearchFilters)
+	if !loaded || !declared {
 		return nil, nil
+	}
+	if f, ok := searchFiltersCached(p.id, version); ok {
+		return f, nil
+	}
+	f, err := loadSearchFilters(ctx, p.id, version)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "filtri di ricerca non disponibili, riprova")
+	}
+	return f, nil
+}
+
+// warmSearchFilters fills the filters cache in the background, once per
+// plugin version.
+func (p *luaPipelineProvider) warmSearchFilters() {
+	loaded, declared, version := engine.LuaPlugins.EntrypointInfo(p.id, engine.EPGetSearchFilters)
+	if !loaded || !declared {
+		return
+	}
+	if _, ok := searchFiltersCached(p.id, version); ok {
+		return
+	}
+	go func() { _, _ = loadSearchFilters(context.Background(), p.id, version) }()
+}
+
+type searchFiltersEntry struct {
+	version string
+	filters []*gen.SearchFilter
+	at      time.Time
+}
+
+// searchFiltersCall is one plugin call in flight, shared by concurrent
+// callers.
+type searchFiltersCall struct {
+	done    chan struct{}
+	filters []*gen.SearchFilter
+	err     error
+}
+
+var (
+	searchFiltersMu       sync.Mutex
+	searchFiltersCache    = map[string]searchFiltersEntry{}
+	searchFiltersInFlight = map[string]*searchFiltersCall{}
+)
+
+// searchFiltersTTL bounds how stale a plugin's filters may get (genre lists
+// change rarely; a plugin update changes the version and the key).
+const searchFiltersTTL = 6 * time.Hour
+
+func searchFiltersCached(id, version string) ([]*gen.SearchFilter, bool) {
+	searchFiltersMu.Lock()
+	defer searchFiltersMu.Unlock()
+	e, ok := searchFiltersCache[id]
+	if !ok || e.version != version || time.Since(e.at) > searchFiltersTTL {
+		return nil, false
+	}
+	return e.filters, true
+}
+
+// loadSearchFilters calls the plugin (one call at a time per plugin) and
+// caches a non-empty result.
+func loadSearchFilters(ctx context.Context, id, version string) ([]*gen.SearchFilter, error) {
+	key := id + "@" + version
+	searchFiltersMu.Lock()
+	c, ok := searchFiltersInFlight[key]
+	if !ok {
+		// The call outlives the caller that started it: others may be waiting,
+		// and its result fills the cache either way.
+		c = &searchFiltersCall{done: make(chan struct{})}
+		searchFiltersInFlight[key] = c
+		go func() {
+			callCtx, cancel := context.WithTimeout(context.Background(), searchFiltersCallTimeout)
+			defer cancel()
+			c.filters, c.err = callSearchFilters(callCtx, id)
+			searchFiltersMu.Lock()
+			delete(searchFiltersInFlight, key)
+			if c.err == nil && len(c.filters) > 0 {
+				searchFiltersCache[id] = searchFiltersEntry{version: version, filters: c.filters, at: time.Now()}
+			}
+			searchFiltersMu.Unlock()
+			close(c.done)
+		}()
+	}
+	searchFiltersMu.Unlock()
+	select {
+	case <-c.done:
+		return c.filters, c.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// searchFiltersCallTimeout bounds one plugin call for the filters.
+const searchFiltersCallTimeout = 20 * time.Second
+
+func callSearchFilters(ctx context.Context, id string) ([]*gen.SearchFilter, error) {
+	b, err := engine.LuaPlugins.CallEntrypointJSONCtx(ctx, id, engine.EPGetSearchFilters, map[string]any{}, "")
+	if err != nil {
+		log.Printf("[pileus/search] %s get_search_filters: %v", id, err)
+		return nil, err
 	}
 	if isNullJSON(b) {
 		return nil, nil
 	}
 	var defs []luaFilterDef
 	if err := json.Unmarshal(b, &defs); err != nil {
-		log.Printf("[pileus/search] %s get_search_filters: unexpected shape: %v", p.id, err)
-		return nil, nil
+		log.Printf("[pileus/search] %s get_search_filters: unexpected shape: %v", id, err)
+		return nil, err
 	}
 	filters := make([]*gen.SearchFilter, 0, len(defs))
 	for _, d := range defs {

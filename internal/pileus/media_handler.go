@@ -238,7 +238,9 @@ func (h *MediaHandler) GetSearchFilters(ctx context.Context, req *gen.SearchFilt
 	}
 	filters, err := b.GetSearchFilters(ctx)
 	if err != nil {
-		return &gen.SearchFiltersResponse{}, nil
+		// UNAVAILABLE: the plugin has filters but can't produce them now; the
+		// client retries instead of hiding the filters button.
+		return nil, err
 	}
 	return &gen.SearchFiltersResponse{Filters: filters}, nil
 }
