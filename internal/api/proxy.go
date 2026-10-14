@@ -392,8 +392,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 // fixVariantResolution corrects an #EXT-X-STREAM-INF line's RESOLUTION when
-// the variant it introduces (the next URI line in rest) was measured to be
-// different (hls_resolution.go).
+// the variant it introduces (the next URI line in rest) was measured larger
+// than declared (hls_resolution.go): that is what makes a decoder sized on
+// the declared value fail. A smaller real picture (a letterboxed film coded
+// as 1920x800 under "1920x1080") is left as declared.
 func fixVariantResolution(line string, rest []string, playlistBase string) string {
 	for _, next := range rest {
 		next = strings.TrimSpace(next)
@@ -404,6 +406,13 @@ func fixVariantResolution(line string, rest []string, playlistBase string) strin
 		w, h, ok := lookupVariantDims(variantURL)
 		if !ok {
 			return line
+		}
+		if m := reResolution.FindStringSubmatch(line); m != nil {
+			dw, _ := strconv.Atoi(m[1])
+			dh, _ := strconv.Atoi(m[2])
+			if w <= dw && h <= dh {
+				return line
+			}
 		}
 		fixed, declared, changed := correctStreamInfResolution(line, w, h)
 		if changed {

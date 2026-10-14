@@ -98,6 +98,7 @@ func TestProxyPlaylist_CorrectsMeasuredResolution(t *testing.T) {
 	}))
 	defer upstream.Close()
 	rememberVariantDims(upstream.URL+"/m/hi/index.m3u8", 1920, 1440)
+	rememberVariantDims(upstream.URL+"/m/mid/index.m3u8", 1280, 534) // letterboxed: smaller, left as declared
 
 	rec := httptest.NewRecorder()
 	ProxyPlaylist(rec, httptest.NewRequest(http.MethodGet, core.AppendProxySig("http://box.local/proxy/playlist.m3u8?data="+b64url(upstream.URL+"/m/master.m3u8")+"&origin=&cookies=&vpn=0"), nil))
