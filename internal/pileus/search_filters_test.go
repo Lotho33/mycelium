@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"mycelium/internal/engine"
+
+	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
 )
 
 func loadFiltersPlugin(t *testing.T, id, manifestExtra, src string) *luaPipelineProvider {
@@ -93,5 +95,52 @@ function get_search_filters() error("upstream down") end
 	_, err := p.GetSearchFilters(context.Background())
 	if st, _ := status.FromError(err); st.Code() != codes.Unavailable {
 		t.Fatalf("err = %v, want UNAVAILABLE", err)
+	}
+}
+
+// Past the TTL the last filters are still served at once (and refreshed in
+// the background); a failing refresh never takes them away.
+func TestSearchFilters_StaleServedWhileRefreshing(t *testing.T) {
+	p := loadFiltersPlugin(t, "t.stalefilters", "  search_filters: get_search_filters\n", `
+function get_catalog(args) return { items = {}, has_more = false } end
+function get_search_filters() error("upstream down") end
+`)
+	old := []*gen.SearchFilter{{Id: "genre", Label: "Generi", Type: "multiselect"}}
+	searchFiltersMu.Lock()
+	searchFiltersCache[p.id] = searchFiltersEntry{version: "1", filters: old, at: time.Now().Add(-2 * searchFiltersTTL)}
+	searchFiltersMu.Unlock()
+	t.Cleanup(func() {
+		searchFiltersMu.Lock()
+		delete(searchFiltersCache, p.id)
+		searchFiltersMu.Unlock()
+	})
+
+	for i := 0; i < 2; i++ {
+		f, err := p.GetSearchFilters(context.Background())
+		if err != nil || len(f) != 1 || f[0].Id != "genre" {
+			t.Fatalf("call %d: got %v, %v; want the stale filters", i, f, err)
+		}
+		time.Sleep(50 * time.Millisecond) // let the background refresh fail
+	}
+}
+
+// Startup warm-up fills the cache of every plugin that declares filters.
+func TestSearchFilters_WarmAll(t *testing.T) {
+	p := loadFiltersPlugin(t, "t.warmall", "  search_filters: get_search_filters\n", filtersSrc)
+	t.Cleanup(func() {
+		searchFiltersMu.Lock()
+		delete(searchFiltersCache, p.id)
+		searchFiltersMu.Unlock()
+	})
+	WarmAllSearchFilters()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := searchFiltersCached(p.id, "1"); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("WarmAllSearchFilters never filled the cache")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

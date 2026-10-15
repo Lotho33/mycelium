@@ -41,20 +41,34 @@ func (p *luaPipelineProvider) GetCatalog(ctx context.Context, catalogID string, 
 }
 
 // GetSearchFilters serves the plugin's filters from a server-side cache
-// (filled on first use, or warmed by the plugin's first catalog request), so
-// opening a search screen doesn't wait on a plugin busy with the home's
-// catalogs. A plugin that declares filters but can't produce them now
-// answers UNAVAILABLE — never an empty list, which reads as "no filters".
+// (warmed at startup for every plugin, and again by the plugin's first
+// catalog request), so opening a search screen doesn't wait on a plugin busy
+// with the home's catalogs and details: a plugin has a single LState for all
+// user-facing calls, and right after a plugin switch that state is taken by
+// the home's hero/details — a cold filters call used to time out there and
+// the filters only showed up on the second visit. Once known, filters are
+// served even past their TTL (refreshed in the background): genre lists
+// barely change, and a stale list beats a dead Filters button. A plugin that
+// declares filters but can't produce any yet answers UNAVAILABLE — never an
+// empty list, which reads as "no filters".
 func (p *luaPipelineProvider) GetSearchFilters(ctx context.Context) ([]*gen.SearchFilter, error) {
 	loaded, declared, version := engine.LuaPlugins.EntrypointInfo(p.id, engine.EPGetSearchFilters)
 	if !loaded || !declared {
 		return nil, nil
 	}
-	if f, ok := searchFiltersCached(p.id, version); ok {
-		return f, nil
+	e, ok := searchFiltersEntryFor(p.id)
+	if ok && e.version == version {
+		if time.Since(e.at) > searchFiltersTTL {
+			p.warmSearchFilters()
+		}
+		return e.filters, nil
 	}
 	f, err := loadSearchFilters(ctx, p.id, version)
 	if err != nil {
+		if ok {
+			// The previous plugin version's filters beat none at all.
+			return e.filters, nil
+		}
 		return nil, status.Error(codes.Unavailable, "filtri di ricerca non disponibili, riprova")
 	}
 	return f, nil
@@ -71,6 +85,18 @@ func (p *luaPipelineProvider) warmSearchFilters() {
 		return
 	}
 	go func() { _, _ = loadSearchFilters(context.Background(), p.id, version) }()
+}
+
+// WarmAllSearchFilters fills the filters cache of every operational plugin
+// in the background — at startup, before any client is browsing, so the
+// first GetSearchFilters is a cache hit instead of a call competing with the
+// home's burst for the plugin's one interactive LState.
+func WarmAllSearchFilters() {
+	for _, mf := range engine.LuaPlugins.GetMeta() {
+		if engine.LuaPlugins.IsOperational(mf.ID) {
+			(&luaPipelineProvider{id: mf.ID}).warmSearchFilters()
+		}
+	}
 }
 
 type searchFiltersEntry struct {
@@ -97,14 +123,23 @@ var (
 // change rarely; a plugin update changes the version and the key).
 const searchFiltersTTL = 6 * time.Hour
 
+// searchFiltersCached returns id's filters only when fresh: same plugin
+// version, within the TTL.
 func searchFiltersCached(id, version string) ([]*gen.SearchFilter, bool) {
-	searchFiltersMu.Lock()
-	defer searchFiltersMu.Unlock()
-	e, ok := searchFiltersCache[id]
+	e, ok := searchFiltersEntryFor(id)
 	if !ok || e.version != version || time.Since(e.at) > searchFiltersTTL {
 		return nil, false
 	}
 	return e.filters, true
+}
+
+// searchFiltersEntryFor returns the last filters obtained for id, of any
+// version or age.
+func searchFiltersEntryFor(id string) (searchFiltersEntry, bool) {
+	searchFiltersMu.Lock()
+	defer searchFiltersMu.Unlock()
+	e, ok := searchFiltersCache[id]
+	return e, ok
 }
 
 // loadSearchFilters calls the plugin (one call at a time per plugin) and

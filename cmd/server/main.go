@@ -207,6 +207,8 @@ func main() {
 	if err := engine.LuaPlugins.LoadAll(core.AppPath("plugins")); err != nil {
 		log.Printf("[server] lua plugin scan error: %v", err)
 	}
+	// Search filters ready before the first client asks (see GetSearchFilters).
+	pileus.WarmAllSearchFilters()
 	// Master secret for the device JWTs, the proxy-URL signature and the admin
 	// session cookie.
 	jwtSecret := loadOrCreateJWTSecret()
