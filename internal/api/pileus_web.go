@@ -321,7 +321,16 @@ func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir, expectedSHA s
 	}
 
 	bakDir := destDir + ".bak"
-	os.RemoveAll(bakDir)
+	if err := os.RemoveAll(bakDir); err != nil {
+		// Typically a backup left by a root-run server, which the unprivileged
+		// one can't empty: move it aside (only the parent's write bit counts)
+		// rather than fail the update with rename's opaque "file exists".
+		stale := fmt.Sprintf("%s.stale-%d", bakDir, time.Now().Unix())
+		if rerr := os.Rename(bakDir, stale); rerr != nil {
+			return fmt.Errorf("rimozione del backup precedente %s fallita: %v", bakDir, err)
+		}
+		log.Printf("[pileus-web] backup precedente non rimovibile (%v): spostato in %s", err, stale)
+	}
 	if _, err := os.Stat(destDir); err == nil {
 		if err := os.Rename(destDir, bakDir); err != nil {
 			return fmt.Errorf("backup versione precedente fallito: %w", err)

@@ -25,7 +25,8 @@ if [ "$(id -u)" = "0" ] && [ "${MYCELIUM_RUN_AS_ROOT:-0}" != "1" ]; then
     }
     for p in ./data/config.json ./data/config.json.tmp \
              ./data/mycelium.db ./data/mycelium.db-wal ./data/mycelium.db-shm \
-             ./data/logs ./data/imgcache ./data/pileus-web ./data/pileus-web-tv \
+             ./data/logs ./data/imgcache ./data/pileus-web ./data/pileus-web.bak \
+             ./data/pileus-web-tv ./data/pileus-web-tv.bak \
              ./data/wireproxy ./data/downloads ./plugins; do
         own "$p"
     done
