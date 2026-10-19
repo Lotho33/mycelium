@@ -85,13 +85,13 @@
     </div>
 
     <nav class="flex-1 overflow-y-auto px-2.5 py-3 space-y-1">
-        <button class="nav-item active" id="nav-btn-plugins" onclick="switchTab('plugins')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6M6 15v6M18 3v6M18 15v6M6 9a3 3 0 0 0 0 6M18 9a3 3 0 0 1 0 6"/></svg>
-            Plugin
-        </button>
-        <button class="nav-item" id="nav-btn-devices" onclick="switchTab('devices')">
+        <button class="nav-item active" id="nav-btn-devices" onclick="switchTab('devices')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/></svg>
             Dispositivi
+        </button>
+        <button class="nav-item" id="nav-btn-plugins" onclick="switchTab('plugins')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6M6 15v6M18 3v6M18 15v6M6 9a3 3 0 0 0 0 6M18 9a3 3 0 0 1 0 6"/></svg>
+            Plugin
         </button>
         <button class="nav-item" id="nav-btn-users" onclick="switchTab('users')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -135,7 +135,7 @@
     <button onclick="openNav()" class="p-2 -ml-1 text-gray-300 hover:text-white" aria-label="Apri menu">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
-    <span id="topbar-title" class="text-sm font-bold text-white">Plugin</span>
+    <span id="topbar-title" class="text-sm font-bold text-white">Dispositivi</span>
     <div class="ml-auto flex items-center gap-3 text-[11px] font-mono text-gray-500">
         <span>CPU <span id="top-cpu" class="text-gray-300">—</span></span>
         <span>RAM <span id="top-mem" class="text-gray-300">—</span></span>
@@ -146,7 +146,7 @@
 <main class="px-3 sm:px-6 py-4 sm:py-6 max-w-5xl mx-auto">
 
     <!-- ════════════════ TAB: PLUGIN ════════════════ -->
-    <div id="tab-plugins">
+    <div id="tab-plugins" class="hidden">
         <!-- Server status -->
         <div class="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs font-mono text-gray-500 mb-4 pb-3 border-b border-gray-800/60">
             <span>mycelium <span class="text-gray-300">v<span id="ov-core-version">—</span></span></span>
@@ -204,7 +204,7 @@
     </div>
 
     <!-- ════════════════ TAB: DEVICES ════════════════ -->
-    <div id="tab-devices" class="hidden">
+    <div id="tab-devices">
         <div class="flex items-center flex-wrap gap-3 mb-4">
             <h2 class="hidden lg:block text-lg font-bold text-white">Dispositivi</h2>
 

@@ -171,13 +171,13 @@ async function changeAdminPassword(ev) {
 }
 
 // ─── Side drawer + pages ─────────────────────────────────────────────────────
-const _pages = ['plugins','devices','users','offline','vpn','settings','logs','download'];
+const _pages = ['devices','plugins','users','offline','vpn','settings','logs','download'];
 const _pageTitles = {
     plugins: 'Plugin', devices: 'Dispositivi', users: 'Utenti',
     offline: 'Download offline', vpn: 'Rete', settings: 'Impostazioni',
     logs: 'Log di Sistema', download: 'iOS / macOS',
 };
-let _activeTab = 'plugins';
+let _activeTab = 'devices'; // Dispositivi è la pagina iniziale
 
 function openNav() {
     document.getElementById('sidebar')?.classList.remove('-translate-x-full');
@@ -191,7 +191,7 @@ function closeNav() {
 }
 
 function switchTab(id) {
-    if (!_pages.includes(id)) id = 'plugins';
+    if (!_pages.includes(id)) id = 'devices';
     _activeTab = id;
     _pages.forEach(t => {
         document.getElementById(`tab-${t}`)?.classList.toggle('hidden', t !== id);
