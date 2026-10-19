@@ -47,6 +47,7 @@ func (m *LuaPluginManager) watchHotReload(p *LuaPlugin) {
 					if err := p.Pool.Reload(); err != nil {
 						log.Printf("[lua] hot-reload %s: %v", p.Manifest.ID, err)
 					} else {
+						pluginIndexes.dropPlugin(p.Manifest.ID)
 						log.Printf("[lua] hot-reload %s: OK (%s)", p.Manifest.ID, filepath.Base(event.Name))
 					}
 				}()

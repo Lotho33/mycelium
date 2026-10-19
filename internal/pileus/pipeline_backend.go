@@ -3,6 +3,7 @@ package pileus
 import (
 	"context"
 
+	"mycelium/internal/core"
 	"mycelium/internal/engine"
 
 	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
@@ -40,7 +41,18 @@ type PipelineProvider interface {
 	// onProgress, if non-nil, is forwarded status updates the plugin emits while
 	// still resolving (e.g. Lua plugins via mycelium.progress()); backends that
 	// can't support it simply ignore it.
-	ResolveStream(ctx context.Context, streamID string, onProgress engine.ProgressFunc) (resolvedURL string, headers map[string]string, isLive bool, extra map[string]string, err error)
+	ResolveStream(ctx context.Context, streamID string, onProgress engine.ProgressFunc) (*ResolvedStream, error)
+}
+
+// ResolvedStream is what a backend's ResolveStream returns.
+type ResolvedStream struct {
+	URL     string
+	Headers map[string]string
+	IsLive  bool
+	Extra   map[string]string
+	// Subtitles are external tracks the HLS proxy adds to the master playlist
+	// (ignored for non-HLS and direct_stream plugins).
+	Subtitles []core.ExtSubtitle
 }
 
 // lookupBackend returns the PipelineProvider for pluginID. All plugins are Lua.

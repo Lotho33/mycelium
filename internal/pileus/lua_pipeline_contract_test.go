@@ -45,6 +45,9 @@ func TestLuaPipeline_Contract(t *testing.T) {
 		end
 		function resolve_stream(args)
 			if args.stream_id == "missing" then return nil, "Doppiaggio italiano non disponibile" end
+			if args.stream_id == "subs" then
+				return { url = "http://x/playlist.m3u8", subtitles = { { url = "https://s/it.srt", lang = "it", name = "Italiano", default = true } } }
+			end
 			return { url = "http://x/playlist.m3u8", headers = {}, extra = {} }
 		end
 		function get_catalog(args)
@@ -64,12 +67,18 @@ func TestLuaPipeline_Contract(t *testing.T) {
 	}
 
 	// Empty headers/extra tables serialise as [] and must not break resolve.
-	if u, _, _, _, err := p.ResolveStream(ctx, "ok", nil); err != nil || u == "" {
-		t.Errorf("ResolveStream with empty tables = %q, %v; want success", u, err)
+	if rs, err := p.ResolveStream(ctx, "ok", nil); err != nil || rs.URL == "" {
+		t.Errorf("ResolveStream with empty tables = %+v, %v; want success", rs, err)
+	}
+
+	// subtitles become external tracks for the proxy.
+	if rs, err := p.ResolveStream(ctx, "subs", nil); err != nil || len(rs.Subtitles) != 1 ||
+		rs.Subtitles[0].URL != "https://s/it.srt" || rs.Subtitles[0].Lang != "it" || !rs.Subtitles[0].Default {
+		t.Errorf("ResolveStream subtitles = %+v, %v; want one default Italian track", rs, err)
 	}
 
 	// A plugin-described failure reaches the player verbatim, not as Internal.
-	_, _, _, _, err := p.ResolveStream(ctx, "missing", nil)
+	_, err := p.ResolveStream(ctx, "missing", nil)
 	st, _ := status.FromError(wrapInternal(err))
 	if st.Code() != codes.FailedPrecondition || st.Message() != "Doppiaggio italiano non disponibile" {
 		t.Errorf("plugin error → %v %q; want FailedPrecondition with the plugin's message", st.Code(), st.Message())

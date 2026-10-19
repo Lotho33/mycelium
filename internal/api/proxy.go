@@ -90,7 +90,7 @@ func uriTagTarget(line string) string {
 	return "playlist"
 }
 
-func proxyResolveForPlaylist(r *http.Request, sidRaw, uidRaw string) (newPlaylistURL, newOrigin string) {
+func proxyResolveForPlaylist(r *http.Request, sidRaw, uidRaw, xsubRaw string) (newPlaylistURL, newOrigin string) {
 	pluginID, sourceID, ok := decodeSid(sidRaw)
 	if !ok {
 		return "", ""
@@ -104,12 +104,12 @@ func proxyResolveForPlaylist(r *http.Request, sidRaw, uidRaw string) (newPlaylis
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	return buildResolvedPlaylistURL(scheme, r.Host, pluginID, sourceID, resolvedURL, resolvedHeaders, uidRaw)
+	return buildResolvedPlaylistURL(scheme, r.Host, pluginID, sourceID, resolvedURL, resolvedHeaders, uidRaw, xsubRaw)
 }
 
 // buildResolvedPlaylistURL mints the signed /proxy/playlist.m3u8 target of a
-// re-resolved stream.
-func buildResolvedPlaylistURL(scheme, host, pluginID, sourceID, resolvedURL string, resolvedHeaders map[string]string, uidRaw string) (newURL, origin string) {
+// re-resolved stream. xsubRaw carries the original's external subtitles over.
+func buildResolvedPlaylistURL(scheme, host, pluginID, sourceID, resolvedURL string, resolvedHeaders map[string]string, uidRaw, xsubRaw string) (newURL, origin string) {
 	// Sniffed header names can be lowercase; the lookups below are canonical.
 	resolvedHeaders = canonicalHeaderKeys(resolvedHeaders)
 
@@ -127,6 +127,9 @@ func buildResolvedPlaylistURL(scheme, host, pluginID, sourceID, resolvedURL stri
 	}
 	vpnSuffix := videoEgressSuffix(pluginID)
 	xhdrSuffix := buildXhdrSuffix(b64enc, resolvedHeaders)
+	if xsubRaw != "" {
+		vpnSuffix += "&xsub=" + url.QueryEscape(xsubRaw)
+	}
 	// rr=1 marks an already re-resolved URL: a further failure answers 502
 	// instead of re-resolving again (no redirect loop).
 	u := fmt.Sprintf("%s://%s/proxy/playlist.m3u8?data=%s&origin=%s&cookies=%s&sid=%s%s%s%s&rr=1",
@@ -239,7 +242,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	if fetchErr != nil {
 		log.Printf("[proxy/playlist] fetch error: %v", fetchErr)
 		if sidRaw != "" && childIdx == "" && q.Get("rr") == "" {
-			if newURL, _ := proxyResolveForPlaylist(r, sidRaw, uidRaw); newURL != "" {
+			if newURL, _ := proxyResolveForPlaylist(r, sidRaw, uidRaw, q.Get("xsub")); newURL != "" {
 				log.Printf("[proxy/playlist] re-resolve → %s", logURL(newURL))
 				http.Redirect(w, r, newURL, http.StatusFound)
 				return
@@ -249,17 +252,26 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playlistBase := realURL[:strings.LastIndex(realURL, "/")+1]
-	lines := strings.Split(string(content), "\n")
-	b64enc := func(s string) string {
-		return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(s))
-	}
-
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
 	}
 	proxyBase := fmt.Sprintf("%s://%s/proxy", scheme, r.Host)
+
+	// External subtitles (xsub) need a master to hang off: a top-level media
+	// playlist is wrapped in a one-variant master (proxy_subs.go).
+	isMaster := isMasterPlaylist(content)
+	extSubs := core.DecodeExtSubs(q.Get("xsub"))
+	if len(extSubs) > 0 && !isMaster && childIdx == "" && !rendition {
+		serveExtSubsWrapper(w, r, proxyBase, realURL, content, extSubs)
+		return
+	}
+
+	playlistBase := realURL[:strings.LastIndex(realURL, "/")+1]
+	lines := strings.Split(string(content), "\n")
+	b64enc := func(s string) string {
+		return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(s))
+	}
 
 	uidSuffix := ""
 	if uidRaw != "" {
@@ -273,7 +285,6 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	// Children of a master carry sid + their index so a failing variant reload
 	// can be recovered in place (proxy_playlist_recover.go).
-	isMaster := isMasterPlaylist(content)
 	master := sidRaw != "" && isMaster
 	nextChild := 0
 	childSuffix := func() string {
@@ -379,6 +390,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			segs: raSegs, origin: realOrigin, cookiesRaw: cookiesRaw, xhdrRaw: xhdrRaw,
 			useVPN: useVPN, egr: egr,
 		})
+	}
+
+	if isMaster && len(extSubs) > 0 {
+		rewritten = injectExtSubs(rewritten, extSubs, proxyBase)
 	}
 
 	out := strings.Join(rewritten, "\n")

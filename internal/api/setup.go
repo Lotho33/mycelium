@@ -31,6 +31,8 @@ func InternalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /proxy/playlist.m3u8", rateLimitMiddleware(proxyLimiter, ProxyPlaylist))
 	mux.HandleFunc("GET /proxy/segment.ts", rateLimitMiddleware(proxyLimiter, ProxySegment))
 	mux.HandleFunc("GET /proxy/key.key", rateLimitMiddleware(proxyLimiter, ProxyKey))
+	mux.HandleFunc("GET /proxy/subtitle.m3u8", rateLimitMiddleware(proxyLimiter, ProxySubtitlePlaylist))
+	mux.HandleFunc("GET /proxy/subtitle.vtt", rateLimitMiddleware(proxyLimiter, ProxySubtitleFile))
 
 	// Image proxy: no auth, SSRF-guarded, per-IP rate limit.
 	mux.HandleFunc("GET /img", rateLimitMiddleware(imgLimiter, ImageProxy))

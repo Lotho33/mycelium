@@ -79,6 +79,6 @@ the browser can reach.
   the bundle to `/` would collide with existing root paths (`/health`,
   `/assets`, `/manifest.json`, …).
 - `/proxy/*` URLs are HMAC-signed (`data`, `origin`, `cookies`, `xhdr`, `vpn`,
-  `egr`, `sid`) — see `internal/core/proxy_sign.go` — so they can't be forged.
+  `egr`, `sid`, `uid`, and `xsub` — external subtitles — when present) — see `internal/core/proxy_sign.go` — so they can't be forged.
   `/proxy/*` and `/img` both dial upstreams through the SSRF-guarded dialer
   (`internal/core/ssrf.go`).

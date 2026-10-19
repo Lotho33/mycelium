@@ -222,6 +222,74 @@ async function pollResources() {
     set('top-cpu',    cpu.toFixed(0)+'%');
     set('top-mem',    fmtBytes(mem));
 }
+// ─── Plugin memory profile ──────────────────────────────────────────────────
+// On demand only: /admin/lua-plugins/memory borrows every plugin's Lua states
+// while it walks them. Figures are estimates (engine/lua_memory.go).
+function _memFmt(b) {
+    if (!b || b <= 0) return '0 KB';
+    if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+}
+async function loadPluginMemory() {
+    const box = document.getElementById('mem-profile');
+    const btn = document.getElementById('mem-profile-btn');
+    if (!box) return;
+    if (btn) btn.disabled = true;
+    box.textContent = 'Misuro…';
+    try {
+        const r = await apiFetch('/admin/lua-plugins/memory');
+        if (!r) return;
+        if (!r.ok) { box.textContent = 'Profilo non riuscito: ' + (await r.text()); return; }
+        const d = await r.json();
+        const plugins = d.plugins || [];
+        const max = Math.max(1, ...plugins.map(p => (p.bytes || 0) + (p.index_bytes || 0)));
+        const head = `<div class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-gray-500 mb-3 pb-3 border-b border-gray-800/60">
+            <span>RSS processo <span class="text-gray-300">${_memFmt(d.rss_bytes)}</span></span>
+            <span>heap Go <span class="text-gray-300">${_memFmt(d.go_heap_bytes)}</span></span>
+            <span>plugin Lua (stima) <span class="text-gray-300">${_memFmt(d.lua_total_bytes)}</span></span>
+            <span>indici condivisi <span class="text-gray-300">${_memFmt(d.index_bytes || 0)}</span></span>
+            <span>goroutine <span class="text-gray-300">${d.goroutines}</span></span>
+            <span class="ml-auto">${d.took_ms} ms</span>
+        </div>`;
+        const rows = plugins.map(p => {
+            const total = (p.bytes || 0) + (p.index_bytes || 0);
+            const pct = Math.round(100 * total / max);
+            const states = p.states || [];
+            const perVM = states.map(s => _memFmt(s.bytes)).join(' + ');
+            const notes = [
+                p.busy ? `${p.busy} VM occupate, non misurate` : '',
+                states.some(s => s.truncated) ? 'troncato' : '',
+            ].filter(Boolean).join(' · ');
+            const top = (p.top || []).map(it => `<div class="flex gap-2 font-mono">
+                    <span class="truncate min-w-0 flex-1 text-gray-400">${escapeHtml(it.path)}</span>
+                    <span class="text-gray-600">${it.entries} voci</span>
+                    <span class="text-gray-300">${_memFmt(it.bytes)}</span>
+                </div>`).join('');
+            const idx = (p.indexes || []).map(ix => `<div class="flex gap-2 font-mono">
+                    <span class="truncate min-w-0 flex-1 text-gray-400">indice ${escapeHtml(ix.name)} (condiviso)</span>
+                    <span class="text-gray-600">${ix.records} record · ${ix.keys} chiavi</span>
+                    <span class="text-gray-300">${_memFmt(ix.bytes)}</span>
+                </div>`).join('');
+            return `<details class="border-b border-gray-800/40 py-2">
+                <summary class="flex items-center gap-2 cursor-pointer">
+                    <span class="text-gray-200 font-semibold truncate min-w-0">${escapeHtml(p.name || p.plugin_id)}</span>
+                    <span class="text-[10px] text-gray-600 font-mono">${states.length}/${p.pool_size} VM</span>
+                    <span class="ml-auto font-mono text-gray-300">${_memFmt(total)}</span>
+                </summary>
+                <div class="h-1.5 rounded-full mt-1 mb-2" style="background:rgba(55,65,81,.5)">
+                    <div class="h-1.5 rounded-full" style="width:${pct}%;background:#0284c7"></div>
+                </div>
+                <div class="text-[11px] text-gray-500 mb-1 font-mono">per VM: ${perVM || '—'}${notes ? ' · ' + escapeHtml(notes) : ''} · ${p.took_ms} ms</div>
+                <div class="space-y-1 text-[11px]">${idx}${top}</div>
+            </details>`;
+        }).join('');
+        box.innerHTML = head + (rows || 'Nessun plugin caricato.');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // setStatusBox colors a status box: null = neutral/loading, true = success,
 // false = error. Always visible in the modal (unlike toasts).
 function setStatusBox(id, text, ok) {

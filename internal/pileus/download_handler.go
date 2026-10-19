@@ -34,10 +34,11 @@ func DownloadResolver(ctx context.Context, pluginID, streamID, owner string) (do
 		profileID = owner
 		ctx = context.WithValue(ctx, ctxKeyProfileID{}, owner)
 	}
-	rawURL, headers, isLive, extra, err := b.ResolveStream(ctx, streamID, nil)
+	rs, err := b.ResolveStream(ctx, streamID, nil)
 	if err != nil {
 		return downloads.Source{}, wrapInternal(err)
 	}
+	rawURL, headers, isLive, extra := rs.URL, rs.Headers, rs.IsLive, rs.Extra
 	headers = canonicalHeaderKeys(headers)
 	lower := strings.ToLower(rawURL)
 	isHLS := strings.Contains(lower, ".m3u8") || strings.Contains(lower, "/playlist/")
@@ -55,7 +56,7 @@ func DownloadResolver(ctx context.Context, pluginID, streamID, owner string) (do
 		uid = "dl-" + newID()
 		managers.ProxyOwners.Register(uid, profileID)
 	}
-	src.URL = mintProxyURL("http", "127.0.0.1:"+port, pluginID, streamID, rawURL, headers, uid, isHLS)
+	src.URL = mintProxyURL("http", "127.0.0.1:"+port, pluginID, streamID, rawURL, headers, uid, isHLS, rs.Subtitles)
 	return src, nil
 }
 

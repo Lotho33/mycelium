@@ -2,7 +2,8 @@
 // lua_admin_tasks.go (manual task runs, start/stop/restart),
 // lua_admin_settings.go (settings), lua_admin_upload.go (ZIP
 // install/uninstall), lua_admin_logs.go (logs, SSE, stats),
-// lua_admin_files.go (file editor), lua_admin_helpers.go (helpers).
+// lua_admin_files.go (file editor), lua_admin_memory.go (memory profile),
+// lua_admin_helpers.go (helpers).
 package api
 
 import "net/http"
@@ -24,6 +25,7 @@ func RegisterLuaAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/lua-plugins/logs", auth(getLuaPluginLogs))
 	mux.HandleFunc("GET /admin/lua-plugins/logs/stream", auth(getLuaPluginLogsSSE))
 	mux.HandleFunc("GET /admin/lua-plugins/stats", auth(getLuaPluginStats))
+	mux.HandleFunc("GET /admin/lua-plugins/memory", auth(getLuaPluginMemory))
 	mux.HandleFunc("GET /admin/lua-plugins/files/{plugin_id}", auth(listLuaPluginFiles))
 	mux.HandleFunc("GET /admin/lua-plugins/file/{plugin_id}", auth(getLuaPluginFile))
 	mux.HandleFunc("PUT /admin/lua-plugins/file/{plugin_id}", auth(putLuaPluginFile))

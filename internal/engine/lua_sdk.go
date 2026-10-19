@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/aes"
@@ -9,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
@@ -21,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"mycelium/internal/core"
@@ -128,10 +131,12 @@ func RegisterSDK(L *lua.LState, opts SDKOpts, scope *callScope) {
 	mycelium.RawSetString("context", buildContextModule(L, opts, scope))
 	mycelium.RawSetString("browser", buildBrowserModule(L, opts, scope))
 	mycelium.RawSetString("crypto", buildCryptoModule(L))
-	mycelium.RawSetString("cache", buildCacheModule(L, opts))
+	mycelium.RawSetString("cache", buildCacheModule(L, opts, scope))
 	mycelium.RawSetString("xml", buildXMLModule(L))
 	mycelium.RawSetString("storage", buildStorageModule(L, opts))
 	mycelium.RawSetString("image", buildImageModule(L, opts))
+	mycelium.RawSetString("index", buildIndexModule(L, opts))
+	mycelium.RawSetString("ratelimit", buildRatelimitModule(L, opts, scope))
 	mycelium.RawSetString("log", L.NewFunction(func(L *lua.LState) int {
 		msg := L.OptString(1, "")
 		formatted := "[lua:" + opts.PluginID + "] " + msg
@@ -186,109 +191,18 @@ func buildNetworkModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 	t := L.NewTable()
 
 	doHTTP := func(method, rawURL, bodyStr string, headers *lua.LTable, timeoutSec int) *lua.LTable {
-		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
-		defer cancel()
-
-		// Built once, applied to each attempt's request.
-		optInProxy := false
-		extraHeaders := map[string]string{}
-		if headers != nil {
-			headers.ForEach(func(k, v lua.LValue) {
-				key := k.String()
-				if key == "_proxy" {
-					optInProxy = lua.LVAsBool(v)
-					return
-				}
-				extraHeaders[key] = v.String()
-			})
-		}
-
-		// Client selection:
-		//   - VPN-routed plugins (the default): always through the proxy, fail
-		//     closed without one; the _proxy header can't opt out.
-		//   - direct_egress plugins: _proxy=true uses the proxy when available.
-		client := opts.HTTPClient
-		if scope.requireProxy {
-			pc := opts.scopeProxyClient(scope)
-			if pc == nil {
-				res := L.NewTable()
-				res.RawSetString("status_code", lua.LNumber(0))
-				res.RawSetString("body", lua.LString(""))
-				res.RawSetString("error", lua.LString("plugin requires VPN but the selected egress is unavailable"))
-				return res
-			}
-			client = pc
-		} else if optInProxy {
-			if pc := opts.scopeProxyClient(scope); pc != nil {
-				client = pc
-			}
-		}
-		if client == nil {
-			client = http.DefaultClient
-		}
-
-		// Transport-level failures (proxy hiccup, DNS blip) are retried a couple of
-		// times; HTTP responses, error statuses included, are returned as they are.
-		const maxAttempts = 3
-		var resp *http.Response
-		var err error
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			var bodyReader io.Reader
-			if bodyStr != "" {
-				bodyReader = strings.NewReader(bodyStr)
-			}
-			var req *http.Request
-			req, err = http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
-			if err != nil {
-				res := L.NewTable()
-				res.RawSetString("status_code", lua.LNumber(0))
-				res.RawSetString("body", lua.LString(""))
-				res.RawSetString("error", lua.LString(err.Error()))
-				return res
-			}
-			for k, v := range extraHeaders {
-				req.Header.Set(k, v)
-			}
-			if req.Header.Get("User-Agent") == "" {
-				req.Header.Set("User-Agent", defaultPluginUserAgent)
-			}
-
-			resp, err = client.Do(req)
-			if err == nil {
-				break
-			}
-			if attempt < maxAttempts && ctx.Err() == nil {
-				log.Printf("[sdk/network] %s %s → error (attempt %d/%d): %v", method, sdkLogURL(rawURL), attempt, maxAttempts, core.RedactURLError(err))
-				time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
-				continue
-			}
-		}
-		if err != nil {
-			log.Printf("[sdk/network] %s %s → error: %v", method, sdkLogURL(rawURL), core.RedactURLError(err))
-			res := L.NewTable()
-			res.RawSetString("status_code", lua.LNumber(0))
-			res.RawSetString("body", lua.LString(""))
-			res.RawSetString("error", lua.LString(err.Error()))
-			return res
-		}
-		defer resp.Body.Close()
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, io.LimitReader(resp.Body, maxSDKResponseBytes))
-
-		respHeaders := L.NewTable()
-		for k, vs := range resp.Header {
-			if len(vs) > 0 {
-				// Join multiple values with \n so Lua can split them (e.g. Set-Cookie).
-				respHeaders.RawSetString(k, lua.LString(strings.Join(vs, "\n")))
-			}
-		}
-		res := L.NewTable()
-		res.RawSetString("status_code", lua.LNumber(resp.StatusCode))
-		res.RawSetString("body", lua.LString(buf.String()))
-		res.RawSetString("headers", respHeaders)
-		res.RawSetString("error", lua.LNil)
-		return res
+		req := sdkRequestFromLua(method, rawURL, bodyStr, headers, timeoutSec)
+		return opts.doSDKHTTP(scope, req, maxSDKResponseBytes).toLua(L)
 	}
+
+	// mycelium.network.get_many(requests [, opts]) → array of resp_tables, in
+	// the order of requests. Each request is a URL or {url, method, body,
+	// headers, timeout}; opts = {concurrency, timeout, ratelimit}. The
+	// requests run in parallel in Go (Lua waits for all of them).
+	t.RawSetString("get_many", L.NewFunction(func(L *lua.LState) int {
+		L.Push(networkGetMany(L, opts, scope, L.CheckTable(1), L.OptTable(2, nil)))
+		return 1
+	}))
 
 	// mycelium.network.get(url [, headers_table [, timeout_seconds]]) → resp_table
 	t.RawSetString("get", L.NewFunction(func(L *lua.LState) int {
@@ -447,6 +361,12 @@ func buildJSONModule(L *lua.LState) *lua.LTable {
 		L.Push(lua.LString(string(b)))
 		return 1
 	}))
+
+	// mycelium.json.each(json_string, path, fn) → count, err — calls
+	// fn(item, i) for each element of the array at path (dot-separated
+	// fields, nil = the document) without building the whole list in Lua;
+	// fn returning false stops. For large lists instead of parse.
+	t.RawSetString("each", L.NewFunction(jsonEachFunc))
 
 	// mycelium.json.get(json_string, path) → value (gjson path)
 	t.RawSetString("get", L.NewFunction(func(L *lua.LState) int {
@@ -724,7 +644,7 @@ func buildCryptoModule(L *lua.LState) *lua.LTable {
 // mycelium.cache  (Redis TTL, plugin-namespaced)
 // ─────────────────────────────────────────────────────────────────────────────
 
-func buildCacheModule(L *lua.LState, opts SDKOpts) *lua.LTable {
+func buildCacheModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable {
 	t := L.NewTable()
 
 	cacheKey := func(key string) string {
@@ -774,6 +694,9 @@ func buildCacheModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		L.Push(lua.LTrue)
 		return 2
 	}))
+
+	// mycelium.cache.remember(key, ttl_seconds, fn) → value, hit (lua_remember.go)
+	t.RawSetString("remember", L.NewFunction(cacheRememberFunc(opts, scope, cacheKey)))
 
 	// mycelium.cache.del(key)
 	t.RawSetString("del", L.NewFunction(func(L *lua.LState) int {
@@ -890,6 +813,10 @@ func buildContextModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 
 func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 	t := L.NewTable()
+	client := opts.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
 
 	// mycelium.image.analyze_logo(url) → {is_dark=bool, norm_w=int, norm_h=int}, err
 	//
@@ -897,119 +824,168 @@ func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 	// normalized size (800px wide, height capped at 200px) so logos render at
 	// comparable sizes. is_dark when the mean luminance is below 0.40.
 	t.RawSetString("analyze_logo", L.NewFunction(func(L *lua.LState) int {
-		url := L.CheckString(1)
-
-		client := opts.HTTPClient
-		if client == nil {
-			client = http.DefaultClient
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		info, err := analyzeLogo(client, L.CheckString(1))
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString(err.Error()))
 			return 2
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		defer resp.Body.Close()
-
-		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxLogoImageBytes))
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		// Check the declared size first (decompression bomb).
-		if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr == nil &&
-			int64(cfg.Width)*int64(cfg.Height) > maxLogoImagePixels {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(fmt.Sprintf("image too large: %dx%d", cfg.Width, cfg.Height)))
-			return 2
-		}
-		imgData, _, err := image.Decode(bytes.NewReader(raw))
-		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString("image decode: " + err.Error()))
-			return 2
-		}
-
-		origW := imgData.Bounds().Dx()
-		origH := imgData.Bounds().Dy()
-		if origW == 0 || origH == 0 {
-			L.Push(lua.LNil)
-			L.Push(lua.LString("image has zero dimension"))
-			return 2
-		}
-
-		// Normalized size: 800px wide, height capped at 200px.
-		const targetW, maxH = 800, 200
-		normW := targetW
-		normH := (origH * targetW) / origW
-		if normH > maxH {
-			normH = maxH
-			normW = (origW * maxH) / origH
-		}
-
-		// Sample luminance on a 32×32 thumbnail.
-		const sampleSize = 32
-		sW := sampleSize
-		sH := (origH * sampleSize) / origW
-		if sH < 1 {
-			sH = 1
-		}
-
-		thumb := image.NewNRGBA(image.Rect(0, 0, sW, sH))
-		// Draw the image scaled into the thumbnail (nearest-neighbour).
-		draw.Draw(thumb, thumb.Bounds(), image.NewUniform(image.Transparent), image.Point{}, draw.Src)
-		srcBounds := imgData.Bounds()
-		for ty := 0; ty < sH; ty++ {
-			for tx := 0; tx < sW; tx++ {
-				srcX := srcBounds.Min.X + (tx*origW)/sW
-				srcY := srcBounds.Min.Y + (ty*origH)/sH
-				thumb.Set(tx, ty, imgData.At(srcX, srcY))
-			}
-		}
-
-		var totalLum float64
-		var count int
-		for ty := 0; ty < sH; ty++ {
-			for tx := 0; tx < sW; tx++ {
-				r, g, b, a := thumb.At(tx, ty).RGBA()
-				// RGBA() is 16-bit; alpha < 8192 (≈12.5% opacity) is skipped
-				if a < 8192 {
-					continue
-				}
-				lum := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)) / 65535.0
-				totalLum += lum
-				count++
-			}
-		}
-
-		isDark := false
-		if count > 0 {
-			isDark = (totalLum / float64(count)) < 0.40
-		}
-
-		res := L.NewTable()
-		res.RawSetString("is_dark", lua.LBool(isDark))
-		res.RawSetString("norm_w", lua.LNumber(normW))
-		res.RawSetString("norm_h", lua.LNumber(normH))
-		L.Push(res)
+		L.Push(info.toLua(L))
 		L.Push(lua.LNil)
 		return 2
 	}))
 
+	// mycelium.image.analyze_logos(urls) → array, one entry per url: the
+	// analyze_logo table, or {error = "..."}. Runs a few at a time in parallel.
+	t.RawSetString("analyze_logos", L.NewFunction(func(L *lua.LState) int {
+		list := L.CheckTable(1)
+		n := list.Len()
+		if n > maxAnalyzeLogos {
+			L.ArgError(1, fmt.Sprintf("too many urls (%d, max %d)", n, maxAnalyzeLogos))
+		}
+		urls := make([]string, n)
+		for i := range urls {
+			urls[i] = lua.LVAsString(list.RawGetInt(i + 1))
+		}
+		infos := make([]logoInfo, n)
+		errs := make([]error, n)
+		sem := make(chan struct{}, analyzeLogoWorkers)
+		var wg sync.WaitGroup
+		for i, u := range urls {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				errs[i] = errors.New("analyze failed")
+				defer core.Guard("lua/analyze_logos:" + opts.PluginID)
+				infos[i], errs[i] = analyzeLogo(client, u)
+			}()
+		}
+		wg.Wait()
+		out := L.CreateTable(n, 0)
+		for i := range urls {
+			if errs[i] != nil {
+				e := L.NewTable()
+				e.RawSetString("error", lua.LString(errs[i].Error()))
+				out.Append(e)
+				continue
+			}
+			out.Append(infos[i].toLua(L))
+		}
+		L.Push(out)
+		return 1
+	}))
+
 	return t
+}
+
+const (
+	maxAnalyzeLogos = 32
+	// analyzeLogoWorkers bounds the images decoded at once: a big logo can be
+	// tens of MB once decoded.
+	analyzeLogoWorkers = 3
+)
+
+type logoInfo struct {
+	isDark       bool
+	normW, normH int
+}
+
+func (li logoInfo) toLua(L *lua.LState) *lua.LTable {
+	res := L.NewTable()
+	res.RawSetString("is_dark", lua.LBool(li.isDark))
+	res.RawSetString("norm_w", lua.LNumber(li.normW))
+	res.RawSetString("norm_h", lua.LNumber(li.normH))
+	return res
+}
+
+// analyzeLogo downloads and measures one logo (see analyze_logo).
+func analyzeLogo(client *http.Client, url string) (logoInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return logoInfo{}, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return logoInfo{}, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxLogoImageBytes))
+	if err != nil {
+		return logoInfo{}, err
+	}
+	// Check the declared size first (decompression bomb).
+	if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr == nil &&
+		int64(cfg.Width)*int64(cfg.Height) > maxLogoImagePixels {
+		return logoInfo{}, fmt.Errorf("image too large: %dx%d", cfg.Width, cfg.Height)
+	}
+	imgData, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return logoInfo{}, errors.New("image decode: " + err.Error())
+	}
+
+	origW := imgData.Bounds().Dx()
+	origH := imgData.Bounds().Dy()
+	if origW == 0 || origH == 0 {
+		return logoInfo{}, errors.New("image has zero dimension")
+	}
+
+	// Normalized size: 800px wide, height capped at 200px.
+	const targetW, maxH = 800, 200
+	normW := targetW
+	normH := (origH * targetW) / origW
+	if normH > maxH {
+		normH = maxH
+		normW = (origW * maxH) / origH
+	}
+
+	// Sample luminance on a 32×32 thumbnail.
+	const sampleSize = 32
+	sW := sampleSize
+	sH := (origH * sampleSize) / origW
+	if sH < 1 {
+		sH = 1
+	}
+
+	thumb := image.NewNRGBA(image.Rect(0, 0, sW, sH))
+	// Draw the image scaled into the thumbnail (nearest-neighbour).
+	draw.Draw(thumb, thumb.Bounds(), image.NewUniform(image.Transparent), image.Point{}, draw.Src)
+	srcBounds := imgData.Bounds()
+	for ty := 0; ty < sH; ty++ {
+		for tx := 0; tx < sW; tx++ {
+			srcX := srcBounds.Min.X + (tx*origW)/sW
+			srcY := srcBounds.Min.Y + (ty*origH)/sH
+			thumb.Set(tx, ty, imgData.At(srcX, srcY))
+		}
+	}
+
+	var totalLum float64
+	var count int
+	for ty := 0; ty < sH; ty++ {
+		for tx := 0; tx < sW; tx++ {
+			r, g, b, a := thumb.At(tx, ty).RGBA()
+			// RGBA() is 16-bit; alpha < 8192 (≈12.5% opacity) is skipped
+			if a < 8192 {
+				continue
+			}
+			lum := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)) / 65535.0
+			totalLum += lum
+			count++
+		}
+	}
+
+	isDark := false
+	if count > 0 {
+		isDark = (totalLum / float64(count)) < 0.40
+	}
+	return logoInfo{isDark: isDark, normW: normW, normH: normH}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1205,6 +1181,39 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		}
 		L.Push(lua.LNil)
 		return 1
+	}))
+
+	// mycelium.storage.each_json(filename, path, fn) → count, err — streams
+	// the array at path like mycelium.json.each; a missing file is 0, nil.
+	t.RawSetString("each_json", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		jpath := L.OptString(2, "")
+		fn := L.CheckFunction(3)
+		path, err := resolvePath(name)
+		if err != nil {
+			L.Push(lua.LNumber(0))
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			L.Push(lua.LNumber(0))
+			if os.IsNotExist(err) {
+				L.Push(lua.LNil)
+			} else {
+				L.Push(lua.LString(err.Error()))
+			}
+			return 2
+		}
+		defer f.Close()
+		n, err := luaEachJSON(L, bufio.NewReaderSize(f, 64<<10), jpath, fn)
+		L.Push(lua.LNumber(n))
+		if err != nil {
+			L.Push(lua.LString(err.Error()))
+		} else {
+			L.Push(lua.LNil)
+		}
+		return 2
 	}))
 
 	// mycelium.storage.exists(filename) → bool

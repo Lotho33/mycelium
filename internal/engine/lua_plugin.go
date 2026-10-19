@@ -619,6 +619,7 @@ func (m *LuaPluginManager) watchHotReloadPolling(p *LuaPlugin) {
 					if err := p.Pool.Reload(); err != nil {
 						log.Printf("[lua] hot-reload %s: %v", p.Manifest.ID, err)
 					} else {
+						pluginIndexes.dropPlugin(p.Manifest.ID)
 						log.Printf("[lua] hot-reload %s: OK", p.Manifest.ID)
 					}
 				}()
@@ -1545,6 +1546,8 @@ func (m *LuaPluginManager) UnloadPlugin(pluginID string) {
 		delete(m.plugins, pluginID)
 	}
 	m.mu.Unlock()
+	pluginIndexes.dropPlugin(pluginID)
+	pluginLimiters.dropPlugin(pluginID)
 }
 
 // Shutdown stops all hot-reload watchers, task schedulers, and closes all pools.

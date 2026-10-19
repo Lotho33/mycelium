@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"mycelium/internal/core"
 	"mycelium/internal/engine"
 	"mycelium/pkg/models"
 
@@ -316,15 +317,15 @@ func (p *luaPipelineProvider) GetStreams(ctx context.Context, mediaID string) ([
 	return toProto(wrapped.Sources), nil
 }
 
-func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string, onProgress engine.ProgressFunc) (string, map[string]string, bool, map[string]string, error) {
+func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string, onProgress engine.ProgressFunc) (*ResolvedStream, error) {
 	b, err := engine.LuaPlugins.CallEntrypointJSONWithProgressCtx(ctx, p.id, engine.EPResolveStream, map[string]any{
 		"stream_id": streamID,
 	}, profileIDFromCtx(ctx), onProgress)
 	if err != nil {
-		return "", nil, false, nil, err
+		return nil, err
 	}
 	if isNullJSON(b) {
-		return "", nil, false, nil, status.Error(codes.NotFound, "stream not resolved: plugin returned nil")
+		return nil, status.Error(codes.NotFound, "stream not resolved: plugin returned nil")
 	}
 	var result struct {
 		URL string `json:"url"`
@@ -332,14 +333,30 @@ func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string
 		Headers flexMap `json:"headers"`
 		IsLive  bool    `json:"is_live"`
 		Extra   flexMap `json:"extra"`
+		// An empty Lua table serialises as [] here too, which decodes fine.
+		Subtitles []struct {
+			URL     string `json:"url"`
+			Lang    string `json:"lang"`
+			Name    string `json:"name"`
+			Default bool   `json:"default"`
+		} `json:"subtitles"`
 	}
 	if err := json.Unmarshal(b, &result); err != nil {
-		return "", nil, false, nil, fmt.Errorf("invalid lua result: %w", err)
+		return nil, fmt.Errorf("invalid lua result: %w", err)
 	}
 	if result.URL == "" {
-		return "", nil, false, nil, status.Error(codes.NotFound, "stream not resolved: empty URL")
+		return nil, status.Error(codes.NotFound, "stream not resolved: empty URL")
 	}
-	return result.URL, map[string]string(result.Headers), result.IsLive, map[string]string(result.Extra), nil
+	rs := &ResolvedStream{
+		URL:     result.URL,
+		Headers: map[string]string(result.Headers),
+		IsLive:  result.IsLive,
+		Extra:   map[string]string(result.Extra),
+	}
+	for _, s := range result.Subtitles {
+		rs.Subtitles = append(rs.Subtitles, core.ExtSubtitle{URL: s.URL, Lang: s.Lang, Name: s.Name, Default: s.Default})
+	}
+	return rs, nil
 }
 
 type luaFilterDef struct {

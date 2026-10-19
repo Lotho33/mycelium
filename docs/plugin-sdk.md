@@ -143,8 +143,21 @@ mycelium passes.
   headers = { Referer = "…", Cookie = "…" },   -- replayed by the HLS proxy
   is_live = false,
   extra   = { … },                             -- plugin-specific passthrough
+  subtitles = {                                -- optional, HLS only
+    { url = "https://…/it.srt", lang = "it", name = "Italiano", default = true },
+  },
 }
 ```
+
+`subtitles` (optional) adds external subtitle tracks the upstream doesn't
+carry. The HLS proxy injects each one into the master playlist as an
+`EXT-X-MEDIA TYPE=SUBTITLES` rendition (a bare media playlist is wrapped in a
+one-variant master), fetches the file server-side and serves it as WebVTT —
+SRT/WebVTT, plain, gzip or zip, any encoding (non-UTF-8 is read as
+Windows-1252). Players and offline downloads see a normal track. A track
+whose language the master already has (non-forced) is skipped; a file that
+can't be fetched becomes an empty track, never a playback error. At most 4
+tracks; ignored for non-HLS streams and `direct_stream` plugins.
 
 `force_refresh` is set by mycelium when a previously-resolved URL was rejected
 downstream — skip any cache and resolve fresh.
@@ -177,7 +190,17 @@ local res = mycelium.network.post(url, body [, headers_table [, timeout_seconds]
 -- res = { status_code = 200, body = "…", headers = { ["Set-Cookie"] = "a\nb" }, error = nil }
 
 local body, err = mycelium.network.fetch(url [, { method=, body=, headers=, timeout_seconds= }])
+
+-- In parallel: one res per request, same order. A request is a URL or
+-- { url=, method=, body=, headers=, timeout= }.
+local rs = mycelium.network.get_many(requests [, { concurrency = 6, timeout = 30, ratelimit = "name" }])
 ```
+
+Lua runs one thing at a time, so independent requests in a row add up their
+latency; `get_many` runs them in Go (at most 32 per call, `concurrency` at a
+time, up to 16; 8 MiB per response) and returns when all are done.
+`ratelimit` takes a token from that [`mycelium.ratelimit`](#myceliumratelimit)
+bucket before each request.
 
 Transport-level failures are retried a few times. Requests go through the
 plugin's configured egress (proxy/VPN) unless the plugin is `direct_egress`. A
@@ -215,8 +238,18 @@ local t, err = mycelium.json.parse(str)
 local str    = mycelium.json.stringify(value)
 local v      = mycelium.json.get(str, "path.to[0].field")   -- gjson syntax
 local arr    = mycelium.json.get_array(str, "path")
+local n, err = mycelium.json.each(str, "data.items", function(item, i) ... end)  -- false stops
 local node, err = mycelium.xml.parse(str)   -- { _tag, _text, _attrs, [1..n] children }
 ```
+
+Parsed data lives in Lua tables, which cost far more than the JSON text (a
+few hundred bytes per small record), and every state of the plugin's pool
+holds its own copy. Prefer `json.get` / `get_array` or `gmatch` over parsing
+large lists whole, and `json.each` to walk one: it decodes the array at a
+dot-separated path (`nil` = the document) one element at a time. To keep a
+large dataset for lookups, use [`mycelium.index`](#myceliumindex).
+Dashboard → Plugin → **Memoria dei plugin** estimates what each plugin holds,
+per state and per global / module-level `local`, plus its indexes.
 
 ### `mycelium.crypto`
 
@@ -234,7 +267,35 @@ is absent.
 local ok, err  = mycelium.cache.set(key, value, ttl_seconds)
 local val, hit = mycelium.cache.get(key)
 mycelium.cache.del(key)
+
+-- Read, or compute and store. fn returns the value (nil = store nothing) and
+-- optionally a ttl for this result. hit = from the cache or another state.
+local val, hit = mycelium.cache.remember(key, ttl_seconds, function()
+    local v = expensive_lookup()
+    return v, (#v == 0) and 3600 or nil
+end)
 ```
+
+`remember` stores the value as JSON (tables come back as tables), so use it
+alone on its keys rather than mixing it with `get`/`set`. While one state of
+the plugin computes a key, the others asking for it wait for that result
+instead of repeating the work; if it fails, each computes on its own.
+
+### `mycelium.ratelimit`
+
+Named token buckets shared by every state of the plugin, to keep an external
+service under its limit instead of running into 429s.
+
+```lua
+mycelium.ratelimit.set("jikan", 1, 3)          -- 1 request/s, bursts of 3 (top level is fine)
+if mycelium.ratelimit.wait("jikan", 2) then    -- false if a token is more than 2 s away (default 30, max 60)
+    -- call the service
+end
+mycelium.ratelimit.pause("jikan", 60)          -- e.g. after a 429: no tokens for 60 s
+```
+
+`wait` on a bucket that was never `set` returns at once. In a user-facing call
+keep the wait short and skip the call when it returns false.
 
 ### `mycelium.context`
 
@@ -255,13 +316,44 @@ only writes `*.json` names — never the plugin's own `.lua` code or `manifest.y
 local t, err = mycelium.storage.read_json("state.json")
 local err    = mycelium.storage.write_json("state.json", t)
 local exists = mycelium.storage.exists("state.json")
+local n, err = mycelium.storage.each_json("big.json", "items", fn)  -- like json.each; missing file = 0, nil
 ```
+
+### `mycelium.index`
+
+Read-only lookup tables kept in Go and shared by every state of the plugin:
+each record is stored once as compact JSON (a few times smaller than Lua
+tables, and not copied per state) and decoded only when looked up. Build one
+with a builder and publish it under a name; publishing replaces the previous
+index at once for every state. Indexes live in memory only and are dropped on
+a code reload: rebuild them lazily from your own data.
+
+```lua
+if not mycelium.index.has("catalog") then
+    local b = mycelium.index.builder()
+    mycelium.storage.each_json("catalog.json", nil, function(e)
+        b:add(e, "id:" .. e.id, e.mal_id and ("mal:" .. e.mal_id))  -- nil/"" keys are skipped
+    end)
+    local n, err = b:publish("catalog")
+end
+local e    = mycelium.index.get("catalog", "mal:123")       -- first value added under the key, or nil
+local all  = mycelium.index.get_all("catalog", "mal:123")   -- every value, in insertion order
+local keys = mycelium.index.keys("catalog", "id:")          -- sorted; for tasks, not hot paths
+local info = mycelium.index.info("catalog")                 -- {records, keys, bytes, built_at} or nil
+mycelium.index.drop("catalog")
+```
+
+Values are tables, strings, numbers or booleans; identical values are stored
+once. A number key and its string form are the same key. Every lookup returns
+a fresh copy, so changing it doesn't change the index. Limits: 16 indexes per
+plugin, 256 MiB (estimated) and 4M records per index.
 
 ### `mycelium.image`
 
 ```lua
 local info, err = mycelium.image.analyze_logo(url)
 -- info = { is_dark = bool, norm_w = int, norm_h = int }
+local infos = mycelium.image.analyze_logos(urls)   -- up to 32, 3 at a time; infos[i] = info or { error = "…" }
 ```
 
 ### Misc

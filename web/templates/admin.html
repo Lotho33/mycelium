@@ -188,6 +188,19 @@
                 <div class="h-14 bg-gray-800/30 rounded-xl border border-gray-800 opacity-60"></div>
             </div>
         </div>
+
+        <!-- Memory profile (on demand: it borrows every plugin's Lua states) -->
+        <div class="card border rounded-xl p-4 mt-5">
+            <div class="flex items-center gap-2 mb-2">
+                <h3 class="text-sm font-bold text-white">Memoria dei plugin</h3>
+                <span class="text-[10px] text-gray-500">stima per VM Lua</span>
+                <button onclick="loadPluginMemory()" id="mem-profile-btn"
+                    class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Misura</button>
+            </div>
+            <div id="mem-profile" class="text-xs text-gray-500">
+                Stima la RAM che ogni plugin tiene nelle sue VM Lua (ogni VM del pool ha la sua copia dei dati) e quali tabelle la occupano. Blocca i plugin per qualche istante.
+            </div>
+        </div>
     </div>
 
     <!-- ════════════════ TAB: DEVICES ════════════════ -->

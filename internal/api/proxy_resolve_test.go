@@ -20,7 +20,7 @@ func TestBuildResolvedPlaylistURL_IsSigned(t *testing.T) {
 		"example.movies", "12345",
 		"https://cdn.example.com/hls/master.m3u8?token=abc",
 		map[string]string{"Referer": "https://player.example/watch", "Cookie": "sess=1"},
-		"user-1",
+		"user-1", "",
 	)
 
 	if origin != "https://player.example/watch" {
@@ -48,7 +48,7 @@ func TestBuildResolvedPlaylistURL_IsSigned(t *testing.T) {
 func TestBuildResolvedPlaylistURL_UnsignedWithoutKey(t *testing.T) {
 	core.SetProxySignKey(nil)
 
-	got, _ := buildResolvedPlaylistURL("http", "box.local", "p", "s", "https://cdn/x.m3u8", nil, "")
+	got, _ := buildResolvedPlaylistURL("http", "box.local", "p", "s", "https://cdn/x.m3u8", nil, "", "")
 	u, err := url.Parse(got)
 	if err != nil {
 		t.Fatalf("parse: %v", err)

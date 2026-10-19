@@ -35,7 +35,7 @@ func ProxySignEnabled() bool { return len(proxySignKey) > 0 }
 // uid, the playback session token, is included so a signed URL can't be
 // moved onto another session.
 func proxySigInput(q url.Values) string {
-	return strings.Join([]string{
+	s := strings.Join([]string{
 		q.Get("data"),
 		q.Get("origin"),
 		q.Get("cookies"),
@@ -45,6 +45,12 @@ func proxySigInput(q url.Values) string {
 		q.Get("sid"),
 		q.Get("uid"),
 	}, "\n")
+	// xsub (external subtitle tracks, fetched server-side) only when present,
+	// so the URLs signed before it existed keep verifying.
+	if x := q.Get("xsub"); x != "" {
+		s += "\nxsub=" + x
+	}
+	return s
 }
 
 // SignProxyURL returns the hex HMAC-SHA256 of q's canonical form.

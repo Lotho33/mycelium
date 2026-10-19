@@ -337,11 +337,12 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 		return err
 	}
 
-	rawURL, headers, isLive, extra, err := b.ResolveStream(ctx, req.StreamId, onProgress)
+	rs, err := b.ResolveStream(ctx, req.StreamId, onProgress)
 	if err != nil {
 		log.Printf("[pileus/media] ResolveStream %s/%s: %v", req.PluginId, req.StreamId, err)
 		return wrapInternal(err)
 	}
+	rawURL, headers, isLive, extra := rs.URL, rs.Headers, rs.IsLive, rs.Extra
 	// Sniffed header names can be lowercase; the lookups below are canonical.
 	headers = canonicalHeaderKeys(headers)
 
@@ -400,7 +401,7 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	// The player never gets a raw upstream URL: everything goes through the
 	// proxy, which handles CORS and keeps upstream tokens/cookies server-side.
 	proxyScheme, proxyHost := clientProxyBase(ctx)
-	proxyURL := mintProxyURL(proxyScheme, proxyHost, req.PluginId, req.StreamId, rawURL, headers, sessionToken, isHLS)
+	proxyURL := mintProxyURL(proxyScheme, proxyHost, req.PluginId, req.StreamId, rawURL, headers, sessionToken, isHLS, rs.Subtitles)
 
 	if isHLS {
 		log.Printf("[pileus/media] ResolveStream: HLS→proxy %s", redactProxyURL(proxyURL))
@@ -485,8 +486,8 @@ func clientProxyBase(ctx context.Context) (proxyScheme, proxyHost string) {
 // mintProxyURL builds the signed /proxy URL of a resolved stream: the
 // playlist proxy for HLS (with a sid, so the proxy can re-resolve an
 // expired token), the segment proxy otherwise. sessionToken becomes the uid
-// ("" for none).
-func mintProxyURL(proxyScheme, proxyHost, pluginID, streamID, rawURL string, headers map[string]string, sessionToken string, isHLS bool) string {
+// ("" for none). subs (external subtitle tracks) ride along as xsub, HLS only.
+func mintProxyURL(proxyScheme, proxyHost, pluginID, streamID, rawURL string, headers map[string]string, sessionToken string, isHLS bool, subs []core.ExtSubtitle) string {
 	b64 := func(s string) string {
 		return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(s))
 	}
@@ -542,8 +543,12 @@ func mintProxyURL(proxyScheme, proxyHost, pluginID, streamID, rawURL string, hea
 			sid := b64(pluginID + "\x00" + streamID)
 			sidParam = "&sid=" + url.QueryEscape(sid)
 		}
-		return core.AppendProxySig(fmt.Sprintf("%s://%s/proxy/playlist.m3u8?data=%s&origin=%s&cookies=%s%s%s%s%s",
-			proxyScheme, proxyHost, b64(rawURL), b64(origin), b64(cookie), sidParam, uidParam, xhdrParam, vpnParam))
+		xsubParam := ""
+		if x := core.EncodeExtSubs(subs); x != "" {
+			xsubParam = "&xsub=" + x
+		}
+		return core.AppendProxySig(fmt.Sprintf("%s://%s/proxy/playlist.m3u8?data=%s&origin=%s&cookies=%s%s%s%s%s%s",
+			proxyScheme, proxyHost, b64(rawURL), b64(origin), b64(cookie), sidParam, uidParam, xhdrParam, vpnParam, xsubParam))
 	}
 	return core.AppendProxySig(fmt.Sprintf("%s://%s/proxy/segment.ts?data=%s&origin=%s&cookies=%s%s%s%s",
 		proxyScheme, proxyHost, b64(rawURL), b64(origin), b64(cookie), uidParam, xhdrParam, vpnParam))
