@@ -77,7 +77,7 @@ func TestProxyPlaylist_MasterChildrenCarrySidAndIndex(t *testing.T) {
 		if got := proxyB64Decode(q.Get("data")); got != want[i] {
 			t.Errorf("child %d points at %s, masterChildURIs says %s", i, got, want[i])
 		}
-		if !core.VerifyProxyURL(q) {
+		if !core.VerifyProxyURL("playlist.m3u8", q) {
 			t.Errorf("child %d signature does not verify", i)
 		}
 	}
@@ -227,7 +227,6 @@ func TestProxySegment_RefusedAfterLeaseLost(t *testing.T) {
 	profile := "prof-" + t.Name()
 	token := "tok-" + t.Name()
 	managers.Sessions.Register(token, &managers.StreamSession{UserID: profile, ProfileID: profile, DeviceID: "tv"})
-	defer managers.Sessions.Remove(token)
 	defer managers.PlaybackLeases.Release(profile)
 
 	u := core.AppendProxySig("http://box.local/proxy/segment.ts?data=" + b64url(up.URL+"/s.ts") + "&origin=&cookies=&vpn=0&uid=" + token)
@@ -294,7 +293,6 @@ func TestProxySegment_RelaysSubtitlesAndAudio(t *testing.T) {
 // or a download's owner (never a lease-holding session for downloads).
 func TestSessionProfile_PlaybackAndDownloadOwners(t *testing.T) {
 	managers.Sessions.Register("tok-play-"+t.Name(), &managers.StreamSession{ProfileID: "p1", DeviceID: "d1"})
-	defer managers.Sessions.Remove("tok-play-" + t.Name())
 	managers.ProxyOwners.Register("dl-"+t.Name(), "p2")
 	if got := sessionProfile("tok-play-" + t.Name()); got != "p1" {
 		t.Fatalf("playback uid → %q", got)

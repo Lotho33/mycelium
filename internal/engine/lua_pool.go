@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -14,9 +16,18 @@ import (
 // LuaPool keeps a fixed pool of pre-loaded *lua.LState for one plugin
 // script: Acquire one, use it, release it. Reload rebuilds the pool (hot
 // reload).
+//
+// Every state belongs to a generation; Reload starts a new one. A state of
+// an older generation is closed when it comes back instead of re-entering
+// the pool, so at most size current states exist and returning one never
+// blocks on a full channel.
 type LuaPool struct {
 	pool chan *lua.LState
 	size int
+	// genMu guards gen and gens (state -> generation it was created in).
+	genMu sync.Mutex
+	gen   uint64
+	gens  map[*lua.LState]uint64
 	// nonInteractive is the single budget (size-1 states) shared by background
 	// tasks and catalog fetches; see BackgroundSlot.
 	nonInteractive chan struct{}
@@ -40,6 +51,7 @@ func NewLuaPool(size int, scriptPath string, sharedDirs []string, setupFn func(*
 		script:         scriptPath,
 		sharedDirs:     sharedDirs,
 		setupFn:        setupFn,
+		gens:           make(map[*lua.LState]uint64),
 	}
 	for i := 0; i < size; i++ {
 		L, err := p.newState()
@@ -47,9 +59,32 @@ func NewLuaPool(size int, scriptPath string, sharedDirs []string, setupFn func(*
 			p.Close()
 			return nil, fmt.Errorf("lua pool init: %w", err)
 		}
+		p.track(L, 0)
 		p.pool <- L
 	}
 	return p, nil
+}
+
+func (p *LuaPool) track(L *lua.LState, gen uint64) {
+	p.genMu.Lock()
+	p.gens[L] = gen
+	p.genMu.Unlock()
+}
+
+// put returns L to the pool if it belongs to the current generation, and
+// closes it otherwise.
+func (p *LuaPool) put(L *lua.LState) {
+	p.genMu.Lock()
+	defer p.genMu.Unlock()
+	if g, ok := p.gens[L]; ok && g == p.gen {
+		select {
+		case p.pool <- L:
+			return
+		default: // cannot happen while the invariant holds; never block
+		}
+	}
+	delete(p.gens, L)
+	L.Close()
 }
 
 // backgroundSlots is how many states non-interactive work may hold at once:
@@ -98,44 +133,73 @@ func (p *LuaPool) Stats() (free, size int) {
 func (p *LuaPool) Acquire(ctx context.Context) (*lua.LState, func(), error) {
 	select {
 	case L := <-p.pool:
-		return L, func() { p.pool <- L }, nil
+		return L, func() { p.put(L) }, nil
 	case <-ctx.Done():
 		return nil, func() {}, ctx.Err()
 	}
 }
 
-// DiscardAndReplace is used instead of release() when the state may still
-// be in use by an abandoned goroutine (a timed-out call): the state is
-// dropped for good and a fresh one takes its place, keeping the pool size.
-func (p *LuaPool) DiscardAndReplace() {
+// DiscardAndReplace is used instead of release() when old may still be in
+// use by an abandoned goroutine (a timed-out call): old is dropped for good
+// (not closed: its goroutine still runs on it) and, if it belonged to the
+// current generation, a fresh state takes its place, keeping the pool size.
+func (p *LuaPool) DiscardAndReplace(old *lua.LState) {
+	p.genMu.Lock()
+	g, ok := p.gens[old]
+	delete(p.gens, old)
+	current := ok && g == p.gen
+	p.genMu.Unlock()
+	if !current {
+		return // a Reload already replaced it
+	}
 	L, err := p.newState()
 	if err != nil {
 		// The pool shrinks by one state until the next Reload.
 		log.Printf("[lua] pool discard-replace: could not create replacement state: %v", err)
 		return
 	}
-	p.pool <- L
+	p.track(L, g)
+	p.put(L)
 }
 
 // Reload re-reads the script and replaces every pooled state.
+//
+// The new states are built first: if the script no longer loads, the pool
+// keeps serving the old code and the error is returned. Borrowed states of
+// the old generation are closed when released (see put).
 func (p *LuaPool) Reload() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Drain existing states.
-	n := len(p.pool)
-	for i := 0; i < n; i++ {
-		L := <-p.pool
-		L.Close()
-	}
-	// Refill.
+	fresh := make([]*lua.LState, 0, p.size)
 	for i := 0; i < p.size; i++ {
 		L, err := p.newState()
 		if err != nil {
+			for _, f := range fresh {
+				f.Close()
+			}
 			return fmt.Errorf("lua pool reload: %w", err)
 		}
+		fresh = append(fresh, L)
+	}
+
+	p.genMu.Lock()
+	p.gen++
+	for {
+		select {
+		case L := <-p.pool:
+			delete(p.gens, L)
+			L.Close()
+			continue
+		default:
+		}
+		break
+	}
+	for _, L := range fresh {
+		p.gens[L] = p.gen
 		p.pool <- L
 	}
+	p.genMu.Unlock()
 	return nil
 }
 
@@ -143,9 +207,13 @@ func (p *LuaPool) Reload() error {
 func (p *LuaPool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.genMu.Lock()
+	defer p.genMu.Unlock()
+	p.gen++ // borrowed states are closed when released
 	for {
 		select {
 		case L := <-p.pool:
+			delete(p.gens, L)
 			L.Close()
 		default:
 			return
@@ -166,8 +234,16 @@ func lockdownStdlib(L *lua.LState) {
 	}
 	L.SetGlobal("os", safeOS)
 
-	for _, g := range []string{"io", "debug", "dofile", "loadfile", "load", "loadstring"} {
+	// coroutine too: a coroutine created outside a call keeps no context, so
+	// a loop in it would outlive the call's timeout. No plugin uses it.
+	for _, g := range []string{"io", "debug", "dofile", "loadfile", "load", "loadstring", "coroutine"} {
 		L.SetGlobal(g, lua.LNil)
+	}
+	// string.rep is the one stdlib call that allocates without bound from a
+	// single line ("x"):rep(2^34); the string metatable indexes this same
+	// table, so the method form is capped too.
+	if str, ok := L.GetGlobal("string").(*lua.LTable); ok {
+		L.SetField(str, "rep", L.NewFunction(cappedStringRep))
 	}
 	if pkg, ok := L.GetGlobal("package").(*lua.LTable); ok {
 		L.SetField(pkg, "loadlib", lua.LNil)
@@ -187,6 +263,36 @@ func lockdownStdlib(L *lua.LState) {
 	}
 }
 
+// maxStringRepBytes caps the result of string.rep.
+const maxStringRepBytes = 32 << 20
+
+func cappedStringRep(L *lua.LState) int {
+	str := L.CheckString(1)
+	n := L.CheckInt(2)
+	sep := L.OptString(3, "")
+	if n <= 0 {
+		L.Push(lua.LString(""))
+		return 1
+	}
+	if int64(len(str)+len(sep))*int64(n) > maxStringRepBytes {
+		L.RaiseError("string.rep: result over %d bytes", maxStringRepBytes)
+	}
+	var b strings.Builder
+	b.Grow((len(str) + len(sep)) * n)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(str)
+	}
+	L.Push(lua.LString(b.String()))
+	return 1
+}
+
+// initScriptTimeout bounds init.lua's top level (and the eager module
+// loads): it only defines functions and tables.
+const initScriptTimeout = 30 * time.Second
+
 // newState creates, configures, and pre-loads a single LState.
 func (p *LuaPool) newState() (*lua.LState, error) {
 	L := lua.NewState()
@@ -197,8 +303,9 @@ func (p *LuaPool) newState() (*lua.LState, error) {
 	if p.setupFn != nil {
 		p.setupFn(L)
 	}
-	// preloadDir registers the .lua files in dir as require()-able modules.
-	preloadDir := func(dir string, skipInit bool) {
+	// preloadDir registers the .lua files in dir as require()-able modules
+	// and returns their names.
+	preloadDir := func(dir string, skipInit bool) (names []string) {
 		files, _ := filepath.Glob(filepath.Join(dir, "*.lua"))
 		for _, f := range files {
 			if skipInit && filepath.Base(f) == "init.lua" {
@@ -214,23 +321,44 @@ func (p *LuaPool) newState() (*lua.LState, error) {
 				L.Push(lua.LTrue)
 				return 1
 			})
+			names = append(names, modName)
 		}
+		return names
 	}
 	// Shared modules first; plugin modules with the same name override them.
 	for _, dir := range p.sharedDirs {
 		preloadDir(dir, false)
 	}
 	// Plugin-specific modules.
-	preloadDir(filepath.Dir(p.script), true)
+	modules := preloadDir(filepath.Dir(p.script), true)
 	src, err := os.ReadFile(p.script)
 	if err != nil {
 		L.Close()
 		return nil, fmt.Errorf("read script %s: %w", p.script, err)
 	}
+	// The top level runs outside any call: bounded by a deadline, and with
+	// the network closed (requireProxy without a proxy fails every request),
+	// so it can't hang the load or go out around the plugin's egress.
+	ctx, cancel := context.WithTimeout(context.Background(), initScriptTimeout)
+	defer cancel()
+	L.SetContext(ctx)
+	sc := scopeOf(L)
+	sc.set(ctx, "", true, "", nil)
 	if err := L.DoString(string(src)); err != nil {
 		L.Close()
 		return nil, fmt.Errorf("exec script %s: %w", p.script, err)
 	}
+	// Load the plugin's modules now, so the globals they define are part of
+	// the baseline below (loaded lazily inside a call they'd be wiped after
+	// it). Best effort: a module that fails here still loads on demand.
+	require := L.GetGlobal("require")
+	for _, name := range modules {
+		if err := L.CallByParam(lua.P{Fn: require, NRet: 0, Protect: true}, lua.LString(name)); err != nil {
+			log.Printf("[lua] %s: modulo %s non precaricato: %v", filepath.Base(filepath.Dir(p.script)), name, err)
+		}
+	}
+	sc.reset()
+	L.RemoveContext()
 	// Snapshot _G right after the top-level script: later calls wipe any global
 	// they add (callScope.resetNewGlobals), so nothing leaks to the next call on
 	// this state — possibly another profile's.

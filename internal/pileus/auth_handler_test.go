@@ -21,7 +21,8 @@ CREATE TABLE pileus_devices (
 	created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	label        TEXT NOT NULL DEFAULT '',
-	revoked_at   TIMESTAMP
+	revoked_at   TIMESTAMP,
+	token_gen    TEXT NOT NULL DEFAULT ''
 );`
 
 // setupAuthTestDB points managers.DB at a throwaway in-memory sqlite database
@@ -140,5 +141,55 @@ func TestAuthorizeDeviceActiveDeviceReauthorized(t *testing.T) {
 	}
 	if exists, revoked := deviceRevoked("device-active"); !exists || revoked {
 		t.Fatalf("active device unexpectedly revoked: exists=%v revoked=%v", exists, revoked)
+	}
+}
+
+// Re-pairing, revoking or deleting+re-pairing a device retires its older
+// tokens: each changes the token generation the JWT must carry.
+func TestDeviceTokenGeneration(t *testing.T) {
+	setupAuthTestDB(t)
+	h := testAuthHandler()
+	pair := func() string {
+		t.Helper()
+		code, _ := GeneratePairingCode()
+		resp, err := h.AuthorizeDevice(t.Context(), &gen.AuthorizeDeviceRequest{DeviceId: "dev-gen", PinHash: code})
+		if err != nil {
+			t.Fatalf("pairing: %v", err)
+		}
+		return resp.DeviceJwt
+	}
+	valid := func(tok string) bool {
+		t.Helper()
+		id, g, err := h.parseJWT(tok)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		forgetDeviceActive(id)
+		return deviceActive(id, g)
+	}
+
+	first := pair()
+	if !valid(first) {
+		t.Fatal("fresh token rejected")
+	}
+	second := pair()
+	if valid(first) || !valid(second) {
+		t.Fatal("re-pairing must retire the previous token only")
+	}
+	if err := DeleteDevice("dev-gen"); err != nil {
+		t.Fatal(err)
+	}
+	third := pair()
+	if valid(second) || !valid(third) {
+		t.Fatal("delete + re-pair must not revive the old token")
+	}
+	if err := RevokeDevice("dev-gen"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UnrevokeDevice("dev-gen"); err != nil {
+		t.Fatal(err)
+	}
+	if valid(third) {
+		t.Fatal("unrevoke revived a token issued before the revocation")
 	}
 }

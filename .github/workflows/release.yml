@@ -16,16 +16,23 @@ permissions:
 jobs:
   image:
     runs-on: ubuntu-latest
+    env:
+      # Through env, never interpolated into a script: the dispatch input is
+      # free text.
+      REF_NAME: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Version from tag
         id: v
         run: |
-          ref="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+          case "$REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "not a release tag: $REF_NAME" >&2; exit 1 ;;
+          esac
+          echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       # GHCR (like every Docker registry) requires an all-lowercase repository
       # path; github.repository preserves the account's actual casing
@@ -37,11 +44,11 @@ jobs:
         id: img
         run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3 # arm64 leg is emulated
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3 — arm64 leg is emulated
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -49,17 +56,19 @@ jobs:
 
       - name: Metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ steps.img.outputs.name }}
+          # latest only on a tag push: a manual rebuild of an older tag must not
+          # move it back (auto-updating installs would downgrade).
           tags: |
             type=raw,value=${{ steps.v.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
 
       # Pure Go + a plain debian:bookworm-slim runtime (CGO_ENABLED=0): the
       # arm64 leg is cheap even emulated under QEMU.
       - name: Build & push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -68,14 +77,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.v.outputs.version }}
-          provenance: false
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ env.REF_NAME }}
           generate_release_notes: true
           body: |
             Container image:

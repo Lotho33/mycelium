@@ -35,10 +35,12 @@ func resetUpstreamClients() {
 	upstreamMu.Unlock()
 
 	vpnMu.Lock()
-	vpnSession = nil
-	vpnSegment = nil
-	vpnAddr = ""
+	old := vpnPairs
+	vpnPairs = map[string]vpnPair{}
 	vpnMu.Unlock()
+	for _, p := range old {
+		p.close()
+	}
 }
 
 // getProxySession returns the process-wide client for playlists and keys,
@@ -82,38 +84,45 @@ func getSegmentClient() *http.Client {
 	return segmentClient
 }
 
-// VPN-routed variants of the proxy clients, rebuilt when the proxy address
-// changes.
+// VPN-routed variants of the proxy clients, one pair per egress proxy (two
+// egresses can serve streams at the same time; each pair keeps its
+// connections and cookies).
+type vpnPair struct{ session, segment *http.Client }
+
+func (p vpnPair) close() {
+	p.session.CloseIdleConnections()
+	p.segment.CloseIdleConnections()
+}
+
 var (
-	vpnSession *http.Client
-	vpnSegment *http.Client
-	vpnAddr    string
-	vpnMu      sync.Mutex
+	vpnPairs = map[string]vpnPair{}
+	vpnMu    sync.Mutex
 )
 
 // vpnClients returns the (playlist/key, segment) clients routed through proxyURL.
 func vpnClients(proxyURL string) (*http.Client, *http.Client) {
 	vpnMu.Lock()
 	defer vpnMu.Unlock()
-	if vpnSession == nil || vpnAddr != proxyURL {
-		jar1, _ := cookiejar.New(nil)
-		vpnSession = &http.Client{Timeout: 15 * time.Second, Jar: jar1, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
-			MaxIdleConns:        50,
-			MaxIdleConnsPerHost: 10,
-		})}
-
-		jar2, _ := cookiejar.New(nil)
-		// No total Timeout: see getSegmentClient.
-		vpnSegment = &http.Client{Jar: jar2, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   20,
-			IdleConnTimeout:       120 * time.Second,
-			ResponseHeaderTimeout: 15 * time.Second,
-		})}
-
-		vpnAddr = proxyURL
+	if p, ok := vpnPairs[proxyURL]; ok {
+		return p.session, p.segment
 	}
-	return vpnSession, vpnSegment
+	jar1, _ := cookiejar.New(nil)
+	session := &http.Client{Timeout: 15 * time.Second, Jar: jar1, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+	})}
+
+	jar2, _ := cookiejar.New(nil)
+	// No total Timeout: see getSegmentClient.
+	segment := &http.Client{Jar: jar2, Transport: newUpstreamProxyTransport(proxyURL, upstreamTransportOpts{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       120 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+	})}
+	// Proxy addresses come from the egress registry: a handful at most.
+	vpnPairs[proxyURL] = vpnPair{session, segment}
+	return session, segment
 }
 
 // egressProxyAddr maps the &egr=<name> of a proxied URL to its proxy

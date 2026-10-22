@@ -75,6 +75,16 @@ func (r *RedisRepo) Get(ctx context.Context, key string) (string, error) {
 	return val, err
 }
 
+// GetFound is Get that also reports whether key exists, so a stored empty
+// string can be told apart from a missing key.
+func (r *RedisRepo) GetFound(ctx context.Context, key string) (string, bool, error) {
+	val, err := r.client.Get(ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", false, nil
+	}
+	return val, err == nil, err
+}
+
 // Set stores a string value with an optional TTL (0 = no expiry).
 func (r *RedisRepo) Set(ctx context.Context, key, value string, ttl time.Duration) error {
 	return r.client.Set(ctx, key, value, ttl).Err()
@@ -85,21 +95,6 @@ func (r *RedisRepo) Del(ctx context.Context, keys ...string) error {
 	return r.client.Del(ctx, keys...).Err()
 }
 
-// Expire sets the TTL on an existing key.
-func (r *RedisRepo) Expire(ctx context.Context, key string, ttl time.Duration) error {
-	return r.client.Expire(ctx, key, ttl).Err()
-}
-
-// HGetAll returns all field-value pairs of a Hash key.
-// Returns an empty map (not nil) when the key does not exist.
-func (r *RedisRepo) HGetAll(ctx context.Context, key string) (map[string]string, error) {
-	result, err := r.client.HGetAll(ctx, key).Result()
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
 // HGet returns a single field from a Hash. Returns ("", nil) when field absent.
 func (r *RedisRepo) HGet(ctx context.Context, key, field string) (string, error) {
 	val, err := r.client.HGet(ctx, key, field).Result()
@@ -107,23 +102,6 @@ func (r *RedisRepo) HGet(ctx context.Context, key, field string) (string, error)
 		return "", nil
 	}
 	return val, err
-}
-
-// HSet sets one or more field-value pairs in a Hash.
-func (r *RedisRepo) HSet(ctx context.Context, key string, fields map[string]any) error {
-	if len(fields) == 0 {
-		return nil
-	}
-	args := make([]any, 0, len(fields)*2)
-	for k, v := range fields {
-		args = append(args, k, v)
-	}
-	return r.client.HSet(ctx, key, args...).Err()
-}
-
-// HDel removes one or more fields from a Hash key.
-func (r *RedisRepo) HDel(ctx context.Context, key string, fields ...string) error {
-	return r.client.HDel(ctx, key, fields...).Err()
 }
 
 // FlushDB removes every key of the current database (the stack runs a Redis
@@ -197,11 +175,6 @@ func CatalogCacheKey(pluginID, catalogID string, page int) string {
 // for page-1 of a catalog. Used by ListPlugins to suppress empty carousels.
 func CatalogCountKey(pluginID, catalogID string) string {
 	return "mycelium:plugin:" + pluginID + ":catalog_count:" + catalogID
-}
-
-// DeviceSessionKey returns the Redis string key for a device session.
-func DeviceSessionKey(deviceID string) string {
-	return "mycelium:device:" + deviceID + ":session"
 }
 
 func itoa(n int) string {

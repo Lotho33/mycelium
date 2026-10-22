@@ -25,9 +25,9 @@ already-compromised host or admin credentials.
 - Admin session cookies are `HttpOnly`, `SameSite=Strict`, short-lived.
 - The settings write API enforces a key allowlist.
 - Plugin ZIP upload has path-traversal and extracted-size limits.
-- Hub API tokens are HMAC-SHA256 with a short validity window; login is
-  rate-limited. Unauthenticated gRPC first-contact (device pairing) is
-  rate-limited per source IP.
+- Login is rate-limited. Unauthenticated gRPC first-contact (device pairing)
+  is rate-limited per source IP; device tokens carry a generation that
+  re-pairing or revoking a device invalidates.
 - Each plugin runs in its own Lua VM, so a plugin fault never takes down the
   core. This is **fault isolation, not a privilege sandbox**: mycelium is
   single-tenant and the operator is trusted to vet the plugins they install.

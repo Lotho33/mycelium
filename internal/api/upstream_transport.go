@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	nethttp "net/http"
 	"os"
 	"strings"
@@ -132,14 +133,25 @@ func newUpstreamProxyTransport(proxyURL string, opts upstreamTransportOpts) neth
 
 // relayFetchClient talks to the browser service's /v1/fetch — a plain
 // internal call. No client Timeout: the wrapping proxy http.Client bounds the
-// whole round-trip.
+// whole round-trip. In Docker the service is a container name, which only
+// the container engine's DNS knows (the process-wide resolver asks public
+// servers), as in managers.ConnectBrowserClient.
 var relayFetchClient = &nethttp.Client{
 	Transport: &nethttp.Transport{
+		DialContext:         relayDialer().DialContext,
 		MaxIdleConns:        50,
 		MaxIdleConnsPerHost: 20,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   true,
 	},
+}
+
+func relayDialer() *net.Dialer {
+	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	if os.Getenv("MYCELIUM_DOCKER") == "1" {
+		d.Resolver = &net.Resolver{PreferGo: true}
+	}
+	return d
 }
 
 // relayRoundTripper turns an outbound upstream GET into a POST to the browser

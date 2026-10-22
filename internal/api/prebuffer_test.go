@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"mycelium/internal/core"
 	"mycelium/internal/managers"
 )
 
@@ -220,8 +221,10 @@ func TestProxySegmentServesWarmCacheWithoutUpstream(t *testing.T) {
 
 	hitsAfterPrefetch := atomic.LoadInt64(&f.segHits)
 
+	core.SetProxySignKey([]byte("warm-cache-test"))
+	t.Cleanup(func() { core.SetProxySignKey(nil) })
 	seg := f.url("/hi/seg0.ts")
-	req := httptest.NewRequest(http.MethodGet, "/proxy/segment.ts?data="+prebufB64(seg), nil)
+	req := httptest.NewRequest(http.MethodGet, core.AppendProxySig("/proxy/segment.ts?data="+prebufB64(seg)), nil)
 	rec := httptest.NewRecorder()
 	ProxySegment(rec, req)
 

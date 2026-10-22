@@ -484,3 +484,22 @@ func TestUpdatePileusWebApp_ChecksumMismatchAborts(t *testing.T) {
 		t.Fatal("tampered build was installed")
 	}
 }
+
+// A build wrapped in one folder is installed from that folder, so index.html
+// ends up at the served root.
+func TestWebRoot(t *testing.T) {
+	flat := t.TempDir()
+	os.WriteFile(filepath.Join(flat, "index.html"), []byte("x"), 0o644) //nolint:errcheck
+	if r, ok := webRoot(flat); !ok || r != flat {
+		t.Fatalf("flat build: %q %v", r, ok)
+	}
+	nested := t.TempDir()
+	os.MkdirAll(filepath.Join(nested, "web"), 0o755)                             //nolint:errcheck
+	os.WriteFile(filepath.Join(nested, "web", "index.html"), []byte("x"), 0o644) //nolint:errcheck
+	if r, ok := webRoot(nested); !ok || r != filepath.Join(nested, "web") {
+		t.Fatalf("nested build: %q %v", r, ok)
+	}
+	if _, ok := webRoot(t.TempDir()); ok {
+		t.Fatal("empty archive accepted")
+	}
+}

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -217,13 +216,13 @@ func (zeroReader) Read(p []byte) (int, error) {
 
 // mycelium.network.get must never read more than maxSDKResponseBytes of a
 // response body into memory, however much the server offers.
+// A response over the cap is an error, not a silently cut body the plugin
+// would parse as if it were whole.
 func TestSDKNetworkGet_CapsResponseBodySize(t *testing.T) {
 	const serveSize = int64(maxSDKResponseBytes) + (8 << 20) // deliberately over the cap
 
-	var serverSentBytes int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n, _ := io.Copy(w, io.LimitReader(zeroReader{}, serveSize))
-		atomic.StoreInt64(&serverSentBytes, n)
+		io.Copy(w, io.LimitReader(zeroReader{}, serveSize)) //nolint:errcheck
 	}))
 	t.Cleanup(srv.Close)
 
@@ -250,15 +249,8 @@ func TestSDKNetworkGet_CapsResponseBodySize(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("unmarshal %s: %v", raw, err)
 	}
-	if out.Status != 200 {
-		t.Fatalf("status=%d err=%q", out.Status, out.Err)
-	}
-	if out.Len != maxSDKResponseBytes {
-		t.Fatalf("network.get read %d bytes, want exactly the %d-byte cap (server offered %d)",
-			out.Len, maxSDKResponseBytes, serveSize)
-	}
-	if got := atomic.LoadInt64(&serverSentBytes); got >= serveSize {
-		t.Fatalf("server finished sending all %d bytes uninterrupted — response reading was never capped client-side", got)
+	if out.Status != 200 || !strings.Contains(out.Err, "too large") || out.Len != 0 {
+		t.Fatalf("status=%d err=%q len=%d, want 200, a too-large error and no body", out.Status, out.Err, out.Len)
 	}
 }
 
@@ -591,5 +583,51 @@ func TestSDKStorageWriteJSON_OnlyJSONFiles(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
 	if err != nil || string(got) != manifest {
 		t.Fatalf("manifest.yaml was modified: %q (err %v)", got, err)
+	}
+}
+
+// NaN/Inf have no JSON form: they become null instead of an invalid result.
+func TestCallEntrypointJSON_NaNBecomesNull(t *testing.T) {
+	dir := writeTestPlugin(t,
+		"id: t.nan\nname: T\ndirect_egress: true\npool_size: 1\nentrypoints:\n  probe: probe\n",
+		`function probe() return { a = 0/0, b = 1/0, c = 1.5 } end`)
+	m := newTestManager(t)
+	if err := m.loadPlugin(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := m.CallEntrypointJSON("t.nan", "probe", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("invalid JSON: %s", raw)
+	}
+}
+
+// storage.* can't reach outside the plugin directory through a symlink.
+func TestSDKStorage_RefusesSymlinkOut(t *testing.T) {
+	dir := writeTestPlugin(t,
+		"id: t.symlink\nname: T\ndirect_egress: true\npool_size: 1\nentrypoints:\n  probe: probe\n",
+		`function probe()
+		   local v, err = mycelium.storage.read_json("link.json")
+		   return { got = v ~= nil, err = err or "" }
+		 end`)
+	outside := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(outside, []byte(`{"k":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link.json")); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestManager(t)
+	if err := m.loadPlugin(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := m.CallEntrypointJSON("t.symlink", "probe", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"got":false`) {
+		t.Fatalf("read through a symlink out of the plugin dir: %s", raw)
 	}
 }

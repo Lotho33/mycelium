@@ -8,7 +8,7 @@ it as other contracts need pinning down.
 
 ## ResolveStream — progress contract
 
-`MediaService.ResolveStream` (`third_party/stipes-sdk/proto/media.proto`, served by
+`MediaPipeline.ResolveStream` (`third_party/stipes-sdk/proto/media.proto`, served by
 `internal/pileus/media_handler.go`) is server-streaming:
 
 ```
@@ -250,10 +250,7 @@ Regen commands (run in the devcontainer — `protoc v3.21.12`,
 
 ```
 # mycelium-core
-protoc -I third_party/stipes-sdk/proto \
-  --go_out=third_party/stipes-sdk/sdk --go_opt=paths=source_relative \
-  --go-grpc_out=third_party/stipes-sdk/sdk --go-grpc_opt=paths=source_relative \
-  third_party/stipes-sdk/proto/media.proto
+scripts/regen-proto.sh
 
 # pileus-player
 protoc -I proto --dart_out=grpc:lib/core/grpc/generated proto/media.proto

@@ -1,7 +1,7 @@
 // Admin endpoints for Lua plugins: lua_admin.go (route table),
 // lua_admin_tasks.go (manual task runs, start/stop/restart),
 // lua_admin_settings.go (settings), lua_admin_upload.go (ZIP
-// install/uninstall), lua_admin_logs.go (logs, SSE, stats),
+// install/uninstall), lua_admin_logs.go (logs, SSE),
 // lua_admin_files.go (file editor), lua_admin_memory.go (memory profile),
 // lua_admin_helpers.go (helpers).
 package api
@@ -11,8 +11,6 @@ import "net/http"
 // RegisterLuaAdminRoutes registers admin endpoints for Lua plugin management.
 func RegisterLuaAdminRoutes(mux *http.ServeMux) {
 	auth := adminAuthMiddleware
-	mux.HandleFunc("GET /admin/lua-plugins", auth(listLuaPlugins))
-	mux.HandleFunc("GET /admin/lua-plugins/settings/{plugin_id}", auth(getLuaPluginSettings))
 	mux.HandleFunc("POST /admin/lua-plugins/settings/{plugin_id}", auth(saveLuaPluginSettings))
 	mux.HandleFunc("POST /admin/lua-plugins/run-task/{plugin_id}/{task}", auth(runLuaTask))
 	mux.HandleFunc("POST /admin/lua-plugins/state/{plugin_id}", auth(setLuaPluginState))
@@ -24,7 +22,6 @@ func RegisterLuaAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/lua-plugins/wipe-data/{plugin_id}", rateLimitMiddleware(wipeLimiter, auth(wipePluginDataFor)))
 	mux.HandleFunc("GET /admin/lua-plugins/logs", auth(getLuaPluginLogs))
 	mux.HandleFunc("GET /admin/lua-plugins/logs/stream", auth(getLuaPluginLogsSSE))
-	mux.HandleFunc("GET /admin/lua-plugins/stats", auth(getLuaPluginStats))
 	mux.HandleFunc("GET /admin/lua-plugins/memory", auth(getLuaPluginMemory))
 	mux.HandleFunc("GET /admin/lua-plugins/files/{plugin_id}", auth(listLuaPluginFiles))
 	mux.HandleFunc("GET /admin/lua-plugins/file/{plugin_id}", auth(getLuaPluginFile))

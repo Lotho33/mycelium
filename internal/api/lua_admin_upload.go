@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"mycelium/internal/core"
 	"mycelium/internal/engine"
@@ -86,7 +89,11 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	// doesn't stop many small files). Extraction is shared with the web-app
 	// updater (zip_extract.go).
 	const maxTotalExtractedSize = 200 << 20 // 200 MiB
-	aborted, _ := extractZipSafe(&zr.Reader, stagingDir, 10<<20, maxTotalExtractedSize, "[lua/upload]")
+	aborted, _, xerr := extractZipSafe(&zr.Reader, stagingDir, 10<<20, maxTotalExtractedSize, "[lua/upload]")
+	if xerr != nil {
+		http.Error(w, "archivio non valido: "+xerr.Error(), http.StatusBadRequest)
+		return
+	}
 	if aborted {
 		http.Error(w, "archivio troppo grande una volta estratto", http.StatusBadRequest)
 		return
@@ -113,7 +120,19 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id plugin riservato: shared", http.StatusBadRequest)
 		return
 	}
+	// One install at a time: two uploads of the same id would race on the
+	// directory.
+	pluginUploadMu.Lock()
+	defer pluginUploadMu.Unlock()
+
 	isUpdate := engine.LuaPlugins.Has(pluginName)
+	if isUpdate {
+		// Update the directory the plugin actually loads from, which may not be
+		// plugins/<id> (a second copy would clash on the next boot).
+		if dir, err := findLuaPluginDir(pluginName); err == nil {
+			destDir = dir
+		}
+	}
 	// An existing directory that isn't this plugin is not ours to merge into.
 	if !isUpdate {
 		if _, err := os.Stat(destDir); err == nil {
@@ -124,11 +143,35 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 			isUpdate = true // installed but not loaded
 		}
 	}
+
+	// The current version is kept until the new one loads: on failure it is
+	// put back and reloaded.
+	var backupDir string
 	if isUpdate {
+		backupDir = filepath.Join(pluginsRoot, fmt.Sprintf(".backup-%s-%d", pluginName, time.Now().UnixNano()))
+		if err := os.CopyFS(backupDir, os.DirFS(destDir)); err != nil {
+			os.RemoveAll(backupDir)
+			http.Error(w, "errore backup della versione installata", http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(backupDir) // no-op once restored
 		// Hot-swap: unload the old pool before its directory changes. Files are
 		// merged, never wiped: runtime data (*_cache.json, *_index.json) survives
 		// unless the ZIP itself contains such files.
 		engine.LuaPlugins.UnloadPlugin(pluginName)
+	}
+	restore := func() {
+		if backupDir == "" {
+			os.RemoveAll(destDir)
+			return
+		}
+		if err := os.RemoveAll(destDir); err == nil && os.Rename(backupDir, destDir) == nil {
+			if lerr := engine.LuaPlugins.LoadPlugin(destDir); lerr != nil {
+				log.Printf("[lua/upload] %s: ripristino della versione precedente non caricato: %v", pluginName, lerr)
+			} else {
+				log.Printf("[lua/upload] %s: aggiornamento fallito, ripristinata la versione precedente", pluginName)
+			}
+		}
 	}
 
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -139,17 +182,24 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		// Code comes only from the new ZIP: drop the old .lua modules first so a
 		// removed one doesn't stay require-able.
 		if err := removeLuaFiles(destDir); err != nil {
+			restore()
 			http.Error(w, "errore rimozione moduli precedenti: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 	if err := mergeDirInto(stagingDir, destDir); err != nil {
+		restore()
 		http.Error(w, "errore installazione file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if err := engine.LuaPlugins.LoadPlugin(destDir); err != nil {
-		http.Error(w, "plugin estratto ma caricamento fallito: "+err.Error(), http.StatusInternalServerError)
+		restore()
+		msg := "plugin estratto ma caricamento fallito: " + err.Error()
+		if isUpdate {
+			msg += " (ripristinata la versione precedente)"
+		}
+		http.Error(w, msg, http.StatusInternalServerError)
 		return
 	}
 
@@ -166,6 +216,8 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		"update":  boolToString(isUpdate),
 	})
 }
+
+var pluginUploadMu sync.Mutex
 
 func boolToString(b bool) string {
 	if b {

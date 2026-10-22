@@ -4,12 +4,14 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"mycelium/internal/core"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"mycelium/internal/core"
 )
 
 var dbFile = core.AppPath("data", "mycelium.db")
@@ -44,12 +46,15 @@ func InitDB() error {
 	if err != nil {
 		return err
 	}
+	// Plugin logins and client secrets are stored in clear: databases created
+	// before the server's umask (cmd/server) still need tightening.
+	for _, f := range []string{dbFile, dbFile + "-wal", dbFile + "-shm"} {
+		if err := os.Chmod(f, 0o600); err != nil && !os.IsNotExist(err) {
+			log.Printf("[db] chmod %s: %v", filepath.Base(f), err)
+		}
+	}
 
 	schema := `
-	CREATE TABLE IF NOT EXISTS settings (
-		key TEXT PRIMARY KEY,
-		value TEXT
-	);
 	CREATE TABLE IF NOT EXISTS watch_history (
 		client_id TEXT,
 		provider_id TEXT,
@@ -61,10 +66,6 @@ func InitDB() error {
 		is_completed BOOLEAN,
 		last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (client_id, provider_id, playable_id)
-	);
-	CREATE TABLE IF NOT EXISTS clients (
-		client_id TEXT PRIMARY KEY,
-		secret_key TEXT NOT NULL
 	);
 	CREATE TABLE IF NOT EXISTS pileus_devices (
 		device_id   TEXT PRIMARY KEY,
@@ -103,6 +104,9 @@ func InitDB() error {
 	// revoked_at: NULL = active. Set, it invalidates every JWT of the device;
 	// the auth interceptor rejects a missing or revoked device.
 	runMigration(db, `ALTER TABLE pileus_devices ADD COLUMN revoked_at TIMESTAMP`)
+	// token_gen: random, renewed on every pairing and revocation, carried in
+	// the device JWT ("gen"); a token of an older generation is rejected.
+	runMigration(db, `ALTER TABLE pileus_devices ADD COLUMN token_gen TEXT NOT NULL DEFAULT ''`)
 	// rating/genres/plot/year: continue-watching card metadata; genres is
 	// comma-joined.
 	runMigration(db, `ALTER TABLE watch_history ADD COLUMN rating REAL NOT NULL DEFAULT 0`)
@@ -150,85 +154,6 @@ func runMigration(db *sql.DB, query string) {
 	if _, err := db.Exec(query); err != nil && !isDuplicateColumnError(err) {
 		log.Printf("⚠️ migrazione DB fallita (%q): %v", query, err)
 	}
-}
-
-// AddClient stores a new hub client.
-func (m *DBManager) AddClient(clientID, secretKey string) error {
-	query := "INSERT INTO clients (client_id, secret_key) VALUES (?, ?)"
-	_, err := m.db.Exec(query, clientID, secretKey)
-	return err
-}
-
-// GetClients lists the hub clients for the dashboard.
-func (m *DBManager) GetClients() ([]map[string]string, error) {
-	rows, err := m.db.Query("SELECT client_id FROM clients")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []map[string]string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			results = append(results, map[string]string{"client_id": id})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-// GetAllClientSecrets returns every clientID → secretKey pair.
-func (m *DBManager) GetAllClientSecrets() (map[string]string, error) {
-	rows, err := m.db.Query("SELECT client_id, secret_key FROM clients")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var id, secret string
-		if err := rows.Scan(&id, &secret); err == nil {
-			out[id] = secret
-		}
-	}
-	return out, rows.Err()
-}
-
-// GetClientSecret returns the client's HMAC secret.
-func (m *DBManager) GetClientSecret(clientID string) (string, error) {
-	var secret string
-	err := m.db.QueryRow("SELECT secret_key FROM clients WHERE client_id = ?", clientID).Scan(&secret)
-	return secret, err
-}
-
-// RemoveClient deletes a hub client.
-func (m *DBManager) RemoveClient(clientID string) error {
-	_, err := m.db.Exec("DELETE FROM clients WHERE client_id = ?", clientID)
-	return err
-}
-
-// GetSetting reads a setting.
-func (m *DBManager) GetSetting(key string) (string, error) {
-	var value string
-	err := m.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
-	if err == sql.ErrNoRows {
-		return "", nil // no row: not an error
-	}
-	return value, err
-}
-
-// SetSetting upserts a setting.
-func (m *DBManager) SetSetting(key, value string) error {
-	query := `
-		INSERT INTO settings (key, value) 
-		VALUES (?, ?) 
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value
-	`
-	_, err := m.db.Exec(query, key, value)
-	return err
 }
 
 // UpsertProgress records a watch-history entry. With a parentID, the
@@ -305,54 +230,6 @@ type WatchHistoryEntry struct {
 	Year              int32    `json:"year,omitempty"`
 	SeasonNumber      int32    `json:"season_number,omitempty"`
 	EpisodeNumber     int32    `json:"episode_number,omitempty"`
-}
-
-// WatchHistoryLogoTarget selects the rows NeedsLogo/UpdateWatchHistoryLogo
-// act on: every row of this client+provider with parentID (playableID when
-// there is no parent).
-type WatchHistoryLogoTarget struct {
-	ClientID   string
-	ProviderID string
-	ParentID   string
-	PlayableID string
-}
-
-// NeedsLogo reports whether the title's rows still lack a logo_url, so a
-// title triggers one fetch, not one per heartbeat.
-func (m *DBManager) NeedsLogo(t WatchHistoryLogoTarget) (bool, error) {
-	var logo string
-	var err error
-	if t.ParentID != "" {
-		err = m.db.QueryRow(
-			`SELECT logo_url FROM watch_history WHERE client_id=? AND provider_id=? AND parent_id=? LIMIT 1`,
-			t.ClientID, t.ProviderID, t.ParentID,
-		).Scan(&logo)
-	} else {
-		err = m.db.QueryRow(
-			`SELECT logo_url FROM watch_history WHERE client_id=? AND provider_id=? AND playable_id=? LIMIT 1`,
-			t.ClientID, t.ProviderID, t.PlayableID,
-		).Scan(&logo)
-	}
-	if err != nil {
-		return false, err
-	}
-	return logo == "", nil
-}
-
-// UpdateWatchHistoryLogo sets logo_url on the matching rows that lack one.
-func (m *DBManager) UpdateWatchHistoryLogo(t WatchHistoryLogoTarget, logoURL string) error {
-	if t.ParentID != "" {
-		_, err := m.db.Exec(
-			`UPDATE watch_history SET logo_url=? WHERE client_id=? AND provider_id=? AND parent_id=? AND logo_url=''`,
-			logoURL, t.ClientID, t.ProviderID, t.ParentID,
-		)
-		return err
-	}
-	_, err := m.db.Exec(
-		`UPDATE watch_history SET logo_url=? WHERE client_id=? AND provider_id=? AND playable_id=? AND logo_url=''`,
-		logoURL, t.ClientID, t.ProviderID, t.PlayableID,
-	)
-	return err
 }
 
 // UpdateProgressPosition refines an existing row's position from

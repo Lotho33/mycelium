@@ -134,3 +134,43 @@ func TestPlaybackLease_TakeOverAndRelease(t *testing.T) {
 		t.Fatalf("takeover of a free profile reported %q", prev)
 	}
 }
+
+// A revoked device's playback sessions stop being "unknown" (let through):
+// their uids are refused until the URLs expire.
+func TestSessions_RevokeDeviceRefusesItsUIDs(t *testing.T) {
+	Sessions.Register("tok-rev", &StreamSession{ProfileID: "p", DeviceID: "dev-x"})
+	Sessions.Register("tok-other", &StreamSession{ProfileID: "q", DeviceID: "dev-y"})
+	PlaybackLeases.ReleaseDevice("dev-x")
+	if _, ok := Sessions.Get("tok-rev"); ok {
+		t.Fatal("revoked device's session still registered")
+	}
+	if !Sessions.Revoked("tok-rev") {
+		t.Fatal("revoked device's uid not marked revoked")
+	}
+	if Sessions.Revoked("tok-other") {
+		t.Fatal("another device's uid marked revoked")
+	}
+	if _, ok := Sessions.Get("tok-other"); !ok {
+		t.Fatal("another device's session dropped")
+	}
+}
+
+// An idle session survives the GC while its lease is renewed (paused player
+// sending heartbeats only).
+func TestSessions_GCKeepsLeasedSessions(t *testing.T) {
+	s := &StreamSession{ProfileID: "p-gc", DeviceID: "dev-gc"}
+	Sessions.Register("tok-gc", s)
+	s.mu.Lock()
+	s.lastSeen = time.Now().Add(-time.Hour)
+	s.mu.Unlock()
+	PlaybackLeases.Claim("p-gc", "dev-gc")
+	Sessions.cleanupStale(20 * time.Minute)
+	if _, ok := Sessions.Get("tok-gc"); !ok {
+		t.Fatal("leased session collected")
+	}
+	PlaybackLeases.Release("p-gc")
+	Sessions.cleanupStale(20 * time.Minute)
+	if _, ok := Sessions.Get("tok-gc"); ok {
+		t.Fatal("idle session without lease kept")
+	}
+}

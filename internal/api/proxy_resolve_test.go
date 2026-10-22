@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/url"
+	"path"
 	"strings"
 	"testing"
 
@@ -34,7 +35,7 @@ func TestBuildResolvedPlaylistURL_IsSigned(t *testing.T) {
 	if u.Query().Get("sig") == "" {
 		t.Fatal("returned URL has no sig param — the bug this test guards against")
 	}
-	if !core.VerifyProxyURL(u.Query()) {
+	if !core.VerifyProxyURL(path.Base(u.Path), u.Query()) {
 		t.Fatal("returned URL's signature does not verify")
 	}
 	if !strings.Contains(got, "/proxy/playlist.m3u8?") {
@@ -55,7 +56,7 @@ func TestBuildResolvedPlaylistURL_UnsignedWithoutKey(t *testing.T) {
 	}
 	// No key configured: AppendProxySig still appends a sig (HMAC of an empty
 	// key), but VerifyProxyURL must fail closed regardless.
-	if core.VerifyProxyURL(u.Query()) {
+	if core.VerifyProxyURL(path.Base(u.Path), u.Query()) {
 		t.Fatal("verified with no signing key ever configured")
 	}
 }

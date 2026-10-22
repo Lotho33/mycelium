@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,18 +37,29 @@ var segmentRetryBudget = 45 * time.Second
 // playlistReadLimit caps an upstream HLS playlist body.
 const playlistReadLimit = 8 << 20 // 8 MiB
 
+// proxiableURI reports whether a playlist URI is fetched through the proxy:
+// http(s) and relative references. data:, skd:// (FairPlay) and the like
+// stay as they are.
+func proxiableURI(u string) bool {
+	if i := strings.IndexByte(u, ':'); i > 0 && !strings.ContainsAny(u[:i], "/?#") {
+		scheme := strings.ToLower(u[:i])
+		return scheme == "http" || scheme == "https"
+	}
+	return true
+}
+
 // requireProxySig rejects a /proxy/* request without a valid HMAC and
-// reports whether the caller should stop. No-op with
-// MYCELIUM_PROXY_ALLOW_UNSIGNED=1 or without a signing key.
+// reports whether the caller should stop. No-op only with
+// MYCELIUM_PROXY_ALLOW_UNSIGNED=1; without a signing key it fails closed.
 func requireProxySig(w http.ResponseWriter, r *http.Request) bool {
-	if proxyAllowUnsigned || !core.ProxySignEnabled() {
+	if proxyAllowUnsigned {
 		return false
 	}
-	if core.VerifyProxyURL(r.URL.Query()) {
+	if core.VerifyProxyURL(path.Base(r.URL.Path), r.URL.Query()) {
 		return false
 	}
-	log.Printf("[proxy] rejected unsigned/tampered request from %s %s", realIP(r), logURL(r.URL.String()))
-	http.Error(w, "bad or missing signature", http.StatusForbidden)
+	log.Printf("[proxy] rejected unsigned/tampered/expired request from %s %s", realIP(r), logURL(r.URL.String()))
+	http.Error(w, "bad, expired or missing signature", http.StatusForbidden)
 	return true
 }
 
@@ -72,7 +84,7 @@ func logURL(raw string) string {
 	return s
 }
 
-var reKeyURI = regexp.MustCompile(`URI=["']([^"']+)["']`)
+var reKeyURI = regexp.MustCompile(`(?:^|[:,])URI=["']([^"']+)["']`)
 
 // uriTagTarget says which proxy endpoint the URI= of an HLS tag goes
 // through: "key" for small raw resources (keys, session keys/data),
@@ -216,11 +228,8 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if fetchErr == nil && content != nil {
-		segs := strings.Count(string(content), "#EXTINF")
-		if proxyDebug {
-			log.Printf("[proxy/playlist] fetched %d bytes, %d segments:\n%s", len(content), segs, string(content))
-		}
+	if proxyDebug && fetchErr == nil && content != nil {
+		log.Printf("[proxy/playlist] fetched %d bytes, %d segments:\n%s", len(content), bytes.Count(content, []byte("#EXTINF")), content)
 	}
 
 	if fetchErr != nil && sidRaw != "" && childIdx != "" && r.Context().Err() == nil {
@@ -323,8 +332,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 				lastExtInf, _ = strconv.ParseFloat(rest, 64)
 			}
 			if strings.Contains(line, "URI=") {
-				if m := reKeyURI.FindStringSubmatch(line); len(m) == 2 {
-					absURI := proxyURLJoin(playlistBase, m[1])
+				// m[2]:m[3] is the URI value itself: replace that span, not the first
+				// equal substring of the line (it may sit in another attribute).
+				if m := reKeyURI.FindStringSubmatchIndex(line); len(m) == 4 && proxiableURI(line[m[2]:m[3]]) {
+					absURI := proxyURLJoin(playlistBase, line[m[2]:m[3]])
 					encURI := b64enc(absURI)
 					var replacement string
 					switch uriTagTarget(line) {
@@ -343,7 +354,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 						}
 						replacement = fmt.Sprintf("%s/playlist.m3u8?data=%s&origin=%s&cookies=%s%s%s%s%s%s", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix, childSuffix(), rtSuffix)
 					}
-					line = strings.Replace(line, m[1], core.AppendProxySig(replacement), 1)
+					line = line[:m[2]] + core.AppendProxySig(replacement) + line[m[3]:]
 				}
 			}
 			rewritten = append(rewritten, line)
@@ -356,6 +367,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			segDur := lastExtInf
 			lastExtInf = 0
 
+			if !proxiableURI(line) {
+				rewritten = append(rewritten, line) // data:, skd://… are not fetched
+				continue
+			}
 			absURI := proxyURLJoin(playlistBase, line)
 			encURI := b64enc(absURI)
 			endpoint := "segment.ts"
@@ -489,10 +504,10 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		if proxyDebug || how != "warm-cache" {
 			log.Printf("[proxy/segment] %s hit (%d bytes) after %s url=%s", how, len(body), time.Since(start).Round(time.Millisecond), logURL(realURL))
 		}
+		// Only a delivered segment counts toward the position estimate.
 		if _, err := w.Write(body); err != nil && r.Context().Err() != nil {
 			log.Printf("[proxy/segment] client disconnected on %s hit after %s url=%s", how, time.Since(start).Round(time.Millisecond), logURL(realURL))
-		}
-		if sess != nil {
+		} else if sess != nil {
 			sess.RecordFetch()
 		}
 	}
@@ -590,7 +605,9 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		// A fresh request per attempt (net/http doesn't allow reusing one).
 		req, err := buildProxyRequest(http.MethodGet, realURL, realOrigin, q.Get("cookies"), q.Get("xhdr"))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			// The error carries the upstream URL, token included: log it trimmed.
+			log.Printf("[proxy/segment] bad upstream request url=%s", logURL(realURL))
+			http.Error(w, "bad upstream url", http.StatusBadGateway)
 			return
 		}
 		if stalled {
@@ -745,10 +762,16 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 			fullBody = buf
 			gateRelease()
 		} else {
+			// Too big to buffer and not streamable: copied through as it comes.
+			// Like a streamed body, it is bounded by an idle watchdog instead of
+			// the retry budget, and it doesn't hold the CDN slot meanwhile.
+			stopBudget()
+			gateRelease()
+			idle := time.AfterFunc(segmentBodyIdle, attemptCancel)
 			resp.Body = struct {
 				io.Reader
 				io.Closer
-			}{io.MultiReader(bytes.NewReader(buf), resp.Body), resp.Body}
+			}{io.MultiReader(bytes.NewReader(buf), idleResetReader{resp.Body, idle}), resp.Body}
 		}
 		break
 	}
@@ -812,8 +835,7 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 				managers.Segments.Put(realURL, v.body)
 			}
 			log.Printf("[proxy/segment] player closed the request after %s (seek, quality switch or retry) url=%s", time.Since(start).Round(time.Millisecond), logURL(realURL))
-		}
-		if sess != nil {
+		} else if sess != nil {
 			sess.RecordFetch()
 		}
 		return
@@ -936,6 +958,7 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("[proxy/segment] stream error: %v", err)
 		}
+		return
 	}
 
 	// Update the session's position estimate.
@@ -998,7 +1021,8 @@ func ProxyKey(w http.ResponseWriter, r *http.Request) {
 
 	req, err := buildProxyRequest(http.MethodGet, realURL, realOrigin, q.Get("cookies"), q.Get("xhdr"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		log.Printf("[proxy/key] bad upstream request url=%s", logURL(realURL))
+		http.Error(w, "bad upstream url", http.StatusBadGateway)
 		return
 	}
 	// Cancelled when the player disconnects.
@@ -1040,4 +1064,17 @@ func ProxyKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(data)
+}
+
+// idleResetReader re-arms t on every read, so t fires only when the body
+// stalls for its whole duration.
+type idleResetReader struct {
+	r io.Reader
+	t *time.Timer
+}
+
+func (ir idleResetReader) Read(b []byte) (int, error) {
+	n, err := ir.r.Read(b)
+	ir.t.Reset(segmentBodyIdle)
+	return n, err
 }

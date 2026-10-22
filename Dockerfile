@@ -1,4 +1,5 @@
-FROM golang:1.26 AS builder
+# Pinned by digest: bump tag and digest together (govulncheck runs in CI).
+FROM golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS builder
 WORKDIR /build
 
 # Download Go modules (layer cache). The SDK is vendored at

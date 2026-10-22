@@ -77,15 +77,11 @@ func extractTarGzSafe(tarGzPath, destDir string, maxPerFile, maxTotal int64, log
 				log.Printf("%s archivio oltre il limite totale (%d MiB), estrazione interrotta", logPrefix, maxTotal>>20)
 				return true, totalExtracted, nil
 			}
-			os.MkdirAll(filepath.Dir(fpath), 0755)
-			// Fixed mode, never the archive's own.
-			out, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-			if err != nil {
-				continue
-			}
-			n, _ := io.Copy(out, io.LimitReader(tr, maxPerFile))
+			n, err := writeExtracted(fpath, tr, maxPerFile)
 			totalExtracted += n
-			out.Close()
+			if err != nil {
+				return false, totalExtracted, fmt.Errorf("%s: %w", hdr.Name, err)
+			}
 		default:
 			// Other entry types (fifo, device, …): skip.
 		}

@@ -20,7 +20,7 @@ func wipeRoute(handler http.HandlerFunc) http.HandlerFunc {
 // wipeLimiter's buckets are real-time token buckets keyed by IP — without
 // this, two tests (or two `-count=N` runs of the same test) that reuse the
 // same fixed test IP would share leftover budget from a previous run and
-// see a 429 where the test expects 401/200, flaking under `-count=2` or a
+// see a 429 where the test expects 422/200, flaking under `-count=2` or a
 // full `go test ./...` where these tests aren't the only ones touching this
 // package's globals.
 func freshWipeLimiter(t *testing.T) {
@@ -61,11 +61,11 @@ func TestWipeProfiles_RateLimitedBeforePasswordCheck(t *testing.T) {
 	const remoteAddr = "203.0.113.10:5555"
 
 	// wipeLimiter: burst 5 — five wrong-password attempts should each be
-	// rejected on their own merit (401, wrong password), still within budget.
+	// rejected on their own merit (422, wrong password), still within budget.
 	for i := 0; i < 5; i++ {
 		rec := callWipeProfiles(t, tok, "wrong-password", remoteAddr)
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("attempt %d: status = %d, body=%s; want 401 (wrong password, still under the rate limit)", i+1, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("attempt %d: status = %d, body=%s; want 422 (wrong password, still under the rate limit)", i+1, rec.Code, rec.Body.String())
 		}
 	}
 
@@ -97,9 +97,9 @@ func TestWipeProfiles_RateLimitIsPerIP(t *testing.T) {
 		t.Fatalf("status = %d; want 429 once .20's budget is exhausted", rec.Code)
 	}
 
-	// A fresh IP must still get the real (401, wrong password) response.
+	// A fresh IP must still get the real (422, wrong password) response.
 	rec := callWipeProfiles(t, tok, "wrong-password", "203.0.113.21:1")
-	if rec.Code != http.StatusUnauthorized {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, body=%s; want 401 — a different IP must not share .20's exhausted budget", rec.Code, rec.Body.String())
 	}
 }

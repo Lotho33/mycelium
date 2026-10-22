@@ -370,8 +370,9 @@ type luaFilterDef struct {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// flexMap tolerates an empty JSON array ("[]") in place of an empty object:
-// Lua serialises empty tables as arrays.
+// flexMap tolerates an empty JSON array ("[]") in place of an empty object
+// (Lua serialises empty tables as arrays), and number or boolean values
+// (turned into strings): one sloppy field must not fail a whole page.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type flexMap map[string]string
@@ -381,12 +382,25 @@ func (m *flexMap) UnmarshalJSON(b []byte) error {
 		*m = nil
 		return nil
 	}
-	type plain map[string]string
-	var p plain
-	if err := json.Unmarshal(b, &p); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
 	}
-	*m = flexMap(p)
+	out := make(flexMap, len(raw))
+	for k, v := range raw {
+		var str string
+		if json.Unmarshal(v, &str) == nil {
+			out[k] = str
+			continue
+		}
+		switch t := strings.TrimSpace(string(v)); {
+		case t == "null":
+		case t == "true" || t == "false" || (t != "" && (t[0] == '-' || (t[0] >= '0' && t[0] <= '9'))):
+			out[k] = t
+		}
+		// Nested objects/arrays are dropped.
+	}
+	*m = out
 	return nil
 }
 

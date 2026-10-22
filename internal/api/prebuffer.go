@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ var (
 
 // segFetchLimit caps a single pre-fetched segment (the whole run is bounded
 // by opts.MaxBytes).
-const segFetchLimit = 24 << 20 // 24 MiB
+const segFetchLimit = segmentBufferLimit
 
 func prebufB64(s string) string {
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(s))
@@ -109,7 +110,7 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 	// ── 1. playlist (follow one master→variant hop, max BANDWIDTH) ──────────
 	safeEmit(managers.PrefetchProgress{Phase: "playlist"})
 
-	topBody, err := fetchBody(ctx, plClient, rawURL, opts, 4<<20)
+	topBody, err := fetchBody(ctx, plClient, rawURL, opts, playlistReadLimit)
 	if err != nil {
 		res.Err = fmt.Errorf("playlist fetch: %w", err)
 		res.TimedOut = errors.Is(err, context.DeadlineExceeded)
@@ -124,7 +125,7 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 			res.Err = errors.New("master playlist: no variant")
 			return res
 		}
-		vb, verr := fetchBody(ctx, plClient, variantURL, opts, 4<<20)
+		vb, verr := fetchBody(ctx, plClient, variantURL, opts, playlistReadLimit)
 		if verr != nil {
 			res.Err = fmt.Errorf("variant fetch: %w", verr)
 			res.TimedOut = errors.Is(verr, context.DeadlineExceeded)
@@ -273,7 +274,19 @@ func fetchBody(ctx context.Context, client *http.Client, targetURL string, opts 
 		}
 		return nil, fmt.Errorf("upstream %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	return readAllBounded(resp.Body, limit)
+}
+
+// errBodyTooLarge: a pre-buffered body over its limit. It must fail rather
+// than be cut: a truncated playlist or segment would be cached as whole.
+var errBodyTooLarge = errors.New("body over the pre-buffer limit")
+
+func readAllBounded(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err == nil && int64(len(b)) > limit {
+		return nil, errBodyTooLarge
+	}
+	return b, err
 }
 
 // fetchSegment fetches one segment and returns its bytes normalized (image
@@ -291,7 +304,7 @@ func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("upstream %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, segFetchLimit))
+	body, err := readAllBounded(resp.Body, segFetchLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -309,11 +322,9 @@ func isMasterPlaylist(b []byte) bool {
 
 // bestVariant returns the absolute URL of a master playlist's
 // highest-BANDWIDTH variant, "" if none.
+var reBandwidth = regexp.MustCompile(`[:,]BANDWIDTH=(\d+)`)
+
 func bestVariant(masterURL string, body []byte) string {
-	base := masterURL
-	if i := strings.LastIndex(masterURL, "/"); i >= 0 {
-		base = masterURL[:i+1]
-	}
 	lines := strings.Split(string(body), "\n")
 	bestURL, bestBW := "", -1
 	for i, line := range lines {
@@ -321,13 +332,10 @@ func bestVariant(masterURL string, body []byte) string {
 		if !strings.HasPrefix(line, "#EXT-X-STREAM-INF") {
 			continue
 		}
+		// The BANDWIDTH attribute itself, not AVERAGE-BANDWIDTH.
 		bw := 0
-		if idx := strings.Index(line, "BANDWIDTH="); idx >= 0 {
-			rest := line[idx+len("BANDWIDTH="):]
-			if end := strings.IndexAny(rest, ",\r\n "); end >= 0 {
-				rest = rest[:end]
-			}
-			bw, _ = strconv.Atoi(rest)
+		if m := reBandwidth.FindStringSubmatch(line); m != nil {
+			bw, _ = strconv.Atoi(m[1])
 		}
 		for j := i + 1; j < len(lines); j++ {
 			next := strings.TrimSpace(lines[j])
@@ -336,7 +344,7 @@ func bestVariant(masterURL string, body []byte) string {
 			}
 			if bw > bestBW {
 				bestBW = bw
-				bestURL = proxyURLJoin(base, next)
+				bestURL = proxyURLJoin(masterURL, next)
 			}
 			break
 		}

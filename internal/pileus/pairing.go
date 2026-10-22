@@ -17,9 +17,12 @@ import (
 const codeAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 
 const (
-	pairingCodeLen  = 6
-	pairingTTL      = 5 * time.Minute
-	pairingMaxTries = 5 // wrong attempts against one code before it's burned
+	pairingCodeLen = 6
+	pairingTTL     = 5 * time.Minute
+	// pairingMaxTries wrong attempts burn a code. The per-IP limiter already
+	// bounds guessing (31^6 codes, 5 minutes); the cap is a backstop, high
+	// enough that a stray LAN client can't burn the admin's code at will.
+	pairingMaxTries = 50
 )
 
 type pairingState struct {
@@ -80,8 +83,8 @@ func StaticPairingCode() string {
 // wrong guesses burn it too. The static code is never burned: guessing it is
 // bounded by the per-IP pairing limiter.
 func VerifyPairingCode(candidate, deviceID string) bool {
+	c := strings.ToUpper(strings.TrimSpace(candidate))
 	if static := StaticPairingCode(); static != "" {
-		c := strings.ToUpper(strings.TrimSpace(candidate))
 		if subtle.ConstantTimeCompare([]byte(c), []byte(static)) == 1 {
 			return true
 		}
@@ -92,7 +95,7 @@ func VerifyPairingCode(candidate, deviceID string) bool {
 	if p == nil || p.used || time.Now().After(p.expiresAt) {
 		return false
 	}
-	if candidate != p.code {
+	if subtle.ConstantTimeCompare([]byte(c), []byte(p.code)) != 1 {
 		p.tries++
 		if p.tries >= pairingMaxTries {
 			currentPairing = nil

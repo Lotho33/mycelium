@@ -10,8 +10,12 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestImgB64Decode(t *testing.T) {
@@ -216,6 +220,45 @@ func TestImgSniffRasterType(t *testing.T) {
 	for _, c := range cases {
 		if got := imgSniffRasterType(c.in); got != c.want {
 			t.Errorf("%s: imgSniffRasterType = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Concurrent misses for the same image share one upstream fetch.
+func TestImageProxy_ConcurrentMissesFetchOnce(t *testing.T) {
+	withPlainImgClient(t)
+	pngBytes := tinyPNG(t)
+	var hits atomic.Int32
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		<-gate
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBytes) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	u := base64.RawURLEncoding.EncodeToString([]byte(srv.URL + "/once-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ".png"))
+	var wg sync.WaitGroup
+	codes := make([]int, 5)
+	for i := range codes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			ImageProxy(rec, httptest.NewRequest(http.MethodGet, "/img?u="+u, nil))
+			codes[i] = rec.Code
+		}(i)
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("upstream fetched %d times, want 1", n)
+	}
+	for i, c := range codes {
+		if c != http.StatusOK {
+			t.Fatalf("request %d: status %d", i, c)
 		}
 	}
 }

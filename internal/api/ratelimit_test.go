@@ -115,3 +115,17 @@ func TestRealIP_IgnoresClientSuppliedLeftmostXFF(t *testing.T) {
 		t.Fatalf("realIP() = %q, want the proxy-appended 203.0.113.9, not the spoofed leftmost entry", got)
 	}
 }
+
+// Addresses of one IPv6 /64 share a bucket.
+func TestRateLimiter_IPv6SharesSlash64(t *testing.T) {
+	rl := &rateLimiter{buckets: map[string]*tokenBucket{}, rate: 0, capacity: 2}
+	if !rl.allow("2001:db8:1:2::1") || !rl.allow("2001:db8:1:2::ffff") {
+		t.Fatal("burst refused")
+	}
+	if rl.allow("2001:db8:1:2:abcd::9") {
+		t.Fatal("another address of the same /64 got a fresh bucket")
+	}
+	if !rl.allow("2001:db8:1:3::1") {
+		t.Fatal("a different /64 was limited")
+	}
+}

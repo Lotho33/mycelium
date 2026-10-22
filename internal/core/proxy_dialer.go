@@ -23,14 +23,19 @@ import (
 //   - "host:1080" (no scheme)  → SOCKS5
 //
 // With a proxy configured it never falls back to a direct connection: a
-// caller that requires the proxy fails closed.
+// caller that requires the proxy fails closed, and targets the proxy would
+// reach on its own side (loopback, LAN, container names) are refused first
+// (guardProxiedTarget). Without one the caller adds GuardedDialContext.
 func ProxyDialer(proxyURL string) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	direct := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 
 	if proxyURL == "" {
 		return directDialWithDockerFallback(direct)
 	}
+	return guardProxiedTarget(proxiedDialer(proxyURL, direct))
+}
 
+func proxiedDialer(proxyURL string, direct *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	// The proxy host may be a container name, invisible to the process-wide
 	// public resolver: resolve it through the container engine's DNS.
 	if os.Getenv("MYCELIUM_DOCKER") == "1" {
@@ -66,7 +71,7 @@ func ProxyDialer(proxyURL string) func(ctx context.Context, network, addr string
 			}
 			return sd.Dial(network, addr)
 		}
-	case "http", "https":
+	case "http":
 		return func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return httpConnectDial(ctx, direct, u, addr)
 		}
@@ -101,6 +106,87 @@ func directDialWithDockerFallback(direct *net.Dialer) func(ctx context.Context, 
 	}
 }
 
+// httpConnectTimeout bounds an HTTP proxy's CONNECT handshake.
+const httpConnectTimeout = 15 * time.Second
+
+// guardProxiedTarget refuses, before handing addr to the proxy, the targets
+// that would land on the proxy's own side: IP literals that aren't public
+// (loopback, link-local, private, CGNAT — through a VPN egress they can only
+// mean the proxy's host or network) and names that only resolve there
+// (localhost, single-label container/LAN names, .local/.internal/...). The
+// name is not resolved here: the proxy does it, so the query stays off the
+// local network.
+func guardProxiedTarget(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		if err := checkProxiedHost(host); err != nil {
+			return nil, err
+		}
+		return dial(ctx, network, addr)
+	}
+}
+
+// CheckEgressURL vets a URL handed to another process (the browser
+// service) that fetches it directly (proxied=false: CheckURLNotSSRF) or
+// through an egress proxy (proxied=true: checkProxiedHost).
+func CheckEgressURL(ctx context.Context, rawURL string, proxied bool) error {
+	if !proxied {
+		return CheckURLNotSSRF(ctx, rawURL)
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("proxy: invalid URL %q", rawURL)
+	}
+	return checkProxiedHost(u.Hostname())
+}
+
+// checkProxiedHost is guardProxiedTarget's test (see there).
+func checkProxiedHost(host string) error {
+	if ip := net.ParseIP(host); ip != nil {
+		if BlockedProxyIP(ip) || ip.IsPrivate() || cgnatNet.Contains(ip) {
+			return fmt.Errorf("proxy: refusing to reach non-public address %s through an egress", ip)
+		}
+		return nil
+	}
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == "" || !strings.Contains(h, ".") || NumericHostLike(h) {
+		return fmt.Errorf("proxy: refusing to reach %q through an egress", host)
+	}
+	for _, suffix := range []string{".localhost", ".local", ".internal", ".lan", ".home.arpa", ".localdomain"} {
+		if strings.HasSuffix(h, suffix) {
+			return fmt.Errorf("proxy: refusing to reach %q through an egress", host)
+		}
+	}
+	return nil
+}
+
+// NumericHostLike reports whether host is an IPv4 address in one of the
+// legacy inet_aton spellings net.ParseIP rejects but resolvers and proxies
+// may accept ("2130706433", "0x7f.1", "017.0.0.1").
+func NumericHostLike(host string) bool {
+	parts := strings.Split(strings.TrimSuffix(strings.ToLower(host), "."), ".")
+	if len(parts) > 4 {
+		return false
+	}
+	for _, p := range parts {
+		digits := p
+		if strings.HasPrefix(p, "0x") {
+			digits = p[2:]
+			if digits == "" || strings.Trim(digits, "0123456789abcdef") != "" {
+				return false
+			}
+			continue
+		}
+		if digits == "" || strings.Trim(digits, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // httpConnectDial opens a tunnel to addr through an HTTP proxy via the CONNECT
 // method. It returns the raw tunneled connection, over which the caller
 // performs its own TLS handshake.
@@ -109,9 +195,15 @@ func httpConnectDial(ctx context.Context, d *net.Dialer, proxyURL *url.URL, addr
 	if err != nil {
 		return nil, err
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+	// The CONNECT exchange is bounded even when ctx has no deadline, and a
+	// cancelled ctx unblocks it.
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > httpConnectTimeout {
+		deadline = time.Now().Add(httpConnectTimeout)
 	}
+	_ = conn.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 
 	var req strings.Builder
 	fmt.Fprintf(&req, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)

@@ -44,9 +44,9 @@ type CatalogItem struct {
 	IsExternal      bool   `protobuf:"varint,14,opt,name=is_external,json=isExternal,proto3" json:"is_external,omitempty"`
 	// escape hatch for plugin-specific edge cases — NOT for structured data:
 	Extra map[string]string `protobuf:"bytes,15,rep,name=extra,proto3" json:"extra,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// logo_url: transparent PNG/SVG wordmark (from TMDB images.logos or Fanart.tv)
+	// logo_url: transparent PNG/SVG wordmark of the title
 	LogoUrl string `protobuf:"bytes,16,opt,name=logo_url,json=logoUrl,proto3" json:"logo_url,omitempty"`
-	// banner_url: wide landscape image (AniList bannerImage, TMDB backdrop for banner-mode)
+	// banner_url: wide landscape image (banner-mode)
 	BannerUrl     string `protobuf:"bytes,17,opt,name=banner_url,json=bannerUrl,proto3" json:"banner_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -202,14 +202,13 @@ func (x *CatalogItem) GetBannerUrl() string {
 }
 
 // EpisodeInfo is the rich episode object returned when browsing a season.
-// TMDB-first: all fields map 1:1 to TMDB episode response.
 type EpisodeInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
 	EpisodeNumber int32                  `protobuf:"varint,3,opt,name=episode_number,json=episodeNumber,proto3" json:"episode_number,omitempty"`
 	SeasonNumber  int32                  `protobuf:"varint,4,opt,name=season_number,json=seasonNumber,proto3" json:"season_number,omitempty"`
-	ThumbnailUrl  string                 `protobuf:"bytes,5,opt,name=thumbnail_url,json=thumbnailUrl,proto3" json:"thumbnail_url,omitempty"` // TMDB still_path, 16:9
+	ThumbnailUrl  string                 `protobuf:"bytes,5,opt,name=thumbnail_url,json=thumbnailUrl,proto3" json:"thumbnail_url,omitempty"` // still image, 16:9
 	AirDate       string                 `protobuf:"bytes,6,opt,name=air_date,json=airDate,proto3" json:"air_date,omitempty"`                // "2023-04-02"
 	Duration      int32                  `protobuf:"varint,7,opt,name=duration,proto3" json:"duration,omitempty"`                            // minutes
 	Vote          float64                `protobuf:"fixed64,8,opt,name=vote,proto3" json:"vote,omitempty"`                                   // 0.0–10.0
@@ -336,7 +335,7 @@ type SeasonInfo struct {
 	PosterUrl     string                 `protobuf:"bytes,4,opt,name=poster_url,json=posterUrl,proto3" json:"poster_url,omitempty"`
 	Year          int32                  `protobuf:"varint,5,opt,name=year,proto3" json:"year,omitempty"`
 	EpisodeCount  int32                  `protobuf:"varint,6,opt,name=episode_count,json=episodeCount,proto3" json:"episode_count,omitempty"`
-	Overview      string                 `protobuf:"bytes,7,opt,name=overview,proto3" json:"overview,omitempty"`              // TMDB season overview
+	Overview      string                 `protobuf:"bytes,7,opt,name=overview,proto3" json:"overview,omitempty"`              // season synopsis
 	AirDate       string                 `protobuf:"bytes,8,opt,name=air_date,json=airDate,proto3" json:"air_date,omitempty"` // "YYYY-MM-DD"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -229,9 +229,11 @@ func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir, expectedSHA s
 		return fmt.Errorf("asset senza browser_download_url")
 	}
 
-	client := core.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+	// The shared client's 20 s total timeout is for API calls: an archive of
+	// tens of MB on a slow link needs longer.
+	client := &http.Client{Timeout: 10 * time.Minute}
+	if core.HTTPClient != nil {
+		client.Transport = core.HTTPClient.Transport
 	}
 	req, err := http.NewRequest("GET", asset.BrowserDownloadURL, nil)
 	if err != nil {
@@ -310,13 +312,17 @@ func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir, expectedSHA s
 			return fmt.Errorf("ZIP corrotto: %w", err)
 		}
 		defer zr.Close()
-		aborted, _ = extractZipSafe(&zr.Reader, extractDir, maxPerFile, maxTotal, "[pileus-web]")
+		aborted, _, err = extractZipSafe(&zr.Reader, extractDir, maxPerFile, maxTotal, "[pileus-web]")
+		if err != nil {
+			return fmt.Errorf("archivio ZIP non valido: %w", err)
+		}
 	}
 	if aborted {
 		return fmt.Errorf("archivio troppo grande una volta estratto")
 	}
 
-	if !hasIndexHTML(extractDir) {
+	root, ok := webRoot(extractDir)
+	if !ok {
 		return fmt.Errorf("l'archivio non contiene un index.html: non sembra un build web Flutter valido")
 	}
 
@@ -336,14 +342,15 @@ func installPileusWebAsset(asset core.GitHubReleaseAsset, destDir, expectedSHA s
 			return fmt.Errorf("backup versione precedente fallito: %w", err)
 		}
 	}
-	if err := os.Rename(extractDir, destDir); err != nil {
+	if err := os.Rename(root, destDir); err != nil {
 		// Best-effort: restore the previous version.
 		if _, statErr := os.Stat(destDir); statErr != nil {
 			os.Rename(bakDir, destDir)
 		}
 		return fmt.Errorf("installazione fallita: %w", err)
 	}
-	removeExtractDir = false
+	// A build one level down leaves the (now empty) extraction dir behind.
+	removeExtractDir = root != extractDir
 	return nil
 }
 
@@ -361,21 +368,28 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// hasIndexHTML checks for index.html at dir's root or one directory down.
-func hasIndexHTML(dir string) bool {
+// webRoot finds the build inside an extracted archive: dir itself when it
+// holds index.html, else its single subdirectory that does (archives often
+// wrap the build in a "web/" folder).
+func webRoot(dir string) (string, bool) {
 	if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
-		return true
+		return dir, true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return "", false
 	}
+	found := ""
 	for _, e := range entries {
-		if e.IsDir() {
-			if _, err := os.Stat(filepath.Join(dir, e.Name(), "index.html")); err == nil {
-				return true
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "index.html")); err == nil {
+			if found != "" {
+				return "", false // ambiguous
 			}
+			found = filepath.Join(dir, e.Name())
 		}
 	}
-	return false
+	return found, found != ""
 }

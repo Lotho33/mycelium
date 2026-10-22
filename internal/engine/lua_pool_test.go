@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -260,5 +261,130 @@ func TestLoadPlugin_PoolSizeClamped(t *testing.T) {
 				t.Errorf("pool size = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func writeScript(t *testing.T, src string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "init.lua")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A state borrowed across a Reload must not block when released: the
+// refilled pool is full, so the old state is closed instead.
+func TestLuaPool_ReleaseAfterReloadDoesNotBlock(t *testing.T) {
+	p, err := NewLuaPool(2, writeScript(t, "x = 1"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	L, release, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { release(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("release() blocked after Reload")
+	}
+	if !L.IsClosed() {
+		t.Fatal("old-generation state should be closed on release")
+	}
+	if free, size := p.Stats(); free != size {
+		t.Fatalf("pool has %d/%d free states, want full", free, size)
+	}
+
+	// Same for a state discarded after a timeout across a Reload.
+	L2, _, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	p.DiscardAndReplace(L2)
+	if free, size := p.Stats(); free != size {
+		t.Fatalf("after discard: %d/%d free states, want full", free, size)
+	}
+}
+
+// A Reload with a broken script keeps the old states serving.
+func TestLuaPool_FailedReloadKeepsOldCode(t *testing.T) {
+	script := writeScript(t, "x = 1")
+	p, err := NewLuaPool(2, script, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err := os.WriteFile(script, []byte("this is not lua ("), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Reload(); err == nil {
+		t.Fatal("Reload of a broken script should fail")
+	}
+	if free, size := p.Stats(); free != size {
+		t.Fatalf("pool has %d/%d free states after a failed reload", free, size)
+	}
+}
+
+// string.rep (function and method form) can't allocate without bound, and
+// coroutines (which escape the call's context) are gone.
+func TestLuaPool_StringRepCappedAndNoCoroutine(t *testing.T) {
+	p, err := NewLuaPool(1, writeScript(t, `
+		ok_small = (("ab"):rep(3, "-") == "ab-ab-ab")
+		ok_fn, err_fn = pcall(string.rep, "x", 2^40)
+		ok_m, err_m = pcall(function() return ("x"):rep(2^40) end)
+		has_co = coroutine ~= nil
+	`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	L, release, _ := p.Acquire(context.Background())
+	defer release()
+	if L.GetGlobal("ok_small") != lua.LTrue {
+		t.Fatal("string.rep broken for small inputs")
+	}
+	if L.GetGlobal("ok_fn") != lua.LFalse || L.GetGlobal("ok_m") != lua.LFalse {
+		t.Fatal("huge string.rep allowed")
+	}
+	if L.GetGlobal("has_co") != lua.LFalse {
+		t.Fatal("coroutine library still available")
+	}
+}
+
+// A module required inside a call keeps the globals it defines for the next
+// call: modules are loaded before the per-call globals baseline is taken.
+func TestLuaPool_ModuleGlobalsSurviveCalls(t *testing.T) {
+	script := writeScript(t, `function get() local m = require("helper"); return helper_value end`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(script), "helper.lua"), []byte(`helper_value = 42; return {}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewLuaPool(1, script, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	for i := 0; i < 2; i++ {
+		L, release, _ := p.Acquire(context.Background())
+		if err := L.CallByParam(lua.P{Fn: L.GetGlobal("get"), NRet: 1, Protect: true}); err != nil {
+			t.Fatal(err)
+		}
+		got := L.Get(-1)
+		L.Pop(1)
+		scopeOf(L).resetNewGlobals(L)
+		release()
+		if got != lua.LNumber(42) {
+			t.Fatalf("call %d: helper_value = %v, want 42", i+1, got)
+		}
 	}
 }

@@ -612,3 +612,23 @@ func TestInterleaveResourcesFollowsContentTime(t *testing.T) {
 		t.Fatal("the video track must set the pace")
 	}
 }
+
+// A deleted owner's downloads go, files included; a reset takes everything.
+func TestManager_DeleteOwnerAndReset(t *testing.T) {
+	e := newEnv(t)
+	in := e.create(t, "p")
+	e.waitStatus(t, "p", in.ID, StatusCompleted)
+	it, _ := loadItem("", in.ID)
+	e.m.DeleteOwner("p")
+	if _, err := e.m.Get("p", in.ID); !IsNotFound(err) || fileExists(e.m.finalPath(it.BlobID)) {
+		t.Fatal("deleted owner's download kept")
+	}
+
+	in2 := e.create(t, "q")
+	e.waitStatus(t, "q", in2.ID, StatusCompleted)
+	it2, _ := loadItem("", in2.ID)
+	e.m.Reset()
+	if len(e.m.ListAll()) != 0 || fileExists(e.m.finalPath(it2.BlobID)) {
+		t.Fatal("reset left downloads behind")
+	}
+}

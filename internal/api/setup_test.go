@@ -117,3 +117,17 @@ func TestServeWebApp_StaticAssetUntouched(t *testing.T) {
 		})
 	}
 }
+
+// Against DNS rebinding the setup only takes LAN-looking hosts.
+func TestSetupHostAllowed(t *testing.T) {
+	for _, h := range []string{"192.168.1.10:8000", "[fd00::1]:8000", "localhost:8000", "minipc", "mycelium.lan", "box.local:8000"} {
+		if !setupHostAllowed(h) {
+			t.Errorf("%q refused", h)
+		}
+	}
+	for _, h := range []string{"evil.example.com", "rebind.attacker.net:8000", ""} {
+		if setupHostAllowed(h) {
+			t.Errorf("%q allowed", h)
+		}
+	}
+}

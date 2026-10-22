@@ -13,7 +13,6 @@ package pileus
 //   [0x80][4-byte-BE-length][key: value\r\n...]
 
 import (
-	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
@@ -26,8 +25,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-
-	"golang.org/x/net/http2"
 
 	"mycelium/internal/core"
 )
@@ -57,31 +54,21 @@ func pinGRPCServerCert(cs tls.ConnectionState) error {
 
 func initGRPCWebBridge() {
 	grpcBridgeOnce.Do(func() {
-		t := &http2.Transport{
-			// AllowHTTP lets us speak h2c (cleartext HTTP/2) to the local gRPC
-			// server when it runs without TLS.
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-				d := &net.Dialer{}
-				target := grpcTargetPtr.Load()
-				if target == nil || !target.tls {
-					return d.DialContext(ctx, network, addr)
-				}
-				// Pin the leaf certificate (its SHA-256 is known in-process) instead of a
-				// CA chain: a local process racing for the port can't impersonate the
-				// server.
-				tc := &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // leaf cert pinned in pinGRPCServerCert
-					NextProtos:         []string{"h2"},
-					VerifyConnection:   pinGRPCServerCert,
-				}
-				if cfg != nil && cfg.ServerName != "" {
-					tc.ServerName = cfg.ServerName
-				}
-				return tls.Dial(network, addr, tc)
+		// HTTP/2 only: over TLS (https:// target) or cleartext h2c (http://),
+		// chosen by serveGRPCWeb from grpcTargetPtr.
+		var protos http.Protocols
+		protos.SetHTTP2(true)
+		protos.SetUnencryptedHTTP2(true)
+		grpcH2Client = &http.Client{Transport: &http.Transport{
+			Protocols: &protos,
+			// Pin the leaf certificate (its SHA-256 is known in-process) instead of a
+			// CA chain: a local process racing for the port can't impersonate the
+			// server.
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // leaf cert pinned in pinGRPCServerCert
+				VerifyConnection:   pinGRPCServerCert,
 			},
-		}
-		grpcH2Client = &http.Client{Transport: t}
+		}}
 	})
 }
 
@@ -120,7 +107,7 @@ func serveGRPCWeb(w http.ResponseWriter, r *http.Request) {
 
 	// Forward to the local gRPC server as a native gRPC/HTTP2 request. The
 	// scheme must match how the server listens (TLS by default); the
-	// http2.Transport's DialTLSContext handles both via grpcTargetPtr.
+	// bridge transport speaks HTTP/2 over either.
 	scheme := "http://"
 	if target.tls {
 		scheme = "https://"
@@ -128,7 +115,8 @@ func serveGRPCWeb(w http.ResponseWriter, r *http.Request) {
 	grpcURL := scheme + target.addr + r.URL.Path
 	grpcReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, grpcURL, r.Body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[grpcweb] %s: %v", r.URL.Path, err)
+		http.Error(w, "grpc-web bridge error", http.StatusInternalServerError)
 		return
 	}
 	grpcReq.Header.Set("Content-Type", "application/grpc+proto")
@@ -172,7 +160,7 @@ func serveGRPCWeb(w http.ResponseWriter, r *http.Request) {
 	resp, err := grpcH2Client.Do(grpcReq)
 	if err != nil {
 		log.Printf("[grpcweb] %s → upstream dial/RPC error (target %s): %v", r.URL.Path, grpcURL, err)
-		http.Error(w, "grpc-web bridge: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "grpc-web bridge: upstream unavailable", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()

@@ -115,3 +115,36 @@ func TestAdminSession_RevokeInvalidatesImmediately(t *testing.T) {
 		t.Fatal("revoked session still validates")
 	}
 }
+
+// Logout is unauthenticated: a forged or unsigned cookie must not reach the
+// denylist (it would let any client grow it without bound).
+func TestAdminSession_RevokeIgnoresForgedTokens(t *testing.T) {
+	SetAdminSessionKey([]byte("test-master-secret"))
+	defer SetAdminSessionKey(nil)
+
+	revokedAdminSessionsMu.Lock()
+	before := len(revokedAdminSessions)
+	revokedAdminSessionsMu.Unlock()
+	for _, tok := range []string{"x.9223372036854775807.bad", "a.b.c", "nodots"} {
+		revokeAdminSession(tok)
+	}
+	revokedAdminSessionsMu.Lock()
+	after := len(revokedAdminSessions)
+	revokedAdminSessionsMu.Unlock()
+	if after != before {
+		t.Fatalf("forged tokens denylisted: %d -> %d entries", before, after)
+	}
+}
+
+// A password change (or a factory reset clearing the hash) invalidates every
+// session minted under the old password.
+func TestAdminSession_PasswordChangeInvalidates(t *testing.T) {
+	SetAdminSessionKey([]byte("test-master-secret"))
+	defer SetAdminSessionKey(nil)
+
+	tok := createAdminSession()
+	seedAdminPassword(t, "another-password")
+	if isValidAdminSession(tok) {
+		t.Fatal("session survived an admin password change")
+	}
+}

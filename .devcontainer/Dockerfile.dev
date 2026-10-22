@@ -1,4 +1,4 @@
-FROM golang:1.26-bookworm
+FROM golang:1.26.10-bookworm
 
 # No browser engine here: the optional browser service is a separate process
 # mycelium reaches over HTTP (MYCELIUM_BROWSER_URL, see

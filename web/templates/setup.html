@@ -112,8 +112,7 @@ async function savePassword() {
 
 function showDone() {
     document.getElementById('step-done').classList.remove('hidden');
-    const port = window.location.port || '8000';
-    const localURL = window.location.protocol + '//' + window.location.hostname + ':' + port + '/admin';
+    const localURL = window.location.origin + '/admin';
     const el = document.getElementById('local-url');
     el.href = localURL;
     el.textContent = localURL;

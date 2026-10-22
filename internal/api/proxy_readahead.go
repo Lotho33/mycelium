@@ -116,6 +116,10 @@ func readAheadRegister(l *raList) {
 	}
 }
 
+// raGlobal caps read-ahead fetches in flight across every playlist: each may
+// buffer up to segmentBufferLimit.
+var raGlobal = make(chan struct{}, 4)
+
 // readAheadFrom starts fetching what follows segURL in its playlist, up to
 // readAheadSecs() of media, skipping what is cached or already being fetched.
 func readAheadFrom(segURL string) {
@@ -148,7 +152,14 @@ func readAheadFrom(segURL string) {
 			l.inflight.Add(-1)
 			return
 		}
+		select {
+		case raGlobal <- struct{}{}:
+		default:
+			l.inflight.Add(-1)
+			return // enough read-ahead in flight server-wide
+		}
 		core.SafeGo("proxy/readahead", func() {
+			defer func() { <-raGlobal }()
 			defer l.inflight.Add(-1)
 			readAheadFetch(l, s)
 		})
@@ -177,6 +188,12 @@ func readAheadFetch(l *raList, s raSeg) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), readAheadTimeout)
 	defer cancel()
+	// Same per-host CDN budget as the players' own fetches.
+	release, err := segAcquire(ctx, req.URL.Host)
+	if err != nil {
+		return
+	}
+	defer release()
 	start := time.Now()
 	resp, err := client.Do(req.WithContext(ctx))
 	if err != nil {

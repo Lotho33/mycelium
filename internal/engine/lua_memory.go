@@ -310,7 +310,7 @@ func (p *LuaPool) Profile(ctx context.Context, wait time.Duration) (states []Lua
 	var held []*lua.LState
 	defer func() {
 		for _, L := range held {
-			p.pool <- L
+			p.put(L)
 		}
 	}()
 	deadline := time.Now().Add(wait)

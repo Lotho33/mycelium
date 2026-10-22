@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,7 +45,7 @@ func TestExtractZipSafe_RejectsPathTraversal(t *testing.T) {
 		"index.html":       "<html></html>",
 	})
 
-	aborted, _ := extractZipSafe(zr, destDir, 10<<20, 200<<20, "[test]")
+	aborted, _, _ := extractZipSafe(zr, destDir, 10<<20, 200<<20, "[test]")
 	if aborted {
 		t.Fatalf("extraction unexpectedly aborted")
 	}
@@ -83,7 +84,7 @@ func TestExtractZipSafe_AbortsOverTotalCap(t *testing.T) {
 	big := make([]byte, 1024)
 	zr := buildZip(t, map[string]string{"big.bin": string(big)})
 
-	aborted, _ := extractZipSafe(zr, destDir, 10<<20, 100 /* 100 bytes cap */, "[test]")
+	aborted, _, _ := extractZipSafe(zr, destDir, 10<<20, 100 /* 100 bytes cap */, "[test]")
 	if !aborted {
 		t.Fatalf("expected extraction to abort when the archive exceeds maxTotal")
 	}
@@ -100,11 +101,19 @@ func TestExtractZipSafe_StripsSingleWrapperFolder(t *testing.T) {
 		"build/main.dart.js": "console.log(1)",
 	})
 
-	aborted, _ := extractZipSafe(zr, destDir, 10<<20, 200<<20, "[test]")
+	aborted, _, _ := extractZipSafe(zr, destDir, 10<<20, 200<<20, "[test]")
 	if aborted {
 		t.Fatalf("extraction unexpectedly aborted")
 	}
 	if _, err := os.Stat(filepath.Join(destDir, "index.html")); err != nil {
 		t.Fatalf("index.html should have been extracted at destDir root after stripping the wrapper folder: %v", err)
+	}
+}
+
+// A file over the per-file cap fails the extraction instead of being cut.
+func TestExtractZipSafe_PerFileCapIsAnError(t *testing.T) {
+	zr := buildZip(t, map[string]string{"big.lua": strings.Repeat("x", 2048)})
+	if _, _, err := extractZipSafe(zr, t.TempDir(), 1024, 1<<20, "[test]"); err == nil {
+		t.Fatal("oversized entry silently truncated")
 	}
 }

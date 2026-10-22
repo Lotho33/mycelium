@@ -179,7 +179,10 @@ var errSegAbandoned = errors.New("player gone, segment abandoned")
 // While the segment fits in segmentBufferLimit it is all kept (it becomes
 // the warm cache entry, and a reader can join from byte 0); past that,
 // bytes every reader has had are dropped and the producer waits when it is
-// segmentBufferLimit ahead of the slowest one.
+// segmentBufferLimit ahead of the slowest one. From then on the producer
+// moves at the player's pace, so onStream (the CDN slot release) runs at
+// that switch: a long progressive body must not hold the slot while it
+// plays.
 type segPipe struct {
 	mu   sync.Mutex
 	cond *sync.Cond
@@ -190,6 +193,7 @@ type segPipe struct {
 	readers  map[int]int64 // active reader → what it has been handed
 	nextID   int
 	keepAll  bool // buf still starts at byte 0 and fits the limit
+	onStream func()
 	closed   bool
 	err      error
 	finished chan struct{}
@@ -211,22 +215,43 @@ func (p *segPipe) minPosLocked() int64 {
 	return m
 }
 
+// trimLocked drops the bytes every reader has had. It only reslices: those
+// bytes are never written again, and a reader may still hold a slice of
+// them.
+func (p *segPipe) trimLocked() {
+	if k := p.minPosLocked() - p.base; k > 0 {
+		p.buf = p.buf[k:]
+		p.base += k
+	}
+}
+
 // Write appends b (never fails: the producer checks stop() itself).
 func (p *segPipe) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if !p.keepAll {
+		// Reallocate only when the spare capacity runs out, with room for
+		// another segmentBufferLimit: about one copy of the live window per
+		// segmentBufferLimit streamed.
+		p.trimLocked()
+		if cap(p.buf)-len(p.buf) < len(b) {
+			nb := make([]byte, len(p.buf), len(p.buf)+len(b)+segmentBufferLimit)
+			copy(nb, p.buf)
+			p.buf = nb
+		}
+	}
 	p.buf = append(p.buf, b...)
 	if p.keepAll && len(p.buf) > segmentBufferLimit {
 		p.keepAll = false
+		if p.onStream != nil {
+			p.onStream()
+		}
 	}
 	if !p.keepAll {
 		// Too big to keep: drop what every reader has had, and wait while too
 		// far ahead of the slowest.
 		for {
-			if k := p.minPosLocked() - p.base; k >= 1<<20 {
-				p.buf = append([]byte(nil), p.buf[k:]...)
-				p.base += k
-			}
+			p.trimLocked()
 			if len(p.readers) == 0 || p.closed || p.base+int64(len(p.buf))-p.minPosLocked() <= segmentBufferLimit {
 				break
 			}
@@ -245,9 +270,13 @@ func (p *segPipe) stop(leader bool) bool {
 	return len(p.readers) == 0 && (!leader || !p.keepAll)
 }
 
-// close ends the segment (err == nil: complete).
+// close ends the segment (err == nil: complete). Only the first call counts.
 func (p *segPipe) close(err error) {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
 	p.closed, p.err = true, err
 	p.cond.Broadcast()
 	p.mu.Unlock()
@@ -442,6 +471,7 @@ func (s *segStream) run() {
 	}
 
 	pipe := newSegPipe()
+	pipe.onStream = s.release
 	if s.flight != nil && s.status == 0 {
 		// A retry arriving from now on reads along (serveJoined).
 		s.flight.publish(&segFlightStream{pipe: pipe, ct: s.ct, contentLength: cl})
@@ -470,7 +500,7 @@ func (s *segStream) run() {
 		// stream opens drops segment 0), or the player's own retry: not an error.
 		log.Printf("[proxy/segment] player closed the request after %s (%d of %d bytes sent) url=%s", time.Since(s.start).Round(time.Millisecond), sent, pipe.base+int64(len(pipe.buf)), logURL(s.realURL))
 	}
-	if s.sess != nil {
+	if s.sess != nil && !gone {
 		s.sess.RecordFetch()
 	}
 }
@@ -478,6 +508,17 @@ func (s *segStream) run() {
 // produce reads the upstream body into pipe, resuming a body cut mid-way,
 // and closes the pipe with how it ended.
 func (s *segStream) produce(pipe *segPipe, isTS bool) {
+	// Upstream bytes are untrusted input to the TS guard and resume logic: a
+	// panic here would take the whole process down (net/http only recovers
+	// the handler goroutine). Close the pipe with an error instead, so the
+	// handler doesn't wait on it forever.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[proxy/segment] PANIC in produce url=%s: %v", logURL(s.realURL), r)
+			s.release()
+			pipe.close(fmt.Errorf("produce panic: %v", r))
+		}
+	}()
 	body := s.resp.Body
 	var out io.Writer = pipe
 	var guard *tsTailGuard

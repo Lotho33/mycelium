@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,8 +61,11 @@ func Start(addr string, jwtSecret []byte, tlsCert *tls.Certificate) *grpc.Server
 
 	tlsEnabled := tlsCert != nil
 	opts := []grpc.ServerOption{
-		grpc.UnaryInterceptor(authInterceptor(authHandler)),
-		grpc.StreamInterceptor(authStreamInterceptor(authHandler)),
+		grpc.ChainUnaryInterceptor(recoverUnary, authInterceptor(authHandler)),
+		grpc.ChainStreamInterceptor(recoverStream, authStreamInterceptor(authHandler)),
+		// Requests are small (ids, filters, preferences): 1 MiB is ample, and
+		// keeps a device from making the server hold or store 4 MiB blobs.
+		grpc.MaxRecvMsgSize(1 << 20),
 	}
 	if tlsCert != nil {
 		opts = append(opts, grpc.Creds(credentials.NewServerTLSFromCert(tlsCert)))
@@ -246,14 +250,14 @@ func authenticate(ctx context.Context, auth *AuthHandler, fullMethod string) (co
 	}
 	tokenStr := strings.TrimPrefix(authVals[0], "Bearer ")
 
-	deviceID, err := auth.ParseJWT(tokenStr)
+	deviceID, tokGen, err := auth.parseJWT(tokenStr)
 	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "invalid token: "+err.Error())
+		return nil, status.Error(codes.Unauthenticated, "invalid token")
 	}
 
 	// A valid signature is not enough: the device must still be paired and not
 	// revoked.
-	if !deviceActive(deviceID) {
+	if !deviceActive(deviceID, tokGen) {
 		return nil, status.Error(codes.Unauthenticated, "device revoked or unknown — re-pair from the dashboard")
 	}
 
@@ -269,9 +273,19 @@ func authenticate(ctx context.Context, auth *AuthHandler, fullMethod string) (co
 		// token (profile_pin.go). AuthService is exempt: it lists and unlocks
 		// profiles, and checks the profile named in each request itself.
 		if !strings.HasPrefix(fullMethod, "/mycelium.AuthService/") {
+			// The id must name an existing profile: otherwise any string — another
+			// device's id included, which owns that device's profile-less data —
+			// would pass as an unprotected profile.
+			exists, _, err := profileState(pid[0])
+			if err != nil {
+				return nil, status.Error(codes.Internal, "profile access check failed")
+			}
+			if !exists {
+				return nil, status.Error(codes.NotFound, "profile not found")
+			}
 			ok, err := profileAccessible(deviceID, pid[0], profileSessionFromCtx(ctx))
 			if err != nil {
-				return nil, status.Error(codes.Internal, "profile access check: "+err.Error())
+				return nil, status.Error(codes.Internal, "profile access check failed")
 			}
 			if !ok {
 				return nil, errProfileLocked
@@ -280,6 +294,28 @@ func authenticate(ctx context.Context, auth *AuthHandler, fullMethod string) (co
 		ctx = context.WithValue(ctx, ctxKeyProfileID{}, pid[0])
 	}
 	return ctx, nil
+}
+
+// recoverUnary turns a panic in a handler into an Internal error: grpc-go
+// doesn't recover them, and one would take the whole server down.
+func recoverUnary(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[pileus] PANIC in %s: %v\n%s", info.FullMethod, r, debug.Stack())
+			err = status.Error(codes.Internal, "internal error")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+func recoverStream(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[pileus] PANIC in %s: %v\n%s", info.FullMethod, r, debug.Stack())
+			err = status.Error(codes.Internal, "internal error")
+		}
+	}()
+	return handler(srv, ss)
 }
 
 // ctxKeyProfileID is the context key for the active profile ID.

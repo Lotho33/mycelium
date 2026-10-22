@@ -15,9 +15,11 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
+	"mycelium/internal/downloads"
 	"mycelium/internal/managers"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -89,12 +91,14 @@ func (h *AuthHandler) AuthorizeDevice(ctx context.Context, req *gen.AuthorizeDev
 		log.Printf("[pileus/auth] device %s ri-associato: fiducie PIN azzerate", req.DeviceId)
 	}
 
-	if err := upsertDevice(req.DeviceId); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+	tokGen, err := upsertDevice(req.DeviceId)
+	if err != nil {
+		log.Printf("[pileus/auth] upsert device %s: %v", req.DeviceId, err)
+		return nil, status.Error(codes.Internal, "db error")
 	}
 
 	expiresAt := time.Now().Add(jwtTTL)
-	tokenStr, err := h.mintJWT(req.DeviceId, expiresAt)
+	tokenStr, err := h.mintJWTGen(req.DeviceId, tokGen, expiresAt)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "jwt mint error")
 	}
@@ -128,6 +132,13 @@ func (h *AuthHandler) CreateProfile(ctx context.Context, req *gen.CreateProfileR
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name required")
 	}
+	if err := checkProfileFields(req.Name, req.AvatarUrl); err != nil {
+		return nil, err
+	}
+	var n int
+	if err := managers.DB.QueryRow(`SELECT COUNT(*) FROM pileus_profiles`).Scan(&n); err == nil && n >= maxProfiles {
+		return nil, status.Error(codes.ResourceExhausted, "too many profiles")
+	}
 
 	profileID := newID()
 
@@ -137,7 +148,7 @@ func (h *AuthHandler) CreateProfile(ctx context.Context, req *gen.CreateProfileR
 	}
 
 	if err := insertProfile(deviceID, profileID, req.Name, req.AvatarUrl, prefs); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 
 	return &gen.ProfileResponse{
@@ -155,7 +166,7 @@ func (h *AuthHandler) ListProfiles(ctx context.Context, _ *gen.ListProfilesReque
 	}
 	profiles, err := listProfiles()
 	if err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	for _, p := range profiles {
 		decorateProfile(ctx, deviceID, p)
@@ -176,7 +187,7 @@ func (h *AuthHandler) DeleteProfile(ctx context.Context, req *gen.DeleteProfileR
 		return nil, err
 	}
 	if err := deleteProfile(req.ProfileId); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	return &gen.DeleteProfileResponse{Ok: true}, nil
 }
@@ -206,9 +217,12 @@ func (h *AuthHandler) UpdateProfile(ctx context.Context, req *gen.UpdateProfileR
 	if req.AvatarUrl != "" {
 		avatarURL = req.AvatarUrl
 	}
+	if err := checkProfileFields(name, avatarURL); err != nil {
+		return nil, err
+	}
 
 	if err := updateProfile(req.ProfileId, name, avatarURL); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	// UpdateProfile never touches preferences: echo the stored blob.
 	resp := &gen.ProfileResponse{
@@ -246,7 +260,7 @@ func (h *AuthHandler) SetProfilePreferences(ctx context.Context, req *gen.SetPro
 		return nil, status.Error(codes.NotFound, "profile not found")
 	}
 	if err := setProfilePreferences(req.ProfileId, prefs); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 
 	resp := &gen.ProfileResponse{
@@ -261,9 +275,29 @@ func (h *AuthHandler) SetProfilePreferences(ctx context.Context, req *gen.SetPro
 
 // normalizePrefsJSON validates a client-supplied preferences blob: "" becomes
 // "{}", anything else must be valid JSON (the client owns the schema).
+// Bounds on what a device stores in a profile (it lands on the server's
+// disk).
+const (
+	maxProfiles          = 32
+	maxProfileNameLen    = 64
+	maxProfileAvatarLen  = 2048
+	maxProfilePrefsBytes = 64 << 10
+)
+
+// checkProfileFields validates the client-chosen profile strings.
+func checkProfileFields(name, avatarURL string) error {
+	if len(name) > maxProfileNameLen || len(avatarURL) > maxProfileAvatarLen {
+		return status.Error(codes.InvalidArgument, "profile name or avatar too long")
+	}
+	return nil
+}
+
 func normalizePrefsJSON(s string) (string, error) {
 	if s == "" {
 		return "{}", nil
+	}
+	if len(s) > maxProfilePrefsBytes {
+		return "", status.Error(codes.InvalidArgument, "preferences_json too large")
 	}
 	if !json.Valid([]byte(s)) {
 		return "", status.Error(codes.InvalidArgument, "preferences_json must be valid JSON")
@@ -271,15 +305,23 @@ func normalizePrefsJSON(s string) (string, error) {
 	return s, nil
 }
 
-// RefreshToken re-issues a 30-day JWT to a device holding a valid one.
-
+// RefreshToken re-issues a 30-day JWT, of the device's current generation, to
+// a device holding a valid one. A device paired before generations existed
+// gets one now, which retires its older tokens.
 func (h *AuthHandler) RefreshToken(ctx context.Context, _ *gen.RefreshTokenRequest) (*gen.AuthorizeDeviceResponse, error) {
 	deviceID, err := h.deviceFromCtx(ctx)
 	if err != nil {
 		return nil, err
 	}
+	_, tokGen := deviceActiveLookup(deviceID)
+	if tokGen == "" {
+		if tokGen, err = rotateTokenGen(deviceID); err != nil {
+			log.Printf("[pileus/auth] rotate token gen %s: %v", deviceID, err)
+			return nil, status.Error(codes.Internal, "db error")
+		}
+	}
 	expiresAt := time.Now().Add(jwtTTL)
-	tokenStr, err := h.mintJWT(deviceID, expiresAt)
+	tokenStr, err := h.mintJWTGen(deviceID, tokGen, expiresAt)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "jwt mint error")
 	}
@@ -296,7 +338,7 @@ func (h *AuthHandler) ListDevices(ctx context.Context, _ *gen.ListDevicesRequest
 	}
 	devices, err := listDevices()
 	if err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	return &gen.ListDevicesResponse{Devices: devices}, nil
 }
@@ -314,7 +356,7 @@ func (h *AuthHandler) RenameDevice(ctx context.Context, req *gen.RenameDeviceReq
 		return nil, status.Error(codes.PermissionDenied, "un dispositivo può rinominare solo sé stesso")
 	}
 	if err := renameDevice(req.DeviceId, sanitizeDeviceLabel(req.Label)); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	return &gen.RenameDeviceResponse{Ok: true}, nil
 }
@@ -327,7 +369,7 @@ func (h *AuthHandler) UnpairSelf(ctx context.Context, _ *gen.UnpairSelfRequest) 
 		return nil, err
 	}
 	if err := DeleteDevice(deviceID); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	log.Printf("[pileus/auth] device %s si è smarcato (cambio server)", deviceID)
 	return &gen.UnpairSelfResponse{Ok: true}, nil
@@ -365,12 +407,20 @@ func sanitizeDeviceLabel(s string) string {
 
 type pileusJWTClaims struct {
 	DeviceID string `json:"did"`
+	// Gen is the device's token generation (pileus_devices.token_gen).
+	Gen string `json:"gen,omitempty"`
 	jwt.RegisteredClaims
 }
 
+// mintJWT mints a token without a generation (tests, legacy devices).
 func (h *AuthHandler) mintJWT(deviceID string, exp time.Time) (string, error) {
+	return h.mintJWTGen(deviceID, "", exp)
+}
+
+func (h *AuthHandler) mintJWTGen(deviceID, gen string, exp time.Time) (string, error) {
 	claims := pileusJWTClaims{
 		DeviceID: deviceID,
+		Gen:      gen,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(exp),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -383,6 +433,12 @@ func (h *AuthHandler) mintJWT(deviceID string, exp time.Time) (string, error) {
 
 // ParseJWT validates a device JWT and returns its deviceID.
 func (h *AuthHandler) ParseJWT(tokenStr string) (string, error) {
+	id, _, err := h.parseJWT(tokenStr)
+	return id, err
+}
+
+// parseJWT validates a device JWT and returns its deviceID and generation.
+func (h *AuthHandler) parseJWT(tokenStr string) (deviceID, gen string, err error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &pileusJWTClaims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -390,13 +446,13 @@ func (h *AuthHandler) ParseJWT(tokenStr string) (string, error) {
 		return h.jwtSecret, nil
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	claims, ok := token.Claims.(*pileusJWTClaims)
 	if !ok || !token.Valid {
-		return "", errors.New("invalid token")
+		return "", "", errors.New("invalid token")
 	}
-	return claims.DeviceID, nil
+	return claims.DeviceID, claims.Gen, nil
 }
 
 // deviceFromCtx returns the deviceID the auth interceptor stored in ctx.
@@ -425,19 +481,28 @@ func deviceRevoked(deviceID string) (exists bool, revoked bool) {
 	return true, revokedAt.Valid
 }
 
-func upsertDevice(deviceID string) error {
+// upsertDevice records a pairing and returns the device's new token
+// generation: tokens minted before it stop working.
+func upsertDevice(deviceID string) (string, error) {
+	gen := newID()
 	// Clears the revoke flag on conflict: AuthorizeDevice has already refused a
 	// revoked device before getting here.
 	_, err := managers.DB.Exec(
-		`INSERT INTO pileus_devices(device_id, created_at)
-		 VALUES(?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(device_id) DO UPDATE SET last_seen_at=CURRENT_TIMESTAMP, revoked_at=NULL`,
-		deviceID,
+		`INSERT INTO pileus_devices(device_id, created_at, token_gen)
+		 VALUES(?, CURRENT_TIMESTAMP, ?)
+		 ON CONFLICT(device_id) DO UPDATE SET last_seen_at=CURRENT_TIMESTAMP, revoked_at=NULL, token_gen=excluded.token_gen`,
+		deviceID, gen,
 	)
-	if err == nil {
-		forgetDeviceActive(deviceID)
-	}
-	return err
+	forgetDeviceActive(deviceID)
+	return gen, err
+}
+
+// rotateTokenGen gives deviceID a new token generation.
+func rotateTokenGen(deviceID string) (string, error) {
+	gen := newID()
+	_, err := managers.DB.Exec(`UPDATE pileus_devices SET token_gen=? WHERE device_id=?`, gen, deviceID)
+	forgetDeviceActive(deviceID)
+	return gen, err
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -450,19 +515,22 @@ const deviceActiveCacheTTL = 60 * time.Second
 
 type deviceActiveEntry struct {
 	active bool
+	gen    string
 	at     time.Time
 }
 
 var (
 	deviceActiveCache sync.Map // deviceID -> deviceActiveEntry
 
-	// deviceActiveLookup is the DB check behind deviceActive (a var for tests).
-	deviceActiveLookup = func(deviceID string) bool {
-		var one int
-		return managers.DB.QueryRow(
-			`SELECT 1 FROM pileus_devices WHERE device_id=? AND revoked_at IS NULL`,
+	// deviceActiveLookup is the DB check behind deviceActive (a var for tests):
+	// whether deviceID is paired and not revoked, and its token generation.
+	deviceActiveLookup = func(deviceID string) (bool, string) {
+		var gen string
+		err := managers.DB.QueryRow(
+			`SELECT token_gen FROM pileus_devices WHERE device_id=? AND revoked_at IS NULL`,
 			deviceID,
-		).Scan(&one) == nil
+		).Scan(&gen)
+		return err == nil, gen
 	}
 
 	// deviceSeen records that deviceID made an authenticated call (at most once
@@ -475,33 +543,46 @@ var (
 	}
 )
 
-// deviceActive reports whether deviceID is a known, non-revoked device.
-func deviceActive(deviceID string) bool {
+// deviceActive reports whether deviceID is a known, non-revoked device and
+// tokGen (the token's generation) is its current one.
+func deviceActive(deviceID, tokGen string) bool {
 	if deviceID == "" {
 		return false
 	}
 	if v, ok := deviceActiveCache.Load(deviceID); ok {
 		if e := v.(deviceActiveEntry); time.Since(e.at) < deviceActiveCacheTTL {
-			return e.active
+			return e.active && e.gen == tokGen
 		}
 	}
-	active := deviceActiveLookup(deviceID)
-	deviceActiveCache.Store(deviceID, deviceActiveEntry{active: active, at: time.Now()})
+	epoch := deviceActiveEpoch.Load()
+	active, gen := deviceActiveLookup(deviceID)
+	// A revocation that ran during the lookup must not be undone by caching
+	// what was read before it.
+	if deviceActiveEpoch.Load() == epoch {
+		deviceActiveCache.Store(deviceID, deviceActiveEntry{active: active, gen: gen, at: time.Now()})
+	}
 	if active {
 		deviceSeen(deviceID)
 	}
-	return active
+	return active && gen == tokGen
 }
 
-func forgetDeviceActive(deviceID string) { deviceActiveCache.Delete(deviceID) }
+// deviceActiveEpoch changes on every forget, so a lookup racing it doesn't
+// cache a stale answer (see deviceActive).
+var deviceActiveEpoch atomic.Uint64
 
-// RevokeDevice invalidates every token of deviceID, keeping its profiles.
-// Only UnrevokeDevice re-enables it.
+func forgetDeviceActive(deviceID string) {
+	deviceActiveEpoch.Add(1)
+	deviceActiveCache.Delete(deviceID)
+}
+
+// RevokeDevice invalidates every token of deviceID for good (its generation
+// changes), keeping its profiles. Only UnrevokeDevice lets it pair again.
 func RevokeDevice(deviceID string) error {
 	_, err := managers.DB.Exec(
-		`UPDATE pileus_devices SET revoked_at=CURRENT_TIMESTAMP
+		`UPDATE pileus_devices SET revoked_at=CURRENT_TIMESTAMP, token_gen=?
 		 WHERE device_id=? AND revoked_at IS NULL`,
-		deviceID,
+		newID(), deviceID,
 	)
 	if err == nil {
 		forgetDeviceActive(deviceID)
@@ -511,7 +592,8 @@ func RevokeDevice(deviceID string) error {
 	return err
 }
 
-// UnrevokeDevice re-enables a revoked device (its unexpired tokens work again).
+// UnrevokeDevice re-enables a revoked device: it can pair again (its old
+// tokens stay invalid, see RevokeDevice).
 func UnrevokeDevice(deviceID string) error {
 	_, err := managers.DB.Exec(
 		`UPDATE pileus_devices SET revoked_at=NULL WHERE device_id=?`,
@@ -532,6 +614,7 @@ func DeleteDevice(deviceID string) error {
 		forgetDeviceActive(deviceID)
 		managers.PlaybackLeases.ReleaseDevice(deviceID)
 		forgetDeviceAccess(deviceID)
+		downloads.M.DeleteOwner(deviceID) // its profile-less downloads
 	}
 	return err
 }
@@ -620,8 +703,9 @@ func deleteProfile(profileID string) error {
 	if err != nil {
 		return err
 	}
-	// PIN trusts/sessions and the profile's plugin secrets go with it.
+	// PIN trusts/sessions, downloads and plugin secrets go with it.
 	forgetProfileAccess(profileID)
+	downloads.M.DeleteOwner(profileID)
 	return managers.DB.DeletePluginSecretsForProfile(profileID)
 }
 

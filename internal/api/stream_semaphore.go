@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -30,7 +31,7 @@ var playlistInflight = &inflightMap{
 // was shared from another caller. A waiter whose ctx ends (player hung up)
 // stops waiting; fn itself is never cancelled by it, the other callers still
 // need the result.
-func (m *inflightMap) Do(ctx context.Context, key string, fn func() ([]byte, error)) ([]byte, error, bool) {
+func (m *inflightMap) Do(ctx context.Context, key string, fn func() ([]byte, error)) (result []byte, err error, shared bool) {
 	m.mu.Lock()
 	if e, ok := m.inflight[key]; ok {
 		m.mu.Unlock()
@@ -45,12 +46,18 @@ func (m *inflightMap) Do(ctx context.Context, key string, fn func() ([]byte, err
 	m.inflight[key] = e
 	m.mu.Unlock()
 
+	// Deferred: a panic in fn must not leave the key in flight forever, with
+	// every later caller waiting on it.
+	defer func() {
+		if r := recover(); r != nil {
+			e.result, e.err = nil, fmt.Errorf("inflight %s: panic: %v", key, r)
+		}
+		close(e.done)
+		m.mu.Lock()
+		delete(m.inflight, key)
+		m.mu.Unlock()
+		result, err, shared = e.result, e.err, false
+	}()
 	e.result, e.err = fn()
-	close(e.done)
-
-	m.mu.Lock()
-	delete(m.inflight, key)
-	m.mu.Unlock()
-
 	return e.result, e.err, false
 }

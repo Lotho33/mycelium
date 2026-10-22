@@ -18,7 +18,7 @@ import (
 //   - optional proxy (proxyURL "socks5://host:1080" or "http://host:8888",
 //     "" = direct): with one, every connection goes through it and a proxy
 //     failure fails the request, never falling back to direct;
-//   - 30-second timeouts;
+//   - per-request deadlines (the plugin's timeout), maxSDKTimeout at most;
 //   - on the direct path, the SSRF guard (core.GuardedDialContext): plugins
 //     fetch arbitrary URLs, and this keeps them off loopback, link-local and
 //     metadata addresses (LAN too with MYCELIUM_PROXY_BLOCK_PRIVATE=1). With
@@ -75,9 +75,11 @@ func NewPluginHTTPClient(proxyURL string) *http.Client {
 		ForceAttemptHTTP2:     false,
 	}
 
+	// Every SDK request carries its own deadline (the plugin's timeout, up to
+	// maxSDKTimeout): the client-wide one is only a backstop above it.
 	return &http.Client{
 		Transport:     transport,
-		Timeout:       30 * time.Second,
+		Timeout:       maxSDKTimeout,
 		CheckRedirect: preservePOSTOnRedirect,
 	}
 }

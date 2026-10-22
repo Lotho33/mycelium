@@ -35,8 +35,8 @@ and exposes their output through one unified API.
 │                        mycelium core                          │
 │                                                              │
 │  ┌───────────┐   ┌─────────────┐   ┌───────────────────────┐  │
-│  │  Hub API  │   │  Admin API  │   │       HLS proxy       │  │
-│  │ /api/v1/* │   │  /admin/*   │   │     /proxy/*      │  │
+│  │ gRPC API  │   │  Admin API  │   │       HLS proxy       │  │
+│  │  :50051   │   │  /admin/*   │   │       /proxy/*        │  │
 │  └─────┬─────┘   └──────┬──────┘   └───────────┬───────────┘  │
 │        │                │                      │              │
 │  ┌─────▼────────────────▼──────────────────────▼──────────┐   │
@@ -283,10 +283,11 @@ selection are managed from the dashboard.
 
 ## API surface
 
-- **Hub API** (`/api/v1/*`) — consumed by clients; every route requires an
-  `X-Auth-Token` HMAC header generated per client from the dashboard.
+- **gRPC API** (`:50051`, or gRPC-web under `/grpc/`) — used by the client app;
+  every call but device pairing requires the device token issued at pairing.
 - **Admin API** (`/admin/*`) — requires a session cookie from `POST /admin/login`.
 - **HLS proxy** (`/proxy/*`) — rewrites playlists and relays segments/keys.
+  Its URLs are signed for their endpoint and expire after 48 hours.
 - **LAN discovery** — a client finds the server by broadcasting on UDP `:51900`.
 
 ---

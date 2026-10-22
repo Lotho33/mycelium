@@ -15,13 +15,16 @@ import (
 	"time"
 
 	"mycelium/internal/core"
+	"mycelium/internal/managers"
 )
 
 // --- Admin sessions ---
 //
 // Self-verifying cookie (id.expiry.hmac): nothing server-side is needed to
-// validate it, so restarts don't log the admin out. Logout adds the id to an
-// in-memory denylist until the cookie would expire.
+// validate it, so restarts don't log the admin out. The HMAC also covers the
+// current admin password hash, so a password change or a factory reset
+// invalidates every outstanding session. Logout adds the id to an in-memory
+// denylist until the cookie would expire.
 
 const adminSessionCookie = "mycelium_admin_session"
 const adminSessionTTL = 12 * time.Hour
@@ -52,9 +55,11 @@ func generateSessionToken() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
+// signAdminSession binds the token to the admin password hash in force when
+// it was minted (see the package comment above).
 func signAdminSession(id string, exp int64) string {
 	mac := hmac.New(sha256.New, adminSessionKey)
-	fmt.Fprintf(mac, "%s.%d", id, exp)
+	fmt.Fprintf(mac, "%s.%d.%s", id, exp, managers.Settings.MasterAdminHash())
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -65,26 +70,33 @@ func createAdminSession() string {
 	return fmt.Sprintf("%s.%d.%s", id, exp, signAdminSession(id, exp))
 }
 
-func isValidAdminSession(token string) bool {
-	if len(adminSessionKey) == 0 {
-		return false // never initialised — fail closed rather than accept anything
+// parseAdminSession returns the id and expiry of a correctly signed, unexpired
+// token (revocation not checked).
+func parseAdminSession(token string) (id string, exp int64, ok bool) {
+	if len(adminSessionKey) == 0 || !managers.Settings.IsSetupDone() {
+		return "", 0, false // not initialised / no admin yet — fail closed
 	}
 	parts := strings.SplitN(token, ".", 3)
 	if len(parts) != 3 {
-		return false
+		return "", 0, false
 	}
 	id, expStr, sig := parts[0], parts[1], parts[2]
 	exp, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil {
-		return false
+		return "", 0, false
 	}
 	if subtle.ConstantTimeCompare([]byte(signAdminSession(id, exp)), []byte(sig)) != 1 {
-		return false
+		return "", 0, false
 	}
 	if time.Now().Unix() >= exp {
-		return false
+		return "", 0, false
 	}
-	return !isRevokedAdminSession(id)
+	return id, exp, true
+}
+
+func isValidAdminSession(token string) bool {
+	id, _, ok := parseAdminSession(token)
+	return ok && !isRevokedAdminSession(id)
 }
 
 // revokedAdminSessions denylists a session id (not the whole token — no need
@@ -122,15 +134,16 @@ func init() {
 	}()
 }
 
+// revokeAdminSession denylists token. Only a genuine session is recorded:
+// logout is unauthenticated, so anything else would let a client grow the
+// denylist at will.
 func revokeAdminSession(token string) {
-	parts := strings.SplitN(token, ".", 3)
-	if len(parts) != 3 {
+	id, exp, ok := parseAdminSession(token)
+	if !ok {
 		return
 	}
-	id := parts[0]
-	exp, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		exp = time.Now().Add(adminSessionTTL).Unix() // fallback: denylist for a full TTL
+	if max := time.Now().Add(adminSessionTTL).Unix(); exp > max {
+		exp = max
 	}
 	revokedAdminSessionsMu.Lock()
 	revokedAdminSessions[id] = exp

@@ -422,3 +422,36 @@ func TestProxySegment_RetryReadsAlongTheStreamingLeader(t *testing.T) {
 		t.Fatalf("upstream hits = %d, want 1", n)
 	}
 }
+
+// Past segmentBufferLimit the producer follows the player: the CDN slot is
+// handed back at that switch, not when the (possibly hours-long) body ends.
+func TestSegPipe_ReleasesSlotWhenItStartsStreaming(t *testing.T) {
+	p := newSegPipe()
+	released := 0
+	p.onStream = func() { released++ }
+	chunk := make([]byte, 1<<20)
+	for i := 0; i < segmentBufferLimit>>20; i++ {
+		p.Write(chunk)
+	}
+	if released != 0 {
+		t.Fatal("slot released while the segment still fits the buffer")
+	}
+	// The only reader keeps up, so the write past the limit doesn't block.
+	p.mu.Lock()
+	p.readers[0] = p.base + int64(len(p.buf))
+	p.mu.Unlock()
+	p.Write(chunk)
+	if released != 1 {
+		t.Fatalf("onStream called %d times, want 1", released)
+	}
+	p.mu.Lock()
+	p.readers[0] = p.base + int64(len(p.buf))
+	p.mu.Unlock()
+	p.Write(chunk)
+	if released != 1 {
+		t.Fatalf("onStream called %d times, want 1", released)
+	}
+	if p.base == 0 {
+		t.Fatal("bytes every reader had were not dropped")
+	}
+}

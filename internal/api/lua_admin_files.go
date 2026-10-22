@@ -11,6 +11,47 @@ import (
 
 // ─── file editor ──────────────────────────────────────────────────────────────
 
+// editorMaxFileBytes caps a file the editor opens (runtime caches can be
+// megabytes of JSON nobody edits by hand).
+const editorMaxFileBytes = 4 << 20
+
+// editorEditable reports whether rel has an extension the editor handles.
+func editorEditable(rel string) bool {
+	switch strings.ToLower(filepath.Ext(rel)) {
+	case ".lua", ".yaml", ".yml", ".json":
+		return true
+	}
+	return false
+}
+
+// editorPath resolves rel inside pluginDir for the editor: an editable
+// extension, lexically inside the directory, and no symlink on the way out
+// of it (the file itself or a parent directory).
+func editorPath(pluginDir, rel string) (string, bool) {
+	if !editorEditable(rel) {
+		return "", false
+	}
+	abs, ok := safeJoin(pluginDir, rel)
+	if !ok {
+		return "", false
+	}
+	root, err := filepath.EvalSymlinks(pluginDir)
+	if err != nil {
+		return "", false
+	}
+	if fi, err := os.Lstat(abs); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", false
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return "", false
+	}
+	if parent != root && !strings.HasPrefix(parent, root+string(os.PathSeparator)) {
+		return "", false
+	}
+	return abs, true
+}
+
 // listLuaPluginFiles returns all .lua and .yaml files inside a plugin directory.
 func listLuaPluginFiles(w http.ResponseWriter, r *http.Request) {
 	pluginID := r.PathValue("plugin_id")
@@ -31,16 +72,14 @@ func listLuaPluginFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		rel, _ := filepath.Rel(pluginDir, path)
 		rel = filepath.ToSlash(rel)
-		ext := strings.ToLower(filepath.Ext(rel))
-		if ext != ".lua" && ext != ".yaml" && ext != ".yml" && ext != ".json" {
+		if !editorEditable(rel) || d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 		info, _ := d.Info()
-		size := int64(0)
-		if info != nil {
-			size = info.Size()
+		if info == nil || info.Size() > editorMaxFileBytes {
+			return nil
 		}
-		files = append(files, fileEntry{Path: rel, Size: size})
+		files = append(files, fileEntry{Path: rel, Size: info.Size()})
 		return nil
 	})
 	if err != nil {
@@ -69,9 +108,13 @@ func getLuaPluginFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, ok := safeJoin(pluginDir, relPath)
+	abs, ok := editorPath(pluginDir, relPath)
 	if !ok {
 		http.Error(w, "path non valido", http.StatusBadRequest)
+		return
+	}
+	if fi, err := os.Stat(abs); err == nil && fi.Size() > editorMaxFileBytes {
+		http.Error(w, "file troppo grande per l'editor", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -112,14 +155,21 @@ func putLuaPluginFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, ok := safeJoin(pluginDir, relPath)
+	abs, ok := editorPath(pluginDir, relPath)
 	if !ok {
 		http.Error(w, "path non valido", http.StatusBadRequest)
 		return
 	}
 
-	if err := os.WriteFile(abs, []byte(body.Content), 0644); err != nil {
-		http.Error(w, "errore scrittura file: "+err.Error(), http.StatusInternalServerError)
+	// tmp + rename: the hot reload never reads a half-written file.
+	tmp := abs + ".tmp"
+	if err := os.WriteFile(tmp, []byte(body.Content), 0o644); err != nil {
+		http.Error(w, "errore scrittura file", http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmp, abs); err != nil {
+		os.Remove(tmp)
+		http.Error(w, "errore scrittura file", http.StatusInternalServerError)
 		return
 	}
 

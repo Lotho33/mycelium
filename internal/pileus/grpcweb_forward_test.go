@@ -8,9 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // startH2CServer runs handler behind a plaintext HTTP/2 (h2c) listener — the
@@ -22,7 +19,9 @@ func startH2CServer(t *testing.T, handler http.HandlerFunc) string {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := &http.Server{Handler: h2c.NewHandler(handler, &http2.Server{})}
+	var protos http.Protocols
+	protos.SetUnencryptedHTTP2(true)
+	srv := &http.Server{Handler: handler, Protocols: &protos}
 	go srv.Serve(lis) //nolint:errcheck
 	t.Cleanup(func() { srv.Close() })
 	return lis.Addr().String()

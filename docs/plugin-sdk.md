@@ -5,7 +5,7 @@ files plus a manifest; mycelium loads it into a sandboxed VM pool, schedules its
 background jobs, and routes client requests to it through one unified pipeline.
 
 There is no build step and no toolchain: drop the directory in `plugins/`, or
-upload a ZIP from the admin dashboard. Editing a file hot-reloads the plugin.
+upload a ZIP from the admin dashboard. Editing its files hot-reloads the plugin.
 
 ---
 
@@ -28,7 +28,7 @@ Every `*.lua` file in the directory (except `init.lua`) is available as
 ## manifest.yaml
 
 ```yaml
-id: my_plugin                 # unique; also the on-disk directory name
+id: my_plugin                 # unique; also the directory name of a dashboard install
 name: My Plugin               # shown to users
 version: 1.0.0
 author: you
@@ -94,7 +94,7 @@ tasks:
     live_refresh: true          # client can also trigger it on demand
   - function: rebuild_index
     cron: ""                    # manual-only: a button in the dashboard
-    timeout_seconds: 600        # overrides the 30 s default for this task
+    timeout_seconds: 600        # overrides the 90 s default for this task
 ```
 
 `cron: ""` means the task never runs on its own — it only appears in the
@@ -276,6 +276,10 @@ local val, hit = mycelium.cache.remember(key, ttl_seconds, function()
 end)
 ```
 
+`cache.get` tells a stored empty string (`"", true`: e.g. a cached "nothing
+found") from a missing key (`"", false`). `remember` results are shared by
+every profile (the key is per plugin, not per profile).
+
 `remember` stores the value as JSON (tables come back as tables), so use it
 alone on its keys rather than mixing it with `get`/`set`. While one state of
 the plugin computes a key, the others asking for it wait for that result
@@ -287,11 +291,11 @@ Named token buckets shared by every state of the plugin, to keep an external
 service under its limit instead of running into 429s.
 
 ```lua
-mycelium.ratelimit.set("jikan", 1, 3)          -- 1 request/s, bursts of 3 (top level is fine)
-if mycelium.ratelimit.wait("jikan", 2) then    -- false if a token is more than 2 s away (default 30, max 60)
+mycelium.ratelimit.set("api", 1, 3)            -- 1 request/s, bursts of 3 (top level is fine)
+if mycelium.ratelimit.wait("api", 2)   then    -- false if a token is more than 2 s away (default 30, max 60)
     -- call the service
 end
-mycelium.ratelimit.pause("jikan", 60)          -- e.g. after a 429: no tokens for 60 s
+mycelium.ratelimit.pause("api", 60)            -- e.g. after a 429: no tokens for 60 s
 ```
 
 `wait` on a bucket that was never `set` returns at once. In a user-facing call
@@ -361,17 +365,33 @@ local infos = mycelium.image.analyze_logos(urls)   -- up to 32, 3 at a time; inf
 ```lua
 mycelium.log("message")                 -- into the plugin's log buffer
 mycelium.progress("loading", "text")    -- narrate a long resolve to the client
-                                        -- status: "" | success | warning | error
+                                        -- status: "loading" | "" | success | warning | error
 mycelium.sleep(milliseconds)
 ```
+
+### Limits and timeouts
+
+- Entrypoint calls: 90 s (read entrypoints — search, filters, details,
+  browse, streams — 45 s); a task's own `timeout_seconds` overrides it.
+- `init.lua`'s top level (and the plugin's modules, loaded at start): 30 s,
+  and no network — it should only define functions and tables. The plugin's
+  modules are loaded before the first call: define per-call state in locals,
+  not in globals (globals a call adds are wiped after it).
+- `network.get/post/fetch`: `timeout_seconds` up to 90 s; a response over
+  32 MiB (8 MiB per request in `get_many`) is an error, not a cut body. Only
+  GET/HEAD are retried on a transport error.
+- `string.rep` results are capped at 32 MiB; `coroutine` is not available.
+- `storage.*` paths can't leave the plugin directory, symlinks included.
 
 ---
 
 ## Background tasks
 
-A `tasks` entry runs its function on a schedule. At boot, a task whose last run
-is older than its `@every` interval runs once immediately; then it follows the
-cron. Tasks of the same plugin never overlap; a heavy task run is capped by
+A `tasks` entry runs its function on a schedule. At boot, a task that never
+ran, or whose last run is older than its `@every` interval, runs once
+immediately; then it follows the cron (a calendar expression runs only at its
+times). Tasks of the same plugin never overlap, and a tick that finds the same
+task still running is skipped; a heavy task run is capped by
 `timeout_seconds`.
 
 Use tasks for catalog sync, domain-health checks, or index rebuilds. Report
@@ -398,8 +418,10 @@ browser service's `/v1/fetch` relay when one is configured
 
 - **Dashboard:** ZIP the plugin directory (the folder itself as the single
   top-level entry) and upload it under **Admin → Plugins → Install**.
-- **Filesystem:** drop the directory into `plugins/` and restart (or let
-  hot-reload pick it up).
+- **Filesystem:** drop the directory into `plugins/` and restart. Edits to a
+  loaded plugin are hot-reloaded: its `.lua` files reload its Lua states, a
+  changed `manifest.yaml` reloads the whole plugin. A new plugin directory
+  needs a restart (or a dashboard install).
 
-A plugin with unfilled required settings stays *stopped* until you configure and
+A plugin with unfilled required settings stays *waiting* until you configure and
 start it from the dashboard.

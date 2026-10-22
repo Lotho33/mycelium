@@ -23,6 +23,10 @@ var (
 type SettingsManager struct {
 	data map[string]any
 	mu   sync.RWMutex
+	// loadErr is set when config.json exists but can't be read or parsed:
+	// the server must not start (it would look unconfigured and reopen
+	// /setup), and nothing may overwrite the file.
+	loadErr error
 }
 
 var Settings = &SettingsManager{
@@ -37,10 +41,10 @@ func (s *SettingsManager) Load() {
 	merged := make(map[string]any)
 
 	// 4. config.json
-	if fileData, err := os.ReadFile(configPath); err == nil {
-		if err := json.Unmarshal(fileData, &merged); err != nil {
-			log.Printf("Errore lettura config.json: %v", err)
-		}
+	s.loadErr = nil
+	if _, err := readConfigFile(merged); err != nil {
+		s.loadErr = err
+		log.Printf("Errore lettura config.json: %v", err)
 	}
 
 	// 3. .env file
@@ -105,13 +109,9 @@ var (
 		"server_host", // address clients reach the server at, for the proxy URLs
 		// master_admin_hash is deliberately not writable here: only the one-shot
 		// setup and POST /admin/password/change write it, through SaveInternal.
-		"tmdb_bearer_token",
-		"sync_interval_hours",
-		"domain_interval_hours",
-		"plugin_",           // plugin_<id>_disabled flags
-		"enricher_bindings", // JSON map: enricher_id → []provider_id
-		"mycelium.",         // per-plugin settings: {pluginID}_{key}
-		"lua:",              // Lua plugin settings: lua:{pluginID}:global:{key}
+		"plugin_",   // plugin_<id>_disabled flags
+		"mycelium.", // per-plugin settings: {pluginID}_{key}
+		"lua:",      // Lua plugin settings: lua:{pluginID}:global:{key}
 		// No generic "pileus_" prefix: it would cover the master secret and the TLS
 		// key. Writable pileus_* keys are listed by exact name in allowedExactKeys.
 		"vpn_proxy_url",    // VPN proxy address, restored at boot
@@ -122,7 +122,6 @@ var (
 		"egress_ipv6",      // "1"/"0": prefer IPv6 on direct connections
 		"download_",        // offline downloads (internal/downloads)
 	}
-	allowedPrefixesMu sync.RWMutex
 
 	// allowedExactKeys: keys writable only by exact name, where a prefix would
 	// also match sensitive neighbours.
@@ -136,21 +135,12 @@ func isAllowedKey(key string) bool {
 	if allowedExactKeys[key] {
 		return true
 	}
-	allowedPrefixesMu.RLock()
-	defer allowedPrefixesMu.RUnlock()
 	for _, prefix := range allowedKeyPrefixes {
 		if strings.HasPrefix(key, prefix) {
 			return true
 		}
 	}
 	return false
-}
-
-// RegisterAllowedKeyPrefix lets plugins add their own config key prefixes during Init.
-func RegisterAllowedKeyPrefix(prefix string) {
-	allowedPrefixesMu.Lock()
-	allowedKeyPrefixes = append(allowedKeyPrefixes, prefix)
-	allowedPrefixesMu.Unlock()
 }
 
 func (s *SettingsManager) Save(newData map[string]any) error {
@@ -170,10 +160,11 @@ func (s *SettingsManager) SaveInternal(newData map[string]any) error {
 	defer s.mu.Unlock()
 
 	// Start from the file's own data only, so the env/secrets overlay is never
-	// persisted.
+	// persisted. A file that exists but doesn't parse is left alone: writing
+	// would replace it with newData alone and lose the admin hash and secrets.
 	fileData := make(map[string]any)
-	if existing, err := os.ReadFile(configPath); err == nil {
-		_ = json.Unmarshal(existing, &fileData)
+	if _, err := readConfigFile(fileData); err != nil {
+		return err
 	}
 	maps.Copy(fileData, newData)
 
@@ -199,6 +190,30 @@ func (s *SettingsManager) SaveInternal(newData map[string]any) error {
 	maps.Copy(s.data, newData)
 	log.Println("⚙️ Configurazioni salvate correttamente.")
 	return nil
+}
+
+// readConfigFile decodes config.json into into. A missing file is not an
+// error (found=false).
+func readConfigFile(into map[string]any) (found bool, err error) {
+	raw, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return true, fmt.Errorf("lettura %s: %w", configPath, err)
+	}
+	if err := json.Unmarshal(raw, &into); err != nil {
+		return true, fmt.Errorf("%s non è JSON valido (correggilo o ripristina un backup): %w", configPath, err)
+	}
+	return true, nil
+}
+
+// LoadError reports why the last Load couldn't read config.json (nil when
+// it could, or when there is none yet).
+func (s *SettingsManager) LoadError() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loadErr
 }
 
 func (s *SettingsManager) Get(key string, def any) any {
@@ -234,17 +249,4 @@ func (s *SettingsManager) MasterAdminHash() string {
 
 func (s *SettingsManager) IsSetupDone() bool {
 	return s.MasterAdminHash() != ""
-}
-
-// GetAllAsStrings returns a string copy of all settings for passing to plugins.
-func (s *SettingsManager) GetAllAsStrings() map[string]string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make(map[string]string, len(s.data))
-	for k, v := range s.data {
-		if str, ok := v.(string); ok {
-			out[k] = str
-		}
-	}
-	return out
 }

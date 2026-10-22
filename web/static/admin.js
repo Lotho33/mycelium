@@ -5,7 +5,6 @@ let _logEventSource = null;
 let _editorPlugin = null;   // { id, name, dir }
 let _editorDirty = false;
 let _editorCurrentPath = null;
-const _tabOnOpen = {};      // `${pid}:${tabId}` → callback fn (replaces eval)
 
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function apiFetch(url, opts = {}) {
@@ -55,7 +54,6 @@ function setInstalling(on) {
 // it to build onclick="fn('${...}')": attribute entities are decoded before
 // the JS runs. Use data-* attributes and delegated listeners instead.
 const esc = str => String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-function fmtBytes(b) { if (!b||b<=0) return '—'; return b<1048576?(b/1024).toFixed(0)+' KB':(b/1048576).toFixed(1)+' MB'; }
 function fmtUptime(s) {
     if (!s||s<=0) return '—';
     const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;
@@ -262,25 +260,25 @@ async function loadPluginMemory() {
                 states.some(s => s.truncated) ? 'troncato' : '',
             ].filter(Boolean).join(' · ');
             const top = (p.top || []).map(it => `<div class="flex gap-2 font-mono">
-                    <span class="truncate min-w-0 flex-1 text-gray-400">${escapeHtml(it.path)}</span>
+                    <span class="truncate min-w-0 flex-1 text-gray-400">${esc(it.path)}</span>
                     <span class="text-gray-600">${it.entries} voci</span>
                     <span class="text-gray-300">${_memFmt(it.bytes)}</span>
                 </div>`).join('');
             const idx = (p.indexes || []).map(ix => `<div class="flex gap-2 font-mono">
-                    <span class="truncate min-w-0 flex-1 text-gray-400">indice ${escapeHtml(ix.name)} (condiviso)</span>
+                    <span class="truncate min-w-0 flex-1 text-gray-400">indice ${esc(ix.name)} (condiviso)</span>
                     <span class="text-gray-600">${ix.records} record · ${ix.keys} chiavi</span>
                     <span class="text-gray-300">${_memFmt(ix.bytes)}</span>
                 </div>`).join('');
             return `<details class="border-b border-gray-800/40 py-2">
                 <summary class="flex items-center gap-2 cursor-pointer">
-                    <span class="text-gray-200 font-semibold truncate min-w-0">${escapeHtml(p.name || p.plugin_id)}</span>
+                    <span class="text-gray-200 font-semibold truncate min-w-0">${esc(p.name || p.plugin_id)}</span>
                     <span class="text-[10px] text-gray-600 font-mono">${states.length}/${p.pool_size} VM</span>
                     <span class="ml-auto font-mono text-gray-300">${_memFmt(total)}</span>
                 </summary>
                 <div class="h-1.5 rounded-full mt-1 mb-2" style="background:rgba(55,65,81,.5)">
                     <div class="h-1.5 rounded-full" style="width:${pct}%;background:#0284c7"></div>
                 </div>
-                <div class="text-[11px] text-gray-500 mb-1 font-mono">per VM: ${perVM || '—'}${notes ? ' · ' + escapeHtml(notes) : ''} · ${p.took_ms} ms</div>
+                <div class="text-[11px] text-gray-500 mb-1 font-mono">per VM: ${perVM || '—'}${notes ? ' · ' + esc(notes) : ''} · ${p.took_ms} ms</div>
                 <div class="space-y-1 text-[11px]">${idx}${top}</div>
             </details>`;
         }).join('');
@@ -467,12 +465,9 @@ async function pollPairingStatus() {
 }
 
 // ─── Pileus devices (token revocation) ───────────────────────────────────────
-// escapeHtml: device_id (chosen by the device) and label (a device can
-// rename itself) are untrusted text. Never build these rows with raw
-// interpolation into innerHTML or an inline onclick(...) string.
-function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// device_id (chosen by the device) and label (a device can rename itself)
+// are untrusted text: always esc() them, never interpolate them raw into
+// innerHTML or an inline onclick(...) string.
 
 async function loadPileusDevices() {
     const box = document.getElementById('pileus-devices');
@@ -483,8 +478,8 @@ async function loadPileusDevices() {
     if (!devs.length) { box.textContent = 'Nessun dispositivo accoppiato.'; return; }
     const fmt = s => s ? new Date(s * 1000).toLocaleString() : '—';
     box.innerHTML = devs.map(d => {
-        const idAttr = escapeHtml(d.device_id);
-        const name = escapeHtml(d.label || d.device_id);
+        const idAttr = esc(d.device_id);
+        const name = esc(d.label || d.device_id);
         const revokeBtn = d.revoked
             ? `<button data-id="${idAttr}" data-action="unrevoke" class="pileus-dev-btn text-[11px] text-emerald-400 hover:text-emerald-300">Ripristina</button>`
             : `<button data-id="${idAttr}" data-action="revoke" class="pileus-dev-btn text-[11px] text-red-400 hover:text-red-300">Revoca</button>`;
@@ -556,12 +551,12 @@ async function loadPileusProfiles() {
     const profiles = (await r.json()).profiles || [];
     if (!profiles.length) { box.textContent = 'Nessun profilo creato.'; return; }
     box.innerHTML = profiles.map(p => {
-        const idAttr = escapeHtml(p.profile_id);
-        const name = escapeHtml(p.name);
+        const idAttr = esc(p.profile_id);
+        const name = esc(p.name);
         const trusted = (p.trusted_devices || []).map(t => {
-            const label = escapeHtml(t.label || t.device_id.slice(0, 8));
+            const label = esc(t.label || t.device_id.slice(0, 8));
             return `<span class="inline-flex items-center gap-1 mr-2">${label}
-                <button data-id="${idAttr}" data-device="${escapeHtml(t.device_id)}" data-action="untrust" class="pileus-profile-btn text-gray-500 hover:text-red-400" title="Revoca la fiducia di questo dispositivo">✕</button></span>`;
+                <button data-id="${idAttr}" data-device="${esc(t.device_id)}" data-action="untrust" class="pileus-profile-btn text-gray-500 hover:text-red-400" title="Revoca la fiducia di questo dispositivo">✕</button></span>`;
         }).join('');
         const pinInfo = p.pin_protected
             ? `<div class="text-[11px] text-gray-500 mt-0.5">🔒 PIN attivo${trusted ? ' · dispositivi fidati: ' + trusted : ' · nessun dispositivo fidato'}</div>`
@@ -674,14 +669,6 @@ async function deletePileusProfile(id) {
     loadPileusProfiles();
 }
 
-function updatePluginRes(resources) {
-    for (const [pid, s] of Object.entries(resources)) {
-        const el = document.getElementById('plugin-res-'+pid.replace(/\./g,'-'));
-        if (!el) continue;
-        el.textContent = `PID ${s.pid} · ${fmtBytes(s.mem_bytes)} · CPU ${(s.cpu_percent??0).toFixed(1)}%`;
-    }
-}
-
 // ─── Upload ───────────────────────────────────────────────────────────────────
 const luaInput = document.getElementById('lua_plugin_input');
 if (luaInput) {
@@ -734,39 +721,22 @@ async function loadPlugins() {
 
 async function _loadPluginsOnce() {
     await loadEgress(); // popola _egressProfiles per la <select> "Uscita" delle card
-    const [infoR, bindR] = await Promise.all([
-        apiFetch('/admin/plugins/info'),
-        apiFetch('/admin/enricher-bindings'),
-    ]);
+    const infoR = await apiFetch('/admin/plugins/info');
     if (!infoR?.ok) return;
     const schemas = await infoR.json();
-    const bindData = bindR?.ok ? await bindR.json() : { bindings:{}, providers:[] };
-    const enricherBindings = bindData.bindings || {};
-    const availProviders   = bindData.providers || [];
 
     const cont = document.getElementById('plugins-container');
-
-    const lua = {}, providers = {}, enrichers = {};
-    for (const [pid, d] of Object.entries(schemas)) {
-        if (d.plugin_type === 'lua') lua[pid] = d;
-        else if (d.plugin_type === 'enricher') enrichers[pid] = d;
-        else providers[pid] = d;
-    }
-    const ordered = [
-        ...Object.entries(lua).map(([p, d]) => [p, d, false]),
-        ...Object.entries(providers).map(([p, d]) => [p, d, false]),
-        ...Object.entries(enrichers).map(([p, d]) => [p, d, true]),
-    ];
-    const snapOf = (pid, d) => JSON.stringify([d, enricherBindings[pid] || [], availProviders, _egressProfiles]);
-    const sig = ordered.map(([p, d]) => p + ':' + d.plugin_type).join('|');
+    const ordered = Object.entries(schemas);
+    const snapOf = (pid, d) => JSON.stringify([d, _egressProfiles]);
+    const sig = ordered.map(([p]) => p).join('|');
 
     // Same plugins as on screen: update only what changed.
     if (sig === _pluginsSig) {
-        for (const [pid, d, isEnr] of ordered) {
+        for (const [pid, d] of ordered) {
             const snap = snapOf(pid, d);
             if (snap === _pluginSnap[pid]) continue;
             _pluginSnap[pid] = snap;
-            patchPluginCard(pid, buildCard(pid, d, isEnr, enricherBindings, availProviders));
+            patchPluginCard(pid, buildCard(pid, d));
         }
         return;
     }
@@ -787,18 +757,10 @@ async function _loadPluginsOnce() {
         cont.innerHTML = `<p class="text-gray-600 text-sm text-center py-8">Nessun plugin installato.</p>`;
         return;
     }
-    for (const [pid, d] of ordered) _pluginSnap[pid] = snapOf(pid, d);
-
-    const secHdr = (label, color) => {
-        const d = document.createElement('div');
-        d.className = 'flex items-center gap-3 pt-2 pb-1';
-        d.innerHTML = `<span class="text-[10px] font-bold uppercase tracking-widest ${color}">${label}</span><div class="flex-1 border-t border-gray-800/80"></div>`;
-        return d;
-    };
-
-    if (Object.keys(lua).length)       { cont.appendChild(secHdr('Plugin Lua','text-sky-500')); for (const [p,d] of Object.entries(lua))       cont.appendChild(buildCard(p,d,false,enricherBindings,availProviders)); }
-    if (Object.keys(providers).length) { cont.appendChild(secHdr('Provider','text-blue-500'));    for (const [p,d] of Object.entries(providers)) cont.appendChild(buildCard(p,d,false,enricherBindings,availProviders)); }
-    if (Object.keys(enrichers).length) { cont.appendChild(secHdr('Enricher','text-purple-500'));  for (const [p,d] of Object.entries(enrichers)) cont.appendChild(buildCard(p,d,true, enricherBindings,availProviders)); }
+    for (const [pid, d] of ordered) {
+        _pluginSnap[pid] = snapOf(pid, d);
+        cont.appendChild(buildCard(pid, d));
+    }
     for (const [pid, tab] of Object.entries(reopen)) {
         const dr = document.getElementById(`drawer-${pid}`);
         if (!dr) continue;
@@ -825,40 +787,35 @@ function patchPluginCard(pid, fresh) {
 }
 
 // ─── Card builder ─────────────────────────────────────────────────────────────
-function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
-    const isLua     = data.plugin_type === 'lua';
+function buildCard(pid, data) {
     const isEnabled = data.is_active !== false;
     const isReady   = data.ready === true;
-    const isProcess = data.process === true;
     const cfgStatus = data.status || 'not_configured';
     const fields    = data.fields || [];
     const tasks     = data.tasks  || [];
 
     // Runtime status
     const rs     = data.runtime_status || {};
-    const rLabel = rs.label  || (isReady ? 'ready' : isProcess ? 'running' : 'stopped');
+    const rLabel = rs.label  || (isReady ? 'ready' : 'stopped');
     const rDetail= rs.detail || '';
 
     const dotCls = { ready:'bg-emerald-400 shadow shadow-emerald-400/40',
                      syncing:'bg-yellow-400 shadow shadow-yellow-400/40 pulse-dot',
                      needs_config:'bg-amber-500', error:'bg-red-500' }[rLabel]
-                || (isReady?'bg-emerald-400 shadow shadow-emerald-400/40': isProcess?'bg-yellow-400':'bg-gray-600');
+                || (isReady?'bg-emerald-400 shadow shadow-emerald-400/40':'bg-gray-600');
     // The dot carries the state (color), with the detail in its title.
     const dotTitle = rDetail ? `${rLabel}: ${rDetail}` : rLabel;
 
     const borderCls = !isEnabled ? 'border-gray-800/60'
         : cfgStatus === 'env_error' ? 'border-red-900/60'
-        : isLua ? 'border-sky-900/60'
-        : isEnricher ? 'border-purple-900/60' : 'border-gray-800';
+        : 'border-sky-900/60';
 
 
     // ── Panel content builders ────────────────────────────────────────────────
 
     // LOG panel
-    const logEndpoint    = isLua ? `/admin/lua-plugins/logs?plugin_id=${encodeURIComponent(pid)}`
-                                 : `/admin/plugins/logs?plugin_id=${encodeURIComponent(pid)}`;
-    const logSSEEndpoint = isLua ? `/admin/lua-plugins/logs/stream?plugin_id=${encodeURIComponent(pid)}`
-                                 : `/admin/plugins/logs/stream?plugin_id=${encodeURIComponent(pid)}`;
+    const logEndpoint    = `/admin/lua-plugins/logs?plugin_id=${encodeURIComponent(pid)}`;
+    const logSSEEndpoint = `/admin/lua-plugins/logs/stream?plugin_id=${encodeURIComponent(pid)}`;
 
     const logPanelHTML = `
         <div class="space-y-2">
@@ -892,7 +849,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                             ${esc(flabel)}
                         </label>
                         <input type="checkbox"
-                            id="pluginfield_${esc(pid)}_${fkey}"
+                            id="pluginfield_${esc(pid)}_${esc(fkey)}"
                             data-bool="1"
                             ${fval === 'true' ? 'checked' : ''}
                             class="w-4 h-4 accent-blue-600 disabled:opacity-30 disabled:cursor-not-allowed">
@@ -904,7 +861,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                         ${f.required ? '<span class="text-red-500/70 text-[9px]">*</span>' : ''}
                     </label>
                     <input type="${isPass?'password':ftype==='number'?'number':'text'}"
-                        id="pluginfield_${esc(pid)}_${fkey}"
+                        id="pluginfield_${esc(pid)}_${esc(fkey)}"
                         value="${isPass?'':esc(fval)}"
                         placeholder="${isPass&&isSet?'••••••••  (già impostato)':esc(f.placeholder||f.Placeholder||'')}"
                         class="w-full panel border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono
@@ -913,11 +870,11 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             }).join('')}
             <button data-action="save-settings"
                 class="bg-blue-700 hover:bg-blue-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">
-                Salva${isLua?'':' e riavvia'}
+                Salva
             </button>
         </div>` : `<p class="text-xs text-gray-600">Nessuna impostazione configurabile.</p>`;
 
-    // TASKS panel (Lua only)
+    // TASKS panel
     const tasksPanelHTML = tasks.length > 0 ? `
         <div class="space-y-2">
             ${tasks.map(t => `
@@ -933,39 +890,9 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
             </div>`).join('')}
         </div>` : `<p class="text-xs text-gray-600">Nessun task manuale disponibile.</p>`;
 
-    // BINDINGS panel (enricher)
-    const currentBound = enricherBindings[pid] || [];
-    const bindingsPanelHTML = isEnricher ? `
-        <div class="space-y-2">
-            <p class="text-[11px] text-gray-500 mb-2">Provider collegati a questo enricher:</p>
-            ${availProviders.length === 0 ? `<p class="text-xs text-gray-600">Nessun provider attivo.</p>` :
-              availProviders.map(provId => `
-            <label class="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" id="bind_${esc(pid)}_${provId.replace(/\./g,'__')}" ${currentBound.includes(provId)?'checked':''}
-                    class="rounded accent-purple-500">
-                <span class="text-xs font-mono text-gray-300">${esc(provId)}</span>
-            </label>`).join('')}
-            <button data-action="save-binding"
-                class="mt-1 bg-purple-700 hover:bg-purple-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">
-                Salva
-            </button>
-        </div>` : '';
-
-    // CATALOGS panel
-    const caps = data.capabilities || [];
-    const hasCatalogs = !isEnricher && (caps.includes('static_catalog') || caps.includes('sections'));
-    const catalogsPanelHTML = hasCatalogs ? `
-        <div>
-            <div id="catalogs-list-${esc(pid)}" class="space-y-1.5 mb-3"><p class="text-xs text-gray-600">Clicca per caricare…</p></div>
-            <button data-action="save-catalogs"
-                class="bg-teal-700 hover:bg-teal-600 text-white text-xs px-4 py-1.5 rounded-lg font-semibold transition">
-                Salva ordine
-            </button>
-        </div>` : '';
-
-    // EGRESS panel (Lua only): the network exit of the video flow
+    // EGRESS panel: the network exit of the video flow
     const curEgress = data.egress || 'direct';
-    const egressPanelHTML = !isLua ? '' : `
+    const egressPanelHTML = `
         <div class="space-y-2">
             <p class="text-[11px] text-gray-500 mb-2">Uscita di rete per il flusso video di questo plugin. Le uscite si gestiscono in <b>VPN → Uscite di rete</b>.</p>
             <select id="pluginegress_${esc(pid)}"
@@ -981,10 +908,8 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     const panelTabs = [
         { id:'log',      label:'Log',         html: logPanelHTML,      always: true },
         { id:'settings', label:'Impostazioni', html: settingsPanelHTML, always: true },
-        ...(tasks.length > 0            ? [{ id:'tasks',    label:'Task',    html: tasksPanelHTML    }] : []),
-        ...(isLua                      ? [{ id:'egress',   label:'Uscita',  html: egressPanelHTML   }] : []),
-        ...(isEnricher                  ? [{ id:'bindings', label:'Binding', html: bindingsPanelHTML }] : []),
-        ...(hasCatalogs                 ? [{ id:'catalogs', label:'Cataloghi',html: catalogsPanelHTML, onOpen: () => loadCatalogsPanel(pid) }] : []),
+        ...(tasks.length > 0 ? [{ id:'tasks', label:'Task', html: tasksPanelHTML }] : []),
+        { id:'egress', label:'Uscita', html: egressPanelHTML },
     ];
 
     // ── Assemble card ─────────────────────────────────────────────────────────
@@ -998,33 +923,19 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
     // this card element but changes the state.
     card.dataset.enabled = isEnabled ? '1' : '0';
 
-    const resId     = 'plugin-res-'     + esc(pid.replace(/\./g,'-'));
-
-    const editBtn = isLua
-        ? `<button data-action="open-editor"
-               class="text-[10px] text-gray-500 hover:text-gray-300 transition">Codice</button>` : '';
-
-    // Enable/disable toggle: non-Lua plugins only; Lua plugins have the
-    // start/stop lifecycle (luaOps).
-    const toggleBtn = isLua ? '' : `<button data-action="toggle-status"
-               class="text-[10px] ${isEnabled?'text-gray-600 hover:text-gray-400':'text-emerald-600 hover:text-emerald-400'} transition">
-               ${isEnabled?'Disabilita':'Abilita'}</button>`;
+    const editBtn = `<button data-action="open-editor"
+               class="text-[10px] text-gray-500 hover:text-gray-300 transition">Codice</button>`;
     const uninstallBtn = `<button data-action="uninstall"
                class="text-[10px] text-gray-700 hover:text-red-400 transition" title="Disinstalla">Elimina</button>`;
-    // Lua only: clears the plugin's data (it stays installed), unlike "Elimina".
-    const wipeDataBtn = isLua ? `<button data-action="wipe-data"
-               class="text-[10px] text-gray-700 hover:text-amber-400 transition" title="Cancella cache/dati di questo plugin (Redis + file su disco), senza disinstallarlo">Cancella dati</button>` : '';
+    // Clears the plugin's data (it stays installed), unlike "Elimina".
+    const wipeDataBtn = `<button data-action="wipe-data"
+               class="text-[10px] text-gray-700 hover:text-amber-400 transition" title="Cancella cache/dati di questo plugin (Redis + file su disco), senza disinstallarlo">Cancella dati</button>`;
 
-    const gRPCOps = isLua ? '' : isProcess
-        ? `<button data-action="stop"    class="text-[10px] text-gray-600 hover:text-red-400 transition">Stop</button>
-           <button data-action="restart" class="text-[10px] text-gray-600 hover:text-yellow-400 transition">Riavvia</button>`
-        : `<button data-action="start" class="text-[10px] text-gray-600 hover:text-emerald-400 transition">Avvia</button>`;
-
-    // Lua lifecycle: one Avvia/Ferma toggle, plus Riavvia (disabled while
-    // stopped or waiting for configuration).
+    // Lifecycle: one Avvia/Ferma toggle, plus Riavvia (disabled while stopped
+    // or waiting for configuration).
     const rState = data.run_state || (isEnabled ? 'running' : 'stopped');
-    const isOff = isLua ? (rState === 'stopped') : !isEnabled;
-    const luaOps = !isLua ? '' : (() => {
+    const isOff = rState === 'stopped';
+    const luaOps = (() => {
         const startStop = rState === 'running'
             ? `<button data-action="lua-stop"
                    class="text-[10px] text-gray-600 hover:text-red-400 transition">Ferma</button>`
@@ -1035,11 +946,6 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
         return startStop + restart;
     })();
 
-    // Register tab onOpen callbacks in the registry (avoids eval).
-    panelTabs.forEach(t => {
-        if (t.onOpen) _tabOnOpen[`${pid}:${t.id}`] = t.onOpen;
-    });
-
     // Build tab bar HTML
     const tabBarHTML = panelTabs.map((t, i) => `
         <button id="ptab-${esc(pid)}-${t.id}" data-action="switch-tab" data-tab="${esc(t.id)}"
@@ -1048,7 +954,7 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
         </button>`).join('');
 
     const panelsHTML = panelTabs.map((t, i) => `
-        <div id="ppanel-${esc(pid)}-${t.id}" class="${i>0?'hidden':''}" ${t.id==='log'?`data-is-lua="${isLua}"`:''}>
+        <div id="ppanel-${esc(pid)}-${t.id}" class="${i>0?'hidden':''}">
             ${t.html}
         </div>`).join('');
 
@@ -1064,14 +970,12 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
                 <span class="text-sm font-bold text-white">${esc(data.plugin_name||pid)}</span>
                 ${isOff ? '<span class="ml-2 text-[9px] uppercase tracking-wide text-gray-500 border border-gray-700 rounded px-1.5 py-0.5 align-middle">disabilitato</span>' : ''}
                 <p class="text-[10px] text-gray-600 font-mono mt-0.5">${esc(pid)}</p>
-                ${isLua && rState === 'waiting' ? `<p class="text-[10px] text-amber-500 mt-0.5">configurazione richiesta</p>` : ''}
-                ${isLua && rState === 'stopped' ? `<p class="text-[10px] text-gray-500 mt-0.5">fermo</p>` : ''}
-                <!-- PID/RAM/CPU for out-of-process plugins, filled by updatePluginRes() -->
-                ${isProcess && !isLua ? `<p id="${resId}" class="text-[10px] font-mono mt-0.5 text-gray-600">—</p>` : ''}
+                ${rState === 'waiting' ? `<p class="text-[10px] text-amber-500 mt-0.5">configurazione richiesta</p>` : ''}
+                ${rState === 'stopped' ? `<p class="text-[10px] text-gray-500 mt-0.5">fermo</p>` : ''}
             </div>
             <!-- Actions -->
             <div class="flex items-center gap-x-2.5 gap-y-1 shrink-0 flex-wrap justify-end ml-auto">
-                ${gRPCOps}${luaOps}${editBtn}${toggleBtn}${wipeDataBtn}${uninstallBtn}
+                ${luaOps}${editBtn}${wipeDataBtn}${uninstallBtn}
             </div>
         </div>
         <!-- Expandable drawer -->
@@ -1109,19 +1013,13 @@ function buildCard(pid, data, isEnricher, enricherBindings, availProviders) {
         switch (btn.dataset.action) {
             case 'clear-log':    clearPluginLog(pid); break;
             case 'refresh-log':  refreshPluginLogs(pid, logEndpoint); break;
-            case 'save-settings':  savePluginSettings(pid, isLua, btn); break;
+            case 'save-settings':  savePluginSettings(pid, btn); break;
             case 'run-task':       runLuaTask(pid, btn.dataset.task); break;
-            case 'save-binding':   saveEnricherBinding(pid, btn); break;
-            case 'save-catalogs':  saveCatalogs(pid, btn); break;
             case 'save-egress':    savePluginEgress(pid, btn); break;
             case 'switch-tab':     switchPluginTab(pid, btn.dataset.tab); break;
             case 'open-editor':    openEditor(pid, data.plugin_name || pid); break;
-            case 'toggle-status':  if (!_installing) togglePluginStatus(pid, card.dataset.enabled !== '1'); break;
-            case 'uninstall':      if (!_installing) doUninstallPlugin(pid, isLua); break;
+            case 'uninstall':      if (!_installing) doUninstallPlugin(pid); break;
             case 'wipe-data':      if (!_installing) doWipePluginData(pid, data.plugin_name || pid); break;
-            case 'stop':           if (!_installing) doStopPlugin(pid); break;
-            case 'restart':        if (!_installing) doRestartPlugin(pid); break;
-            case 'start':          if (!_installing) doRestartPlugin(pid, true); break;
             case 'lua-start':      if (!_installing) luaPluginState(pid, 'start'); break;
             case 'lua-stop':       if (!_installing) luaPluginState(pid, 'stop'); break;
             case 'lua-restart':    if (!_installing) luaPluginState(pid, 'restart'); break;
@@ -1145,15 +1043,12 @@ function switchPluginTab(pid, tabId) {
     if (activeBtn) activeBtn.className = 'px-3 py-1.5 text-[11px] font-semibold transition text-blue-400 border-b border-blue-500';
     // SSE: connect on log, disconnect otherwise
     if (tabId === 'log') {
-        const logEndpoint    = `/admin/${document.getElementById(`ppanel-${pid}-log`)?.dataset.isLua==='true' ? 'lua-plugins' : 'plugins'}/logs?plugin_id=${encodeURIComponent(pid)}`;
+        const logEndpoint    = `/admin/lua-plugins/logs?plugin_id=${encodeURIComponent(pid)}`;
         const logSSEEndpoint = logEndpoint.replace('/logs?', '/logs/stream?');
         openPluginLog(pid, logEndpoint, logSSEEndpoint);
     } else {
         disconnectPluginLogSSE(pid);
     }
-    // Fire onOpen callback from registry (no eval).
-    const cb = _tabOnOpen[`${pid}:${tabId}`];
-    if (cb) cb();
 }
 
 // ─── Plugin log ───────────────────────────────────────────────────────────────
@@ -1229,73 +1124,7 @@ async function runLuaTask(pid, task) {
 }
 
 // ─── Catalogs ─────────────────────────────────────────────────────────────────
-async function loadCatalogsPanel(pid) {
-    const list = document.getElementById(`catalogs-list-${pid}`);
-    if (!list || list.dataset.loaded === pid) return;
-    list.innerHTML = '<p class="text-xs text-gray-600">Caricamento…</p>';
-    const r = await apiFetch(`/admin/plugins/catalogs?plugin_id=${encodeURIComponent(pid)}`);
-    if (!r?.ok) { list.innerHTML = '<p class="text-xs text-red-500">Errore.</p>'; return; }
-    const { catalogs=[] } = await r.json();
-    if (!catalogs.length) { list.innerHTML = '<p class="text-xs text-gray-600">Nessun catalogo.</p>'; return; }
-    catalogs.sort((a,b) => a.order-b.order);
-    list.innerHTML = '';
-    catalogs.forEach(c => {
-        const row = document.createElement('div');
-        row.className = 'catalog-row flex items-center gap-2 panel border border-gray-800/60 rounded-lg px-3 py-1.5';
-        row.dataset.id = c.id;
-        row.innerHTML = `
-            <div class="flex flex-col gap-0"><button onclick="moveCatalogRow(this,-1)" class="text-gray-700 hover:text-white text-[9px] leading-none">▲</button>
-            <button onclick="moveCatalogRow(this,1)" class="text-gray-700 hover:text-white text-[9px] leading-none">▼</button></div>
-            <label class="flex items-center gap-2 flex-1 cursor-pointer min-w-0">
-                <input type="checkbox" class="catalog-toggle accent-teal-500 shrink-0" ${c.enabled?'checked':''}>
-                <span class="text-xs text-gray-300 font-medium truncate">${esc(c.name)}</span>
-                <span class="text-[10px] text-gray-600 font-mono shrink-0">${esc(c.id)}</span>
-            </label>`;
-        list.appendChild(row);
-    });
-    list.dataset.loaded = pid;
-}
-function moveCatalogRow(btn, dir) {
-    const row = btn.closest('.catalog-row'), list = row.parentElement;
-    if (dir===-1 && row.previousElementSibling) list.insertBefore(row, row.previousElementSibling);
-    else if (dir===1 && row.nextElementSibling) list.insertBefore(row.nextElementSibling, row);
-}
-async function saveCatalogs(pid, btn) {
-    const list = document.getElementById(`catalogs-list-${pid}`);
-    if (!list) return;
-    const enabled=[], order=[];
-    list.querySelectorAll('.catalog-row').forEach(r => {
-        order.push(r.dataset.id);
-        if (r.querySelector('.catalog-toggle').checked) enabled.push(r.dataset.id);
-    });
-    if (btn) btn.disabled = true;
-    try {
-        const r = await apiFetch('/admin/plugins/catalogs',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:pid,enabled,order})});
-        if (r?.ok) { showToast('Cataloghi salvati.','success'); list.dataset.loaded=''; }
-        else showToast(await apiErrorMessage(r, 'Errore salvataggio cataloghi.'), 'error');
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-}
-
-// ─── Settings / binding ───────────────────────────────────────────────────────
-async function saveEnricherBinding(eid, btn) {
-    const bound = [];
-    document.querySelectorAll(`[id^="bind_${eid}_"]`).forEach(cb => {
-        if (cb.checked) bound.push(cb.id.slice(`bind_${eid}_`.length).replace(/__/g,'.'));
-    });
-    if (btn) btn.disabled = true;
-    try {
-        const r1 = await apiFetch('/admin/enricher-bindings');
-        if (!r1?.ok) { showToast(await apiErrorMessage(r1, 'Errore lettura binding.'), 'error'); return; }
-        const { bindings={} } = await r1.json(); bindings[eid] = bound;
-        const r = await apiFetch('/admin/settings/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enricher_bindings:JSON.stringify(bindings)})});
-        showToast(r?.ok?'Collegamento salvato.':await apiErrorMessage(r, 'Errore salvataggio.'), r?.ok?'success':'error');
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-}
-async function savePluginSettings(pid, isLua, btn) {
+async function savePluginSettings(pid, btn) {
     const payload = {};
     document.querySelectorAll(`[id^="pluginfield_${pid}_"]`).forEach(el => {
         if (el.disabled) return;
@@ -1308,11 +1137,11 @@ async function savePluginSettings(pid, isLua, btn) {
         }
     });
     if (!Object.keys(payload).length) { showToast('Nessun valore da salvare.','warn'); return; }
-    const url = isLua ? `/admin/lua-plugins/settings/${encodeURIComponent(pid)}` : '/admin/settings/save';
+    const url = `/admin/lua-plugins/settings/${encodeURIComponent(pid)}`;
     if (btn) btn.disabled = true;
     try {
         const r = await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-        if (r?.ok) { showToast('Impostazioni salvate.','success'); if (!isLua) await doRestartPlugin(pid, true); }
+        if (r?.ok) showToast('Impostazioni salvate.','success');
         else showToast(await apiErrorMessage(r, 'Errore salvataggio.'), 'error');
     } finally {
         if (btn) btn.disabled = false;
@@ -1337,34 +1166,13 @@ async function savePluginEgress(pid, btn) {
     }
 }
 
-// ─── gRPC plugin ops ──────────────────────────────────────────────────────────
-async function doStopPlugin(pid) {
-    // Stopping a plugin may interrupt a stream someone is watching: confirm.
-    if (!confirm(`Fermare "${pid}"? Se qualcuno lo sta usando per uno stream, si interrompe.`)) return;
-    const r = await apiFetch('/admin/plugins/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:pid})});
-    if (r?.ok) { showToast('Plugin fermato.','info'); disconnectPluginLogSSE(pid); loadPlugins(); }
-    else showToast(await apiErrorMessage(r, 'Errore stop.'), 'error');
-}
-async function doRestartPlugin(pid, skipConfirm=false) {
-    if (!skipConfirm && !confirm(`Riavviare "${pid}"? Se qualcuno lo sta usando per uno stream, si interrompe.`)) return;
-    disconnectPluginLogSSE(pid);
-    const r = await apiFetch('/admin/plugins/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:pid})});
-    if (r?.ok) { showToast('Plugin riavviato.','success'); setTimeout(loadPlugins, 900); }
-    else showToast(await apiErrorMessage(r, 'Errore riavvio.'), 'error');
-}
-async function doUninstallPlugin(pid, isLua=false) {
+async function doUninstallPlugin(pid) {
     if (_installing) return;
     if (!confirm(`Disinstallare "${pid}"? Operazione irreversibile.`)) return;
     disconnectPluginLogSSE(pid);
-    const url = isLua ? '/admin/lua-plugins/uninstall' : '/admin/plugins/uninstall';
-    const r = await apiFetch(url,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:pid})});
+    const r = await apiFetch('/admin/lua-plugins/uninstall',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:pid})});
     if (r?.ok) { showToast('Plugin disinstallato.','info'); loadPlugins(); }
     else showToast(await apiErrorMessage(r, 'Errore disinstallazione.'), 'error');
-}
-async function togglePluginStatus(pid, turnOn) {
-    const r = await apiFetch('/admin/plugins/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plugin_id:pid,active:turnOn})});
-    if (r?.ok) { showToast(`Plugin ${turnOn?'attivato':'disattivato'}.`,'info'); loadPlugins(); }
-    else showToast(await apiErrorMessage(r, 'Errore cambio stato.'), 'error');
 }
 // Lua plugin lifecycle: start | stop | restart. start is refused (409)
 // while required settings are empty; restart only on a running plugin.
@@ -1383,11 +1191,6 @@ async function luaPluginState(pid, action) {
         showToast(d.message || await apiErrorMessage(r, 'Operazione non riuscita.'), 'error');
     }
 }
-function togglePluginPanel(panelId, ...rest) {
-    rest.forEach(id => document.getElementById(id)?.classList.add('hidden'));
-    document.getElementById(panelId)?.classList.toggle('hidden');
-}
-
 // ─── Code editor ──────────────────────────────────────────────────────────────
 async function openEditor(pid, name) {
     _editorPlugin = { id: pid, name };
@@ -1857,7 +1660,7 @@ async function loadDownloadsAdmin() {
     if (!rows.length) { box.textContent = 'Nessun download.'; return; }
     box.innerHTML = rows.map(x => {
         let name = x.series_title ? `${x.series_title}${x.season_number ? ` S${x.season_number}E${x.episode_number}` : ''} — ${x.title}` : x.title;
-        name = escapeHtml(name || x.download_id);
+        name = esc(name || x.download_id);
         let state = _dlStatus[x.status] || x.status;
         if (x.status === 'running') state += ` ${Math.round((x.progress || 0) * 100)}%`;
         if (x.status === 'scheduled' && x.scheduled_for) state += ' alle ' + new Date(x.scheduled_for * 1000).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
@@ -1865,14 +1668,14 @@ async function loadDownloadsAdmin() {
         if (x.shared) state += ' · condiviso';
         if (x.upgrade_pending) state += ' · cerco qualità migliore';
         if (x.fetched) state += ' · sul dispositivo';
-        const err = x.error ? `<div class="text-[11px] text-red-400/80 mt-0.5">${escapeHtml(x.error)}</div>` : '';
+        const err = x.error ? `<div class="text-[11px] text-red-400/80 mt-0.5">${esc(x.error)}</div>` : '';
         return `<div class="flex items-center gap-2 py-1.5 border-b border-gray-800 last:border-0">
             <div class="min-w-0">
               <div class="text-white truncate">${name}</div>
-              <div class="text-[11px] text-gray-500">${escapeHtml(x.plugin_id)} · ${escapeHtml(x.quality_label || '')} · ${size} · ${escapeHtml(state)}</div>
+              <div class="text-[11px] text-gray-500">${esc(x.plugin_id)} · ${esc(x.quality_label || '')} · ${size} · ${esc(state)}</div>
               ${err}
             </div>
-            <button data-id="${escapeHtml(x.download_id)}" class="dl-del-btn ml-auto text-[11px] text-gray-500 hover:text-red-400" title="Elimina">Elimina</button>
+            <button data-id="${esc(x.download_id)}" class="dl-del-btn ml-auto text-[11px] text-gray-500 hover:text-red-400" title="Elimina">Elimina</button>
         </div>`;
     }).join('');
 }

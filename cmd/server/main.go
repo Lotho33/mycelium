@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -137,6 +135,7 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
+	restrictUmask()
 	applyMemoryLimit()
 	log.SetOutput(api.UILogs)
 
@@ -150,6 +149,9 @@ func main() {
 	log.Println("[server] avvio...")
 
 	managers.Settings.Load()
+	if err := managers.Settings.LoadError(); err != nil {
+		log.Fatalf("[server] %v", err)
+	}
 	// The dashboard setting wins over MYCELIUM_EGRESS_IPV6 once saved.
 	if v := managers.Settings.GetString("egress_ipv6", ""); v != "" {
 		core.SetEgressPreferIPv6(core.ParseBoolish(v))
@@ -244,11 +246,9 @@ func main() {
 		}
 	}
 
-	core.StartAppEngine(core.LauncherConfig{
-		IsSetupDone:       managers.Settings.IsSetupDone(),
-		UpdateDomainsFunc: managers.Domain.UpdateActiveDomains,
-		GetSettingFunc:    managers.Settings.GetString,
-	})
+	if !managers.Settings.IsSetupDone() {
+		log.Printf("🛑 [Primo Avvio] Configurazione mancante: apri http://<indirizzo-del-server>:%s/setup per iniziare.", managers.Settings.GetString("server_port", "8000"))
+	}
 
 	// LAN discovery responder (internal/api/discovery.go).
 	api.StartDiscovery()
@@ -257,6 +257,11 @@ func main() {
 
 	fs := http.FileServer(http.Dir(core.AppPath("web", "static")))
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Files only: no directory listings.
+		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		fs.ServeHTTP(w, r)
 	})))
@@ -271,16 +276,9 @@ func main() {
 			http.NotFound(w, r)
 			return
 		}
-		activePlugins := make([]string, 0)
-		for _, mf := range engine.LuaPlugins.GetMeta() {
-			activePlugins = append(activePlugins, mf.ID)
-		}
+		// Unauthenticated: no plugin list here.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status":           "online",
-			"active_providers": activePlugins,
-			"message":          fmt.Sprintf("Mycelium ready — %d plugin loaded.", len(activePlugins)),
-		})
+		w.Write([]byte(`{"status":"online"}`))
 	})
 
 	api.SetupRoutes(mux)
@@ -309,6 +307,7 @@ func main() {
 		Handler:           securityHeadersMiddleware(corsMiddleware(api.SameOriginMiddleware(bodyLimitMiddleware(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
 
 	lis, err := net.Listen("tcp", ":"+port)
@@ -353,9 +352,8 @@ func main() {
 		pileusSrv.Stop()
 	}
 
-	core.StopScheduler()
-	managers.CloseBrowserClient()
 	engine.LuaPlugins.Shutdown()
+	managers.Redis.Close()
 
 	log.Println("[server] shutdown complete.")
 }
@@ -375,6 +373,10 @@ func loadOrCreateJWTSecret() []byte {
 	if _, err := rand.Read(b); err != nil {
 		log.Fatalf("[server] jwt secret gen: %v", err)
 	}
-	_ = managers.Settings.SaveInternal(map[string]any{key: hex.EncodeToString(b)})
+	// Unsaved, every restart would mint a new secret and void every session,
+	// device token and signed URL.
+	if err := managers.Settings.SaveInternal(map[string]any{key: hex.EncodeToString(b)}); err != nil {
+		log.Fatalf("[server] jwt secret save: %v", err)
+	}
 	return b
 }

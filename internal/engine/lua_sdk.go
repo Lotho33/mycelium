@@ -18,6 +18,7 @@ import (
 	_ "image/png"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -134,7 +135,7 @@ func RegisterSDK(L *lua.LState, opts SDKOpts, scope *callScope) {
 	mycelium.RawSetString("cache", buildCacheModule(L, opts, scope))
 	mycelium.RawSetString("xml", buildXMLModule(L))
 	mycelium.RawSetString("storage", buildStorageModule(L, opts))
-	mycelium.RawSetString("image", buildImageModule(L, opts))
+	mycelium.RawSetString("image", buildImageModule(L, opts, scope))
 	mycelium.RawSetString("index", buildIndexModule(L, opts))
 	mycelium.RawSetString("ratelimit", buildRatelimitModule(L, opts, scope))
 	mycelium.RawSetString("log", L.NewFunction(func(L *lua.LState) int {
@@ -457,6 +458,12 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		}
 		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
+		if err := core.CheckEgressURL(ctx, triggerURL, proxyURL != ""); err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 3
+		}
 		resp, err := bm.WaitInterceptVia(ctx, &gen.WaitInterceptRequest{
 			TriggerUrl: triggerURL,
 			UrlPattern: pattern,
@@ -475,8 +482,8 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			hdrKeys = append(hdrKeys, k)
 		}
 		// Log the header names returned (values elided).
-		log.Printf("[sdk/browser] sniff %s → intercepted=%q header_keys=%v cookie_len=%d",
-			opts.PluginID, resp.InterceptedUrl, hdrKeys, len(resp.Headers["cookie"])+len(resp.Headers["Cookie"]))
+		log.Printf("[sdk/browser] sniff %s → intercepted=%s header_keys=%v cookie_len=%d",
+			opts.PluginID, sdkLogURL(resp.InterceptedUrl), hdrKeys, len(resp.Headers["cookie"])+len(resp.Headers["Cookie"]))
 		L.Push(lua.LString(resp.InterceptedUrl))
 		L.Push(hdrs)
 		L.Push(lua.LNil)
@@ -503,6 +510,12 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		}
 		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
+		if err := core.CheckEgressURL(ctx, url, proxyURL != ""); err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 3
+		}
 		resp, err := bm.NavigateVia(ctx, &gen.NavigateRequest{
 			Url:       url,
 			TimeoutMs: int64(timeoutSec) * 1000,
@@ -538,6 +551,11 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		}
 		ctx, cancel := context.WithTimeout(scope.parentCtx(), clampSDKTimeout(timeoutSec))
 		defer cancel()
+		if err := core.CheckEgressURL(ctx, url, proxyURL != ""); err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
 		resp, err := bm.EvalVia(ctx, &gen.EvalRequest{
 			Url:       url,
 			Js:        js,
@@ -684,8 +702,10 @@ func buildCacheModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable
 			L.Push(lua.LFalse)
 			return 2
 		}
-		val, err := opts.Redis.Get(context.Background(), cacheKey(key))
-		if err != nil || val == "" {
+		// found is true for a stored "" too: plugins cache "nothing there"
+		// that way.
+		val, found, err := opts.Redis.GetFound(context.Background(), cacheKey(key))
+		if err != nil || !found {
 			L.Push(lua.LString(""))
 			L.Push(lua.LFalse)
 			return 2
@@ -811,11 +831,22 @@ func buildContextModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 // mycelium.image — server-side image analysis
 // ─────────────────────────────────────────────────────────────────────────────
 
-func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
+func buildImageModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable {
 	t := L.NewTable()
-	client := opts.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
+	// Logos are fetched like any SDK request (doSDKHTTP): the plugin's egress,
+	// fail-closed without it, and the call's context.
+	fetch := func(url string) ([]byte, error) {
+		r := opts.doSDKHTTP(scope, sdkRequest{
+			method: http.MethodGet, url: url, timeout: 20 * time.Second,
+			headers: map[string]string{"User-Agent": "Mozilla/5.0"},
+		}, maxLogoImageBytes)
+		if r.err != "" {
+			return nil, errors.New(r.err)
+		}
+		if r.status != http.StatusOK {
+			return nil, fmt.Errorf("HTTP %d", r.status)
+		}
+		return []byte(r.body), nil
 	}
 
 	// mycelium.image.analyze_logo(url) → {is_dark=bool, norm_w=int, norm_h=int}, err
@@ -824,7 +855,7 @@ func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 	// normalized size (800px wide, height capped at 200px) so logos render at
 	// comparable sizes. is_dark when the mean luminance is below 0.40.
 	t.RawSetString("analyze_logo", L.NewFunction(func(L *lua.LState) int {
-		info, err := analyzeLogo(client, L.CheckString(1))
+		info, err := analyzeLogo(fetch, L.CheckString(1))
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString(err.Error()))
@@ -859,7 +890,7 @@ func buildImageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 				defer func() { <-sem }()
 				errs[i] = errors.New("analyze failed")
 				defer core.Guard("lua/analyze_logos:" + opts.PluginID)
-				infos[i], errs[i] = analyzeLogo(client, u)
+				infos[i], errs[i] = analyzeLogo(fetch, u)
 			}()
 		}
 		wg.Wait()
@@ -900,24 +931,10 @@ func (li logoInfo) toLua(L *lua.LState) *lua.LTable {
 	return res
 }
 
-// analyzeLogo downloads and measures one logo (see analyze_logo).
-func analyzeLogo(client *http.Client, url string) (logoInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return logoInfo{}, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return logoInfo{}, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxLogoImageBytes))
+// analyzeLogo downloads (with fetch) and measures one logo (see
+// analyze_logo).
+func analyzeLogo(fetch func(string) ([]byte, error), url string) (logoInfo, error) {
+	raw, err := fetch(url)
 	if err != nil {
 		return logoInfo{}, err
 	}
@@ -1115,7 +1132,11 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
 			return "", fmt.Errorf("storage: invalid path %q", name)
 		}
-		return filepath.Join(opts.PluginDir, clean), nil
+		full := filepath.Join(opts.PluginDir, clean)
+		if !resolvesInside(opts.PluginDir, full) {
+			return "", fmt.Errorf("storage: path %q leaves the plugin directory", name)
+		}
+		return full, nil
 	}
 
 	// mycelium.storage.read_json(filename) → table|nil, err
@@ -1175,8 +1196,23 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 			L.Push(lua.LString(fmt.Sprintf("storage.write_json: payload too large (%d bytes, max %d)", len(data), maxStorageWriteBytes)))
 			return 1
 		}
-		if err := os.WriteFile(path, data, 0644); err != nil {
+		// tmp + rename: a reader (another state, a crash mid-write) never sees
+		// half a file.
+		tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+		if err != nil {
 			L.Push(lua.LString(err.Error()))
+			return 1
+		}
+		_, werr := tmp.Write(data)
+		if cerr := tmp.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr == nil {
+			werr = os.Rename(tmp.Name(), path)
+		}
+		if werr != nil {
+			os.Remove(tmp.Name())
+			L.Push(lua.LString(werr.Error()))
 			return 1
 		}
 		L.Push(lua.LNil)
@@ -1271,7 +1307,10 @@ func luaToJSONGuarded(v lua.LValue, g *luaConvGuard) interface{} {
 	case lua.LBool:
 		return bool(val)
 	case lua.LNumber:
-		return float64(val)
+		if f := float64(val); !math.IsNaN(f) && !math.IsInf(f, 0) {
+			return f
+		}
+		return nil // not representable in JSON
 	case lua.LString:
 		return string(val)
 	case *lua.LTable:

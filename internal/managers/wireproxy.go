@@ -116,6 +116,9 @@ type wireproxyProc struct {
 var (
 	wireproxyRegMu sync.Mutex
 	wireproxyReg   = map[string]*wireproxyProc{}
+	// wireproxyApplyMu serializes start/stop/delete: two concurrent applies
+	// of the same profile would otherwise both start a process on its port.
+	wireproxyApplyMu sync.Mutex
 )
 
 // wireproxyIsRunning reports whether a subprocess is tracked as running.
@@ -216,6 +219,8 @@ func wireproxyStartProcess(name string) error {
 // the wanted state: (re)started when enabled and configured, stopped
 // otherwise.
 func ApplyWireproxyEgress(p EgressProfile) error {
+	wireproxyApplyMu.Lock()
+	defer wireproxyApplyMu.Unlock()
 	if !p.Enabled || !WireproxyConfigured(p.Name) {
 		wireproxyStopProcess(p.Name)
 		return nil
@@ -234,6 +239,8 @@ func WireproxyRunning(name string) bool {
 // DeleteWireproxyEgress stops the subprocess (if any) and removes the stored
 // config.
 func DeleteWireproxyEgress(name string) error {
+	wireproxyApplyMu.Lock()
+	defer wireproxyApplyMu.Unlock()
 	wireproxyStopProcess(name)
 	wireproxyRegMu.Lock()
 	delete(wireproxyReg, name)
@@ -249,72 +256,104 @@ func DeleteWireproxyEgress(name string) error {
 // packets are dropped. 1280 (the IPv6 minimum) is safe everywhere.
 const wireproxyDefaultMTU = 1280
 
-// normalizeWireguardConf keeps [Interface]/[Peer] verbatim, drops any proxy
-// sections of the upload so ours is authoritative, forces a conservative
-// MTU when none is set, validates the essentials, and appends our [Socks5]
-// bound to bindAddr.
+// wireproxyDefaultDNS is used, through the tunnel, when the upload sets none.
+const wireproxyDefaultDNS = "1.1.1.1"
+
+// wgAllowedKeys is everything normalizeWireguardConf carries over, per
+// section (lower-case key → canonical spelling). Anything else in the upload
+// is dropped: wireproxy also reads proxy/tunnel sections ([Socks5], [http],
+// [SNI], [*Tunnel]…) that would open listeners of their own outside our
+// control.
+var wgAllowedKeys = map[string]map[string]string{
+	"interface": {"privatekey": "PrivateKey", "address": "Address", "dns": "DNS", "mtu": "MTU"},
+	"peer": {"publickey": "PublicKey", "presharedkey": "PresharedKey", "endpoint": "Endpoint",
+		"allowedips": "AllowedIPs", "persistentkeepalive": "PersistentKeepalive"},
+}
+
+// normalizeWireguardConf rebuilds the upload from its [Interface] and [Peer]
+// keys only (see wgAllowedKeys), forces a conservative MTU and a DNS server
+// when none is set (without one wireproxy resolves names outside the
+// tunnel), validates the essentials, and appends our [Socks5] bound to
+// bindAddr.
 func normalizeWireguardConf(raw string, bindAddr string) (string, error) {
-	raw = strings.ReplaceAll(raw, "\r\n", "\n")
-	dropped := map[string]bool{
-		"socks5": true, "http": true,
-		"tcpclienttunnel": true, "tcpservertunnel": true,
+	type section struct {
+		name  string
+		lines []string
+		keys  map[string]bool
 	}
-
-	var kept []string
-	section := ""
-	ifaceEnd := -1 // index in `kept` right after the [Interface] block
-	var hasIface, hasPriv, hasPeer, hasPub, hasEndpoint, hasMTU bool
-
-	for _, line := range strings.Split(raw, "\n") {
+	var secs []*section
+	var cur *section
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		// Comments run to the end of the line, as in go-ini (wireproxy's parser).
+		if i := strings.IndexAny(line, "#;"); i >= 0 {
+			line = line[:i]
+		}
 		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
-			if section == "interface" && ifaceEnd == -1 {
-				ifaceEnd = len(kept) // first header after [Interface]
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "[") {
+			if !strings.HasSuffix(t, "]") {
+				return "", fmt.Errorf("config non valida: intestazione di sezione malformata %q", t)
 			}
-			section = strings.ToLower(strings.TrimSpace(t[1 : len(t)-1]))
-			if section == "interface" {
-				hasIface = true
-			}
-			if section == "peer" {
-				hasPeer = true
-			}
-			if !dropped[section] {
-				kept = append(kept, line)
+			name := strings.ToLower(strings.TrimSpace(t[1 : len(t)-1]))
+			cur = nil
+			if wgAllowedKeys[name] != nil {
+				cur = &section{name: name, keys: map[string]bool{}}
+				secs = append(secs, cur)
 			}
 			continue
 		}
-		if dropped[section] {
+		if cur == nil {
+			continue // outside a kept section
+		}
+		k, v, ok := strings.Cut(t, "=")
+		if !ok {
+			return "", fmt.Errorf("config non valida: riga senza '=' in [%s]", cur.name)
+		}
+		canon, allowed := wgAllowedKeys[cur.name][strings.ToLower(strings.TrimSpace(k))]
+		if !allowed {
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(strings.SplitN(t, "=", 2)[0]))
-		switch {
-		case section == "interface" && key == "privatekey":
-			hasPriv = true
-		case section == "interface" && key == "mtu":
-			hasMTU = true
-		case section == "peer" && key == "publickey":
-			hasPub = true
-		case section == "peer" && key == "endpoint":
-			hasEndpoint = true
-		}
-		kept = append(kept, line)
-	}
-	if section == "interface" && ifaceEnd == -1 {
-		ifaceEnd = len(kept)
+		cur.keys[strings.ToLower(canon)] = true
+		cur.lines = append(cur.lines, canon+" = "+strings.TrimSpace(v))
 	}
 
+	var iface *section
+	peers := 0
+	for _, sec := range secs {
+		switch sec.name {
+		case "interface":
+			if iface != nil {
+				return "", fmt.Errorf("config non valida: più di una sezione [Interface]")
+			}
+			iface = sec
+		case "peer":
+			if !sec.keys["publickey"] || !sec.keys["endpoint"] {
+				return "", fmt.Errorf("config non valida: manca [Peer] con PublicKey ed Endpoint")
+			}
+			peers++
+		}
+	}
 	switch {
-	case !hasIface || !hasPriv:
+	case iface == nil || !iface.keys["privatekey"]:
 		return "", fmt.Errorf("config non valida: manca [Interface] con PrivateKey")
-	case !hasPeer || !hasPub || !hasEndpoint:
+	case peers == 0:
 		return "", fmt.Errorf("config non valida: manca [Peer] con PublicKey ed Endpoint")
 	}
-
-	if !hasMTU && ifaceEnd >= 0 {
-		mtuLine := fmt.Sprintf("MTU = %d", wireproxyDefaultMTU)
-		kept = append(kept[:ifaceEnd], append([]string{mtuLine}, kept[ifaceEnd:]...)...)
+	if !iface.keys["mtu"] {
+		iface.lines = append(iface.lines, fmt.Sprintf("MTU = %d", wireproxyDefaultMTU))
+	}
+	if !iface.keys["dns"] {
+		iface.lines = append(iface.lines, "DNS = "+wireproxyDefaultDNS)
 	}
 
-	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
-	return body + "\n\n[Socks5]\nBindAddress = " + bindAddr + "\n", nil
+	var b strings.Builder
+	for _, sec := range secs {
+		b.WriteString("[" + map[string]string{"interface": "Interface", "peer": "Peer"}[sec.name] + "]\n")
+		b.WriteString(strings.Join(sec.lines, "\n"))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("[Socks5]\nBindAddress = " + bindAddr + "\n")
+	return b.String(), nil
 }

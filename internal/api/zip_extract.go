@@ -2,6 +2,7 @@ package api
 
 import (
 	"archive/zip"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -49,13 +50,14 @@ func zipStripSinglePrefix(files []*zip.File) string {
 //   - path traversal: an entry resolving outside destDir is skipped and
 //     logged;
 //   - a single top-level folder shared by every entry is stripped;
-//   - maxPerFile caps what is written for one entry (whatever its header
-//     claims);
+//   - an entry over maxPerFile (whatever its header claims), or one that
+//     can't be written or read whole (a bad checksum included), is an error:
+//     the caller discards destDir rather than install a damaged build;
 //   - maxTotal caps the uncompressed total; exceeding it aborts
 //     (aborted=true) and the caller discards destDir.
 //
 // logPrefix tags log lines.
-func extractZipSafe(zr *zip.Reader, destDir string, maxPerFile, maxTotal int64, logPrefix string) (aborted bool, totalExtracted int64) {
+func extractZipSafe(zr *zip.Reader, destDir string, maxPerFile, maxTotal int64, logPrefix string) (aborted bool, totalExtracted int64, err error) {
 	extractAbs := filepath.Clean(destDir) + string(os.PathSeparator)
 	stripPrefix := zipStripSinglePrefix(zr.File)
 
@@ -81,23 +83,38 @@ func extractZipSafe(zr *zip.Reader, destDir string, maxPerFile, maxTotal int64, 
 		}
 		if totalExtracted+int64(f.UncompressedSize64) > maxTotal {
 			log.Printf("%s archivio oltre il limite totale (%d MiB), estrazione interrotta", logPrefix, maxTotal>>20)
-			return true, totalExtracted
-		}
-		os.MkdirAll(filepath.Dir(fpath), 0755)
-		// Fixed mode, never the archive's own (setuid bits, world-writable).
-		out, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-		if err != nil {
-			continue
+			return true, totalExtracted, nil
 		}
 		rc, err := f.Open()
 		if err != nil {
-			out.Close()
-			continue
+			return false, totalExtracted, fmt.Errorf("%s: %w", f.Name, err)
 		}
-		n, _ := io.Copy(out, io.LimitReader(rc, maxPerFile))
-		totalExtracted += n
-		out.Close()
+		n, err := writeExtracted(fpath, rc, maxPerFile)
 		rc.Close()
+		totalExtracted += n
+		if err != nil {
+			return false, totalExtracted, fmt.Errorf("%s: %w", f.Name, err)
+		}
 	}
-	return false, totalExtracted
+	return false, totalExtracted, nil
+}
+
+// writeExtracted writes r to fpath (fixed mode, never the archive's own:
+// setuid bits, world-writable), refusing more than maxPerFile bytes.
+func writeExtracted(fpath string, r io.Reader, maxPerFile int64) (int64, error) {
+	if err := os.MkdirAll(filepath.Dir(fpath), 0o755); err != nil {
+		return 0, err
+	}
+	out, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	n, err := io.Copy(out, io.LimitReader(r, maxPerFile+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n > maxPerFile {
+		err = fmt.Errorf("file oltre il limite di %d MiB", maxPerFile>>20)
+	}
+	return n, err
 }

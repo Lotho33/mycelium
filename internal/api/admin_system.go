@@ -139,36 +139,9 @@ func getPluginsInfo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// getEnricherBindings returns an empty result: the dashboard still calls it.
-func getEnricherBindings(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"bindings": map[string]any{}, "providers": []any{}})
-}
-
-func setVPNProxy(w http.ResponseWriter, r *http.Request) {
-	var payload struct {
-		Addr string `json:"addr"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "body non valido", http.StatusBadRequest)
-		return
-	}
-	engine.LuaPlugins.SetProxyAddr(payload.Addr)
-	// Persisted so it survives a restart (main.go reads it back when
-	// VPN_PROXY_URL/WARP_SOCKS5_ADDR are unset).
-	if err := managers.Settings.Save(map[string]any{"vpn_proxy_url": payload.Addr}); err != nil {
-		log.Printf("[vpn] impossibile salvare lo stato del proxy: %v", err)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"ok":   payload.Addr != "",
-		"addr": payload.Addr,
-	})
-}
-
-// clearCacheHandler invalidates the in-memory cache.
+// clearCacheHandler drops the in-memory warm segment/playlist cache.
 func clearCacheHandler(w http.ResponseWriter, r *http.Request) {
-	managers.Cache.Flush()
+	managers.Segments.Reset()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

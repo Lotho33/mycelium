@@ -254,3 +254,40 @@ func TestLocalize_NoRemoteOrLocalPathURIsLeft(t *testing.T) {
 		t.Fatalf("key/map not localized: %+v", res)
 	}
 }
+
+// One resource can't take more than the space left (the quota/margin check
+// only runs between resources).
+func TestDownload_RefusesResourceOverLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(make([]byte, 4096)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	m := &Manager{http: srv.Client()}
+	path := t.TempDir() + "/seg.ts"
+	if _, err := m.download(t.Context(), srv.URL, path, nil, 1024); err != errResourceTooBig {
+		t.Fatalf("err = %v, want errResourceTooBig", err)
+	}
+	if n, err := m.download(t.Context(), srv.URL, path, nil, 4096); err != nil || n != 4096 {
+		t.Fatalf("within limit: n=%d err=%v", n, err)
+	}
+}
+
+// A direct source's headers go to its own host only.
+func TestSourceAccess_HeadersOnlyToSourceHost(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Token"))
+	}))
+	defer srv.Close()
+	m := &Manager{direct: srv.Client()}
+	a := accessFor(Source{Direct: true, URL: srv.URL + "/master.m3u8", Headers: map[string]string{"X-Token": "secret"}})
+	for _, u := range []string{srv.URL + "/a.ts", strings.Replace(srv.URL, "127.0.0.1", "localhost", 1) + "/b.ts"} {
+		req, _ := http.NewRequest(http.MethodGet, u, nil)
+		if resp, err := m.do(req, a); err == nil {
+			resp.Body.Close()
+		}
+	}
+	if len(got) != 2 || got[0] != "secret" || got[1] != "" {
+		t.Fatalf("X-Token per request = %q, want [secret, \"\"]", got)
+	}
+}

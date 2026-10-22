@@ -37,20 +37,19 @@ message CatalogItem {
   bool   is_external       = 14;
   // escape hatch for plugin-specific edge cases — NOT for structured data:
   map<string, string> extra = 15;
-  // logo_url: transparent PNG/SVG wordmark (from TMDB images.logos or Fanart.tv)
+  // logo_url: transparent PNG/SVG wordmark of the title
   string logo_url    = 16;
-  // banner_url: wide landscape image (AniList bannerImage, TMDB backdrop for banner-mode)
+  // banner_url: wide landscape image (banner-mode)
   string banner_url  = 17;
 }
 
 // EpisodeInfo is the rich episode object returned when browsing a season.
-// TMDB-first: all fields map 1:1 to TMDB episode response.
 message EpisodeInfo {
   string id             = 1;
   string title          = 2;
   int32  episode_number = 3;
   int32  season_number  = 4;
-  string thumbnail_url  = 5;   // TMDB still_path, 16:9
+  string thumbnail_url  = 5;   // still image, 16:9
   string air_date       = 6;   // "2023-04-02"
   int32  duration       = 7;   // minutes
   double vote           = 8;   // 0.0–10.0
@@ -67,7 +66,7 @@ message SeasonInfo {
   string poster_url    = 4;
   int32  year          = 5;
   int32  episode_count = 6;
-  string overview      = 7;   // TMDB season overview
+  string overview      = 7;   // season synopsis
   string air_date      = 8;   // "YYYY-MM-DD"
 }
 

@@ -77,3 +77,16 @@ func TestRequireProxySig_UIDTamperRejected(t *testing.T) {
 		t.Fatalf("uid-tampered request: status %d, want 403", rec.Code)
 	}
 }
+
+// Without a signing key nothing is let through (fail closed), unless the
+// operator explicitly allows unsigned URLs.
+func TestRequireProxySig_FailsClosedWithoutKey(t *testing.T) {
+	core.SetProxySignKey(nil)
+	old := proxyAllowUnsigned
+	proxyAllowUnsigned = false
+	defer func() { proxyAllowUnsigned = old }()
+	rec := httptest.NewRecorder()
+	if !requireProxySig(rec, httptest.NewRequest(http.MethodGet, "http://box.local/proxy/segment.ts?data=YQ", nil)) {
+		t.Fatal("unsigned request let through without a signing key")
+	}
+}

@@ -113,7 +113,7 @@ const (
 )
 
 // indexBuilder accumulates records until publish. Identical values are
-// stored once (Fribb-style indexes repeat the same small record a lot).
+// stored once (id-mapping indexes repeat the same small record a lot).
 type indexBuilder struct {
 	vals   [][]byte
 	keys   map[string][]int32

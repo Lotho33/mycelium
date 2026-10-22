@@ -29,13 +29,19 @@ func b64url(v string) string {
 
 // claimProxySession looks up the playback session behind a /proxy request's
 // uid and renews its lease. It answers 409 and returns ok=false when the
-// profile is now playing on another device. An unknown uid is let through.
+// profile is now playing on another device, 403 when the uid belonged to a
+// revoked device. An unknown uid (sessions don't survive a restart) is let
+// through: the URL signature, with its expiry, still bounds it.
 func claimProxySession(w http.ResponseWriter, uidRaw string) (s *managers.StreamSession, ok bool) {
 	if uidRaw == "" {
 		return nil, true
 	}
 	s, found := managers.Sessions.Get(uidRaw)
 	if !found {
+		if managers.Sessions.Revoked(uidRaw) {
+			http.Error(w, "dispositivo revocato", http.StatusForbidden)
+			return nil, false
+		}
 		return nil, true
 	}
 	if holder, ok := s.ClaimPlayback(); !ok {

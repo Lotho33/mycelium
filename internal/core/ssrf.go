@@ -40,6 +40,22 @@ var lookupIPAddrLocal = (&net.Resolver{PreferGo: true}).LookupIPAddr
 // the addresses it checked.
 var guardDNSCache sync.Map
 
+// Expired entries are swept periodically: a lookup only evicts its own host.
+func init() {
+	go func() {
+		for range time.Tick(10 * time.Minute) {
+			now := time.Now()
+			sweep := func(k, v any) bool {
+				if e, ok := v.(guardDNSEntry); ok && now.After(e.expires) {
+					guardDNSCache.Delete(k)
+				}
+				return true
+			}
+			guardDNSCache.Range(sweep)
+		}
+	}()
+}
+
 type guardDNSEntry struct {
 	ips     []net.IPAddr
 	expires time.Time
@@ -206,6 +222,11 @@ func CheckURLNotSSRF(ctx context.Context, rawURL string) error {
 			return fmt.Errorf("proxy: refusing to fetch blocked address %s", ip)
 		}
 		return nil
+	}
+	// Legacy numeric spellings never resolve here, yet another client may
+	// read them as an address (0x7f.1 = 127.0.0.1).
+	if NumericHostLike(host) {
+		return fmt.Errorf("proxy: refusing numeric host %q", host)
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, checkURLNotSSRFTimeout)
 	defer cancel()

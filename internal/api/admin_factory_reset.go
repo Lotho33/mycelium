@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"mycelium/internal/core"
+	"mycelium/internal/downloads"
 	"mycelium/internal/engine"
 	"mycelium/internal/managers"
 	"mycelium/internal/pileus"
@@ -32,6 +33,7 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[admin] factory reset: profile trust: %v", err)
 	}
 	pileus.ResetAllProfileAccess()
+	downloads.M.Reset()
 	histRes, err := managers.DB.Exec(`DELETE FROM watch_history`)
 	if err != nil {
 		http.Error(w, "db error (watch_history): "+err.Error(), http.StatusInternalServerError)
@@ -57,7 +59,7 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	imgN := clearDirContents(core.AppPath("data", "imgcache"))
-	managers.Cache.Flush()
+	managers.Segments.Reset()
 
 	// Unload every running Lua plugin before touching its files on disk —
 	// same order uninstallLuaPlugin uses for one plugin, just looped over
@@ -73,16 +75,8 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The current browser's session cookie is now pointing at a wiped
-	// identity — revoke it and clear it so the next request (the frontend
-	// redirects to /setup right after this response) doesn't land on an
-	// authenticated-but-nonsensical dashboard. Sessions elsewhere (another
-	// device, another tab) stay valid until their own 12h expiry: revoking
-	// those too would mean rotating the session signing key itself, out of
-	// scope for what a stray click here needs to guard against.
-	if c, err := r.Cookie(adminSessionCookie); err == nil {
-		revokeAdminSession(c.Value)
-	}
+	// Clearing the admin hash already invalidated every session (the cookie
+	// HMAC covers it, see admin_session.go); just drop this browser's cookie.
 	http.SetCookie(w, &http.Cookie{
 		Name:   adminSessionCookie,
 		Value:  "",

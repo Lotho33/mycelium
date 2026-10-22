@@ -153,3 +153,25 @@ func TestResetAll_ClearsFileAndInMemoryData(t *testing.T) {
 		t.Errorf("expected an empty config.json on disk after ResetAll, got %v", onDisk)
 	}
 }
+
+// A config.json that no longer parses must never be overwritten with only
+// the keys being saved (that would drop the admin hash and reopen /setup).
+func TestSaveInternal_RefusesToOverwriteCorruptConfig(t *testing.T) {
+	withTempSettings(t)
+	corrupt := []byte(`{"master_admin_hash": "x",`)
+	if err := os.WriteFile(configPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &SettingsManager{data: map[string]any{}}
+	s.Load()
+	if s.LoadError() == nil {
+		t.Fatal("Load accepted a corrupt config.json")
+	}
+	if err := s.SaveInternal(map[string]any{"k": "v"}); err == nil {
+		t.Fatal("SaveInternal overwrote a corrupt config.json")
+	}
+	got, _ := os.ReadFile(configPath)
+	if string(got) != string(corrupt) {
+		t.Fatalf("config.json changed: %q", got)
+	}
+}

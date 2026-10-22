@@ -22,12 +22,6 @@ func normalizeVersion(s string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
 }
 
-// SameVersion reports whether a and b denote the same release, ignoring an
-// optional "v"/"V" prefix on either side (e.g. "1.3.2" and "v1.3.2" match).
-func SameVersion(a, b string) bool {
-	return normalizeVersion(a) == normalizeVersion(b)
-}
-
 // parseVersionParts splits a normalized "major.minor.patch" string into
 // integers (missing parts are 0). ok is false if a present part doesn't
 // parse: the order is then unknown.

@@ -99,8 +99,21 @@ func (r *leaseRegistry) ReleaseIfHolder(profileID, deviceID string) bool {
 	return false
 }
 
-// ReleaseDevice drops every lease deviceID holds (device revoked/deleted).
+// heldBy reports whether deviceID holds a fresh lease on profileID.
+func (r *leaseRegistry) heldBy(profileID, deviceID string) bool {
+	if profileID == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	l := r.leases[profileID]
+	return l != nil && l.deviceID == deviceID && r.now().Sub(l.lastSeen) < PlaybackLeaseTTL
+}
+
+// ReleaseDevice drops every lease deviceID holds (device revoked/deleted)
+// and retires its playback sessions (Sessions.RevokeDevice).
 func (r *leaseRegistry) ReleaseDevice(deviceID string) {
+	Sessions.RevokeDevice(deviceID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for pid, l := range r.leases {
@@ -110,7 +123,7 @@ func (r *leaseRegistry) ReleaseDevice(deviceID string) {
 	}
 }
 
-// Release drops profileID's lease (admin override).
+// Release drops profileID's lease whoever holds it.
 func (r *leaseRegistry) Release(profileID string) {
 	r.mu.Lock()
 	delete(r.leases, profileID)
@@ -211,10 +224,15 @@ func (s *StreamSession) RecordFetch() {
 type sessionRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]*StreamSession
+	// revoked holds the tokens of revoked/deleted/re-paired devices until
+	// their /proxy URLs expire (token -> expiry): an unknown uid is let
+	// through, a revoked one must not be.
+	revoked map[string]time.Time
 }
 
 var Sessions = &sessionRegistry{
 	sessions: make(map[string]*StreamSession),
+	revoked:  make(map[string]time.Time),
 }
 
 func (r *sessionRegistry) Register(token string, s *StreamSession) {
@@ -250,10 +268,52 @@ func (r *sessionRegistry) ActiveWithin(d time.Duration) bool {
 	return false
 }
 
-func (r *sessionRegistry) Remove(token string) {
+// RevokeDevice retires every session of deviceID: their uids are refused
+// from now on (Revoked) instead of counting as unknown.
+func (r *sessionRegistry) RevokeDevice(deviceID string) {
+	if deviceID == "" {
+		return
+	}
+	until := time.Now().Add(core.ProxyURLTTL)
 	r.mu.Lock()
-	delete(r.sessions, token)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	for token, s := range r.sessions {
+		if s.DeviceID == deviceID {
+			delete(r.sessions, token)
+			r.revoked[token] = until
+		}
+	}
+}
+
+// Revoked reports whether token belonged to a revoked device.
+func (r *sessionRegistry) Revoked(token string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.revoked[token]
+	return ok
+}
+
+// cleanupStale drops sessions idle for idle, unless their lease is still
+// renewed (a paused player sends heartbeats, not /proxy fetches), and
+// revoked tokens whose URLs have expired.
+func (r *sessionRegistry) cleanupStale(idle time.Duration) {
+	now := time.Now()
+	cutoff := now.Add(-idle)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for token, s := range r.sessions {
+		s.mu.Lock()
+		stale := !s.lastSeen.IsZero() && s.lastSeen.Before(cutoff)
+		s.mu.Unlock()
+		if stale && !PlaybackLeases.heldBy(s.ProfileID, s.DeviceID) {
+			delete(r.sessions, token)
+		}
+	}
+	for token, until := range r.revoked {
+		if now.After(until) {
+			delete(r.revoked, token)
+		}
+	}
 }
 
 // ─── Proxy owners (downloads) ─────────────────────────────────────────────────
@@ -318,17 +378,7 @@ func init() {
 				defer core.Guard("stream/session-gc-tick")
 				PlaybackLeases.cleanupStale()
 				ProxyOwners.cleanupStale()
-				cutoff := time.Now().Add(-20 * time.Minute)
-				Sessions.mu.Lock()
-				defer Sessions.mu.Unlock()
-				for token, s := range Sessions.sessions {
-					s.mu.Lock()
-					stale := !s.lastSeen.IsZero() && s.lastSeen.Before(cutoff)
-					s.mu.Unlock()
-					if stale {
-						delete(Sessions.sessions, token)
-					}
-				}
+				Sessions.cleanupStale(20 * time.Minute)
 			}()
 		}
 	}()

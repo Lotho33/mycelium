@@ -34,8 +34,9 @@ func TestAdminInfo_SameReleaseDifferentPrefix(t *testing.T) {
 		t.Fatalf("status = %d, body=%s; want 200", rec.Code, rec.Body.String())
 	}
 	var d struct {
-		Version       string `json:"version"`
-		LatestVersion string `json:"latest_version"`
+		Version         string `json:"version"`
+		LatestVersion   string `json:"latest_version"`
+		UpdateAvailable bool   `json:"update_available"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
 		t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
@@ -44,10 +45,9 @@ func TestAdminInfo_SameReleaseDifferentPrefix(t *testing.T) {
 		t.Fatalf("got version=%q latest_version=%q, want version=%q latest_version=%q (raw values preserved)",
 			d.Version, d.LatestVersion, "1.3.2", "v1.3.2")
 	}
-	// The check a client (admin.js) must apply to decide whether to show the
-	// update banner — mirrors normalizeVersion()'s JS twin.
-	if !core.SameVersion(d.Version, d.LatestVersion) {
-		t.Fatalf("SameVersion(%q, %q) = false, want true — dashboard would wrongly offer an update to the version already running", d.Version, d.LatestVersion)
+	// What the dashboard's update banner reads.
+	if d.UpdateAvailable {
+		t.Fatalf("update_available = true for %q vs %q — the dashboard would offer an update to the version already running", d.Version, d.LatestVersion)
 	}
 }
 
@@ -60,14 +60,15 @@ func TestAdminInfo_GenuinelyDifferentRelease(t *testing.T) {
 	getAdminInfo(rec, req)
 
 	var d struct {
-		Version       string `json:"version"`
-		LatestVersion string `json:"latest_version"`
+		Version         string `json:"version"`
+		LatestVersion   string `json:"latest_version"`
+		UpdateAvailable bool   `json:"update_available"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
 		t.Fatalf("decode response: %v (body=%s)", err, rec.Body.String())
 	}
-	if core.SameVersion(d.Version, d.LatestVersion) {
-		t.Fatalf("SameVersion(%q, %q) = true, want false — a real new release must still trigger the update banner", d.Version, d.LatestVersion)
+	if !d.UpdateAvailable {
+		t.Fatalf("update_available = false for %q vs %q — a real new release must still trigger the update banner", d.Version, d.LatestVersion)
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 
 // changeAdminPasswordHandler changes the admin password. Body:
 // {"current_password": "…", "new_password": "…"} (min. 8 characters).
-// 400: bad body or password too short; 401: wrong current password.
+// 400: bad body or password too short; 422: wrong current password.
 func changeAdminPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CurrentPassword string `json:"current_password"`
@@ -24,7 +24,7 @@ func changeAdminPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	// A session cookie alone isn't enough to set a new password: the current
 	// one is required, as for the destructive actions.
 	if err := core.VerifyAdmin(body.CurrentPassword, managers.Settings.MasterAdminHash()); err != nil {
-		http.Error(w, "password attuale errata", http.StatusUnauthorized)
+		http.Error(w, "password attuale errata", http.StatusUnprocessableEntity) // not 401: see requireAdminPassword
 		return
 	}
 
@@ -45,6 +45,9 @@ func changeAdminPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "errore salvataggio", http.StatusInternalServerError)
 		return
 	}
+	// The new hash invalidated every session (admin_session.go), this one
+	// included: hand this browser a fresh one.
+	setAdminSessionCookie(w, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

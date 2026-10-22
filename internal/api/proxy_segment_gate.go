@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"mycelium/internal/core"
 	"mycelium/internal/engine"
 	"mycelium/internal/managers"
 )
@@ -24,6 +25,22 @@ var (
 	segGateMu sync.Mutex
 	segGates  = map[string]chan struct{}{}
 )
+
+// Idle hosts' gates are dropped now and then: the table would otherwise
+// keep every CDN host ever streamed from.
+func init() {
+	core.SafeGo("api/seg-gate-gc", func() {
+		for range time.Tick(30 * time.Minute) {
+			segGateMu.Lock()
+			for host, g := range segGates {
+				if len(g) == 0 {
+					delete(segGates, host)
+				}
+			}
+			segGateMu.Unlock()
+		}
+	})
+}
 
 func segConcurrency() int {
 	if v := strings.TrimSpace(os.Getenv("MYCELIUM_SEGMENT_CONCURRENCY")); v != "" {

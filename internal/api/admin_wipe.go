@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"mycelium/internal/core"
+	"mycelium/internal/downloads"
 	"mycelium/internal/managers"
 	"mycelium/internal/pileus"
 )
@@ -25,7 +26,9 @@ func requireAdminPassword(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if err := core.VerifyAdmin(body.Password, managers.Settings.MasterAdminHash()); err != nil {
-		http.Error(w, "password errata", http.StatusUnauthorized)
+		// Not 401/403: the dashboard treats those as "session gone" and
+		// redirects to the login instead of showing this.
+		http.Error(w, "password errata", http.StatusUnprocessableEntity)
 		return false
 	}
 	return true
@@ -49,6 +52,7 @@ func wipeProfilesHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[admin] wipe profiles: profile trust: %v", err)
 	}
 	pileus.ResetAllProfileAccess()
+	downloads.M.DeleteProfileOwned()
 	histRes, err := managers.DB.Exec(`DELETE FROM watch_history`)
 	if err != nil {
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
@@ -92,7 +96,7 @@ func wipePluginDataHandler(w http.ResponseWriter, r *http.Request) {
 
 	imgN := clearDirContents(core.AppPath("data", "imgcache"))
 	fileN := clearPluginCacheFiles()
-	managers.Cache.Flush() // in-memory browse/search cache is plugin-derived too
+	managers.Segments.Reset() // warm segments come from plugin streams too
 
 	log.Printf("[admin] wipe plugin data: redis flush err=%q, %d webp files, %d plugin cache files", redisErr, imgN, fileN)
 	w.Header().Set("Content-Type", "application/json")

@@ -2,7 +2,10 @@ package core
 
 import (
 	"net/url"
+	"path"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestProxySignRoundTrip(t *testing.T) {
@@ -19,7 +22,7 @@ func TestProxySignRoundTrip(t *testing.T) {
 	if u.Query().Get("sig") == "" {
 		t.Fatal("AppendProxySig did not add a sig param")
 	}
-	if !VerifyProxyURL(u.Query()) {
+	if !VerifyProxyURL(path.Base(u.Path), u.Query()) {
 		t.Fatal("freshly signed URL failed verification")
 	}
 }
@@ -34,14 +37,14 @@ func TestProxySignRejectsTamper(t *testing.T) {
 	// Swap the target: signature must no longer verify.
 	q := u.Query()
 	q.Set("data", "ZZZ")
-	if VerifyProxyURL(q) {
+	if VerifyProxyURL(path.Base(u.Path), q) {
 		t.Fatal("tampered data still verified")
 	}
 
 	// uid is signed: swapping it breaks the signature.
 	q = u.Query()
 	q.Set("uid", "someone-else")
-	if VerifyProxyURL(q) {
+	if VerifyProxyURL(path.Base(u.Path), q) {
 		t.Fatal("changing uid did not break verification — cross-profile tampering possible")
 	}
 }
@@ -57,7 +60,7 @@ func TestProxySignUIDCoveredBySignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse signed: %v", err)
 	}
-	if !VerifyProxyURL(u.Query()) {
+	if !VerifyProxyURL(path.Base(u.Path), u.Query()) {
 		t.Fatal("URL signed for profile-A failed to verify as-is")
 	}
 
@@ -65,7 +68,7 @@ func TestProxySignUIDCoveredBySignature(t *testing.T) {
 	// swaps uid to another profile's id.
 	tampered := u.Query()
 	tampered.Set("uid", "profile-B")
-	if VerifyProxyURL(tampered) {
+	if VerifyProxyURL(path.Base(u.Path), tampered) {
 		t.Fatal("swapping uid=profile-A -> uid=profile-B kept the same sig valid")
 	}
 }
@@ -79,7 +82,7 @@ func TestProxySignFailsClosedWithoutKey(t *testing.T) {
 	if ProxySignEnabled() {
 		t.Fatal("ProxySignEnabled true after clearing key")
 	}
-	if VerifyProxyURL(u.Query()) {
+	if VerifyProxyURL(path.Base(u.Path), u.Query()) {
 		t.Fatal("verified with no key configured")
 	}
 }
@@ -88,7 +91,52 @@ func TestProxySignMissingSig(t *testing.T) {
 	SetProxySignKey([]byte("k"))
 	defer SetProxySignKey(nil)
 	q, _ := url.ParseQuery("data=AAA&origin=BBB&vpn=0")
-	if VerifyProxyURL(q) {
+	if VerifyProxyURL("segment.ts", q) {
 		t.Fatal("verified a query with no sig param")
+	}
+}
+
+// A URL signed for one endpoint doesn't verify on another (a subtitle or
+// segment URL replayed on the playlist rewriter or the raw key fetch).
+func TestProxySignBindsEndpoint(t *testing.T) {
+	SetProxySignKey([]byte("k"))
+	defer SetProxySignKey(nil)
+	u, _ := url.Parse(AppendProxySig("https://h/proxy/subtitle.vtt?data=AAA"))
+	if !VerifyProxyURL("subtitle.vtt", u.Query()) {
+		t.Fatal("signed URL rejected on its own endpoint")
+	}
+	for _, other := range []string{"playlist.m3u8", "key.key", "segment.ts"} {
+		if VerifyProxyURL(other, u.Query()) {
+			t.Fatalf("subtitle URL verified on %s", other)
+		}
+	}
+}
+
+func TestProxySignExpires(t *testing.T) {
+	SetProxySignKey([]byte("k"))
+	defer SetProxySignKey(nil)
+	u, _ := url.Parse(AppendProxySig("https://h/proxy/segment.ts?data=AAA"))
+	q := u.Query()
+	exp, _ := strconv.ParseInt(q.Get("exp"), 10, 64)
+	if d := time.Until(time.Unix(exp, 0)); d <= 0 || d > ProxyURLTTL {
+		t.Fatalf("exp %v from now, want within ProxyURLTTL", d)
+	}
+	q.Set("exp", strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10))
+	if VerifyProxyURL("segment.ts", q) {
+		t.Fatal("expired (or exp-tampered) URL verified")
+	}
+}
+
+// Re-signing a query copied from a signed URL replaces its exp/sig.
+func TestProxySignResignsCopiedQuery(t *testing.T) {
+	SetProxySignKey([]byte("k"))
+	defer SetProxySignKey(nil)
+	first, _ := url.Parse(AppendProxySig("https://h/proxy/playlist.m3u8?data=AAA"))
+	again, _ := url.Parse(AppendProxySig("https://h/proxy/playlist.m3u8?" + first.RawQuery))
+	if n := len(again.Query()["exp"]); n != 1 {
+		t.Fatalf("%d exp params after re-signing", n)
+	}
+	if !VerifyProxyURL("playlist.m3u8", again.Query()) {
+		t.Fatal("re-signed URL rejected")
 	}
 }

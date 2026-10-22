@@ -110,16 +110,16 @@ func TestExtSubs_SignatureCoversXsub(t *testing.T) {
 	x := core.EncodeExtSubs([]core.ExtSubtitle{{URL: "https://s/it.srt", Lang: "it"}})
 	signed := core.AppendProxySig("http://h/proxy/playlist.m3u8?data=YQ&xsub=" + x)
 	r := httptest.NewRequest("GET", signed, nil)
-	if !core.VerifyProxyURL(r.URL.Query()) {
+	if !core.VerifyProxyURL("playlist.m3u8", r.URL.Query()) {
 		t.Fatal("signed xsub URL rejected")
 	}
 	tampered := strings.Replace(signed, "xsub="+x, "xsub="+core.EncodeExtSubs([]core.ExtSubtitle{{URL: "http://169.254.169.254/"}}), 1)
-	if core.VerifyProxyURL(httptest.NewRequest("GET", tampered, nil).URL.Query()) {
+	if core.VerifyProxyURL("playlist.m3u8", httptest.NewRequest("GET", tampered, nil).URL.Query()) {
 		t.Fatal("tampered xsub accepted")
 	}
-	// URLs signed without xsub keep verifying (same canonical string as before).
+	// A URL signed without xsub verifies too.
 	plain := core.AppendProxySig("http://h/proxy/playlist.m3u8?data=YQ")
-	if !core.VerifyProxyURL(httptest.NewRequest("GET", plain, nil).URL.Query()) {
+	if !core.VerifyProxyURL("playlist.m3u8", httptest.NewRequest("GET", plain, nil).URL.Query()) {
 		t.Fatal("plain URL rejected")
 	}
 }
@@ -166,5 +166,15 @@ func TestProxyPlaylist_ExtSubs(t *testing.T) {
 		if strings.HasPrefix(l, "http://box.local/proxy/playlist.m3u8") && strings.Contains(l, "xsub=") {
 			t.Fatalf("child still carries xsub: %s", l)
 		}
+	}
+}
+
+// Plugin-supplied subtitle names and languages can't break out of their tag.
+func TestInjectExtSubs_SanitizesNameAndLanguage(t *testing.T) {
+	out := injectExtSubs([]string{"#EXTM3U", "#EXT-X-STREAM-INF:BANDWIDTH=1", "v.m3u8"},
+		[]core.ExtSubtitle{{URL: "https://s/x.srt", Lang: "it\n#EXT-X-KEY", Name: "Ita\r\n#EXT-X-ENDLIST\""}}, "http://h/proxy")
+	joined := strings.Join(out, "\n")
+	if strings.Contains(joined, "\n#EXT-X-ENDLIST") || strings.Contains(joined, "\n#EXT-X-KEY") {
+		t.Fatalf("injected tag:\n%s", joined)
 	}
 }

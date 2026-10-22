@@ -43,12 +43,32 @@ const (
 	imgWebPQuality  = 82   // WebP q82 ≈ JPEG q90, smaller
 	imgMaxDimension = 2000 // safety cap only
 	imgFetchTimeout = 15 * time.Second
-	imgSrcReadLimit = 25 << 20 // refuse larger upstreams
+	imgSrcReadLimit = 12 << 20 // refuse larger upstreams
 	// imgMaxSourcePixels caps the declared source size (image.DecodeConfig, before
 	// decoding): a tiny PNG can declare a canvas that takes gigabytes to decode.
-	imgMaxSourcePixels = 30_000_000
+	imgMaxSourcePixels = 16_000_000
 	imgCacheMaxBytes   = 300 << 20 // then oldest-first sweep
+	// imgMaxConversions caps concurrent fetch+decode+encode runs: each can
+	// take ~64 MB at imgMaxSourcePixels, and /img is unauthenticated.
+	imgMaxConversions = 3
+	imgQueueWait      = 10 * time.Second
+	// imgTouchAfter: a hit refreshes the entry's mtime (sweep order) at most
+	// this often, not on every request.
+	imgTouchAfter = 24 * time.Hour
 )
+
+var (
+	imgConvSem = make(chan struct{}, imgMaxConversions)
+	// imgInflight merges concurrent misses for the same cache file: one
+	// conversion, the others wait for it and serve its result.
+	imgInflightMu sync.Mutex
+	imgInflight   = map[string]*imgFlight{}
+)
+
+type imgFlight struct {
+	done chan struct{}
+	out  []byte
+}
 
 // imgDebug enables the per-request cache hit/store lines.
 var imgDebug = os.Getenv("MYCELIUM_DEBUG") == "1"
@@ -95,7 +115,7 @@ func imageCacheDir() string {
 // comment). Unauthenticated: u is a base64url URL.
 func ImageProxy(w http.ResponseWriter, r *http.Request) {
 	upstream := imgB64Decode(r.URL.Query().Get("u"))
-	if upstream == "" || !strings.HasPrefix(upstream, "http") {
+	if pu, err := url.Parse(upstream); err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
 		http.Error(w, "bad u", http.StatusBadRequest)
 		return
 	}
@@ -109,14 +129,47 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|q%d", upstream, imgWebPQuality)))
 	cacheFile := filepath.Join(imageCacheDir(), hex.EncodeToString(sum[:])+".webp")
 
-	if fi, err := os.Stat(cacheFile); err == nil && fi.Size() > 0 {
-		now := time.Now()
-		_ = os.Chtimes(cacheFile, now, now) // keep hot entries out of the sweep
-		if imgDebug {
-			log.Printf("[img] cache hit %s (%dKB)", imgShortURL(upstream), fi.Size()/1024)
+	if imgServeCached(w, r, cacheFile, upstream) {
+		return
+	}
+
+	// One conversion per cache file at a time: a concurrent miss for the same
+	// image waits for it instead of fetching and decoding again.
+	imgInflightMu.Lock()
+	if f, ok := imgInflight[cacheFile]; ok {
+		imgInflightMu.Unlock()
+		select {
+		case <-f.done:
+		case <-r.Context().Done():
+			return
 		}
-		imgServeHeaders(w)
-		http.ServeFile(w, r, cacheFile)
+		if f.out != nil {
+			imgServeHeaders(w)
+			w.Header().Set("Content-Length", strconv.Itoa(len(f.out)))
+			_, _ = w.Write(f.out)
+			return
+		}
+		http.Error(w, "image unavailable", http.StatusBadGateway)
+		return
+	}
+	flight := &imgFlight{done: make(chan struct{})}
+	imgInflight[cacheFile] = flight
+	imgInflightMu.Unlock()
+	defer func() {
+		imgInflightMu.Lock()
+		delete(imgInflight, cacheFile)
+		imgInflightMu.Unlock()
+		close(flight.done)
+	}()
+
+	select {
+	case imgConvSem <- struct{}{}:
+		defer func() { <-imgConvSem }()
+	case <-time.After(imgQueueWait):
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+		return
+	case <-r.Context().Done():
 		return
 	}
 
@@ -129,7 +182,7 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 			// shares the dashboard's origin, so an upstream HTML body must never be
 			// echoed.
 			if ct := imgSniffRasterType(raw); ct != "" {
-				log.Printf("[img] passthrough-inline (%v): %s", err, imgShortURL(upstream))
+				log.Printf("[img] passthrough-inline (%v): %s", core.RedactURLError(err), imgShortURL(upstream))
 				imgSecurityHeaders(w)
 				w.Header().Set("Content-Type", ct)
 				w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
@@ -140,7 +193,7 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// The fetch itself failed: redirect to the original.
-		log.Printf("[img] passthrough (%v): %s", err, imgShortURL(upstream))
+		log.Printf("[img] passthrough (%v): %s", core.RedactURLError(err), imgShortURL(upstream))
 		http.Redirect(w, r, upstream, http.StatusFound) // fail open
 		return
 	}
@@ -158,10 +211,28 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[img] converted %s  %dKB %s -> %dKB webp%s",
 		imgShortURL(upstream), srcLen/1024, srcFmt, len(out)/1024, note)
+	flight.out = out
 
 	imgServeHeaders(w)
 	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 	_, _ = w.Write(out)
+}
+
+// imgServeCached serves cacheFile when present and non-empty.
+func imgServeCached(w http.ResponseWriter, r *http.Request, cacheFile, upstream string) bool {
+	fi, err := os.Stat(cacheFile)
+	if err != nil || fi.Size() == 0 {
+		return false
+	}
+	if now := time.Now(); now.Sub(fi.ModTime()) > imgTouchAfter {
+		_ = os.Chtimes(cacheFile, now, now) // keep hot entries out of the sweep
+	}
+	if imgDebug {
+		log.Printf("[img] cache hit %s (%dKB)", imgShortURL(upstream), fi.Size()/1024)
+	}
+	imgServeHeaders(w)
+	http.ServeFile(w, r, cacheFile)
+	return true
 }
 
 // imgShortURL trims the query and caps the length of a URL for logs.

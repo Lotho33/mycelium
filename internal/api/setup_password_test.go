@@ -44,7 +44,7 @@ func postSetupSaveFrom(t *testing.T, remoteAddr, password, confirm string) *http
 		t.Fatalf("close multipart writer: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/setup/save", strings.NewReader(b.String()))
+	req := httptest.NewRequest(http.MethodPost, "http://192.168.1.10:8000/setup/save", strings.NewReader(b.String()))
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.RemoteAddr = remoteAddr
 	rec := httptest.NewRecorder()

@@ -70,7 +70,13 @@ func (b *PluginLogBuffer) rotate() {
 	b.openLogFile()
 }
 
+// maxPluginLogLine caps one line a plugin logs.
+const maxPluginLogLine = 4 << 10
+
 func (b *PluginLogBuffer) Append(line string) {
+	if len(line) > maxPluginLogLine {
+		line = line[:maxPluginLogLine] + "…"
+	}
 	b.mu.Lock()
 	b.lines = append(b.lines, line)
 	if len(b.lines) > b.max {

@@ -72,14 +72,16 @@ func loadEgressLocked() []EgressProfile {
 	return out
 }
 
-func saveEgressLocked(list []EgressProfile) {
+func saveEgressLocked(list []EgressProfile) error {
 	if Settings == nil {
-		return
+		return nil
 	}
 	b, _ := json.Marshal(list)
 	if err := Settings.Save(map[string]any{egressSettingKey: string(b)}); err != nil {
 		fmt.Fprintf(os.Stderr, "[egress] save failed: %v\n", err)
+		return err
 	}
+	return nil
 }
 
 // EgressProfiles returns the built-in "direct" first, then the stored ones
@@ -94,10 +96,12 @@ func EgressProfiles() []EgressProfile {
 	return append(out, list...)
 }
 
-// UpsertEgressProfile adds or replaces a profile. "direct" is reserved.
+// UpsertEgressProfile adds or replaces a proxy profile ("proxy" or
+// "warp"). "direct" is reserved, and a wireproxy profile is managed only
+// through UpsertWireproxyEgress.
 func UpsertEgressProfile(p EgressProfile) error {
 	p.Name = strings.TrimSpace(strings.ToLower(p.Name))
-	if p.Name == "" || p.Name == EgressDirect {
+	if p.Name == "" || p.Name == EgressDirect || sanitizeEgressName(p.Name) != p.Name {
 		return fmt.Errorf("nome egress non valido")
 	}
 	p.ProxyURL = strings.TrimSpace(p.ProxyURL)
@@ -107,21 +111,26 @@ func UpsertEgressProfile(p EgressProfile) error {
 	if !strings.Contains(p.ProxyURL, "://") {
 		p.ProxyURL = "socks5://" + p.ProxyURL
 	}
-	if p.Kind == "" {
+	switch p.Kind {
+	case "":
 		p.Kind = "proxy"
+	case "proxy", "warp":
+	default:
+		return fmt.Errorf("tipo egress non valido: %q", p.Kind)
 	}
 	egressMu.Lock()
 	defer egressMu.Unlock()
 	list := loadEgressLocked()
 	for i := range list {
 		if list[i].Name == p.Name {
+			if list[i].Kind == "wireproxy" {
+				return fmt.Errorf("%q è un'uscita WireGuard: si aggiorna ricaricando il file .conf", p.Name)
+			}
 			list[i] = p
-			saveEgressLocked(list)
-			return nil
+			return saveEgressLocked(list)
 		}
 	}
-	saveEgressLocked(append(list, p))
-	return nil
+	return saveEgressLocked(append(list, p))
 }
 
 // SetEgressEnabled flips a profile's enabled flag. For a wireproxy-backed

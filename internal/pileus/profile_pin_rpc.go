@@ -31,7 +31,7 @@ var errProfileLocked = status.Error(codes.PermissionDenied, "profilo protetto da
 func requireProfileAccess(ctx context.Context, deviceID, profileID string) error {
 	ok, err := profileAccessible(deviceID, profileID, profileSessionFromCtx(ctx))
 	if err != nil {
-		return status.Error(codes.Internal, "db error: "+err.Error())
+		return internalError("db error", err)
 	}
 	if !ok {
 		return errProfileLocked
@@ -66,7 +66,7 @@ func (h *AuthHandler) UnlockProfile(ctx context.Context, req *gen.UnlockProfileR
 	}
 	protected, err := profileProtected(req.ProfileId)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	if !protected {
 		return &gen.UnlockProfileResponse{Ok: true}, nil
@@ -83,19 +83,19 @@ func (h *AuthHandler) UnlockProfile(ctx context.Context, req *gen.UnlockProfileR
 		return nil, status.Error(codes.PermissionDenied, "PIN errato")
 	}
 	if err != nil {
-		return nil, status.Error(codes.Internal, "pin check: "+err.Error())
+		return nil, internalError("pin check", err)
 	}
 
 	if req.RememberDevice {
 		if err := trustDevice(deviceID, req.ProfileId); err != nil {
-			return nil, status.Error(codes.Internal, "db error: "+err.Error())
+			return nil, internalError("db error", err)
 		}
 		log.Printf("[pileus/pin] device %s ora fidato per il profilo %s", deviceID, req.ProfileId)
 		return &gen.UnlockProfileResponse{Ok: true, DeviceTrusted: true}, nil
 	}
 	token, exp, err := profileSessions.create(deviceID, req.ProfileId)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "session: "+err.Error())
+		return nil, internalError("session", err)
 	}
 	return &gen.UnlockProfileResponse{
 		Ok:               true,
@@ -118,7 +118,7 @@ func (h *AuthHandler) LockProfile(ctx context.Context, req *gen.LockProfileReque
 	profileSessions.drop(req.ProfileId, deviceID)
 	if req.ForgetDevice {
 		if err := untrustDevice(deviceID, req.ProfileId); err != nil {
-			return nil, status.Error(codes.Internal, "db error: "+err.Error())
+			return nil, internalError("db error", err)
 		}
 	}
 	return &gen.LockProfileResponse{Ok: true}, nil
@@ -150,7 +150,7 @@ func (h *AuthHandler) SetProfilePin(ctx context.Context, req *gen.SetProfilePinR
 	}
 	protected, err := profileProtected(req.ProfileId)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	if protected {
 		wait, err := verifyProfilePin(deviceID, req.ProfileId, req.CurrentPin)
@@ -161,11 +161,11 @@ func (h *AuthHandler) SetProfilePin(ctx context.Context, req *gen.SetProfilePinR
 			return nil, status.Error(codes.PermissionDenied, "PIN attuale errato")
 		}
 		if err != nil {
-			return nil, status.Error(codes.Internal, "pin check: "+err.Error())
+			return nil, internalError("pin check", err)
 		}
 	}
 	if err := replaceProfilePin(req.ProfileId, newPin); err != nil {
-		return nil, status.Error(codes.Internal, "db error: "+err.Error())
+		return nil, internalError("db error", err)
 	}
 	log.Printf("[pileus/pin] PIN del profilo %s %s da device %s (fiducie e sessioni revocate)",
 		req.ProfileId, map[bool]string{true: "impostato", false: "rimosso"}[newPin != ""], deviceID)

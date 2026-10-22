@@ -70,12 +70,6 @@ func GenerateOrLoadTLSCert(getSetting func(key, def string) string, saveSetting 
 	return tls.X509KeyPair(certOut, keyOut)
 }
 
-// CurrentCertPEM returns the persisted certificate's PEM ("" when none was
-// generated). It never changes the certificate.
-func CurrentCertPEM(getSetting func(key, def string) string) string {
-	return getSetting("pileus_grpc_tls_cert", "")
-}
-
 // randomSerial is a random 128-bit serial (Firefox rejects a regenerated
 // self-signed cert that reuses issuer and serial).
 func randomSerial() (*big.Int, error) {

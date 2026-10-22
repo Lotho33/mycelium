@@ -46,8 +46,8 @@ func TestChangeAdminPassword_WrongCurrentRejected(t *testing.T) {
 	seedAdminPassword(t, "correct-horse-battery")
 
 	rec := callChangeAdminPassword(t, "totally-wrong", "brand-new-password")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d; want 401", rec.Code)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d; want 422", rec.Code)
 	}
 	if err := core.VerifyAdmin("correct-horse-battery", managers.Settings.MasterAdminHash()); err != nil {
 		t.Fatalf("hash must be unchanged after a rejected attempt: %v", err)

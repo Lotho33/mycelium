@@ -35,16 +35,35 @@ func newRateLimiter(requestsPerSecond float64, burst float64) *rateLimiter {
 	return rl
 }
 
+// maxRateBuckets caps a limiter's table: past it, requests from addresses
+// without a bucket are refused until the idle ones are swept.
+const maxRateBuckets = 20000
+
+// bucketKey is the unit a client is limited by: its IPv4 address, or its
+// IPv6 /64 (one host usually holds a whole /64, so per-address buckets would
+// let it rotate addresses freely).
+func bucketKey(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() != nil {
+		return ip
+	}
+	return parsed.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // allow reports whether a request from ip is allowed.
 func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
 	now := time.Now()
-	b, ok := rl.buckets[ip]
+	key := bucketKey(ip)
+	b, ok := rl.buckets[key]
 	if !ok {
+		if len(rl.buckets) >= maxRateBuckets {
+			return false
+		}
 		b = &tokenBucket{tokens: rl.capacity, lastRefil: now}
-		rl.buckets[ip] = b
+		rl.buckets[key] = b
 	}
 
 	elapsed := now.Sub(b.lastRefil).Seconds()
@@ -84,10 +103,8 @@ func (rl *rateLimiter) cleanup() {
 
 // Per-context limiters:
 //   - loginLimiter: 5 attempts/min per IP on the login form (burst 5)
-//   - apiLimiter:   60 req/s per IP on the hub API (burst 20)
 var (
 	loginLimiter = newRateLimiter(5.0/60.0, 5)
-	apiLimiter   = newRateLimiter(60, 20)
 	// proxyLimiter: generous for real players, still caps an abuser.
 	proxyLimiter = newRateLimiter(25, 50)
 	// imgLimiter: poster grids burst on open, then go quiet.

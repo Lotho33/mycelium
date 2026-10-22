@@ -25,18 +25,11 @@ import (
 
 // adminTopics maps a topic to the handler whose output the page shows.
 var adminTopics = map[string]http.HandlerFunc{
-	"plugins":   adminPluginsSnapshot,
+	"plugins":   getPluginsInfo,
 	"egress":    listEgress,
 	"devices":   listPileusDevices,
 	"profiles":  listPileusProfiles,
 	"downloads": listDownloadsAdmin,
-}
-
-// adminPluginsSnapshot is what the plugin page renders: the plugins and the
-// enricher bindings shown on their cards.
-func adminPluginsSnapshot(w http.ResponseWriter, r *http.Request) {
-	getPluginsInfo(w, r)
-	getEnricherBindings(w, r)
 }
 
 // adminEventsTick is the watcher period. A var for tests.

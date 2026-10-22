@@ -56,7 +56,25 @@ func normSubLang(l string) string {
 	if a, ok := subLangAliases[l]; ok {
 		return a
 	}
+	// A playlist attribute value: letters only (ISO 639 codes).
+	if len(l) > 8 || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz") != "" {
+		return ""
+	}
 	return l
+}
+
+// m3uAttrText makes s safe inside a quoted playlist attribute: no control
+// characters (a newline would start a new tag) and no double quote.
+func m3uAttrText(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			return ' '
+		case r == '"':
+			return '\''
+		}
+		return r
+	}, s)
 }
 
 // injectExtSubs adds subs to a rewritten master playlist. A track whose
@@ -122,7 +140,7 @@ func injectExtSubs(lines []string, subs []core.ExtSubtitle, proxyBase string) []
 		}
 		uri := core.AppendProxySig(proxyBase + "/subtitle.m3u8?data=" + b64url(s.URL))
 		line := fmt.Sprintf(`#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="%s",NAME="%s",DEFAULT=%s,AUTOSELECT=YES`,
-			group, strings.ReplaceAll(name, `"`, "'"), def)
+			group, m3uAttrText(name), def)
 		if lang != "" {
 			line += fmt.Sprintf(`,LANGUAGE="%s"`, lang)
 		}
@@ -298,8 +316,8 @@ func toWebVTT(b []byte) ([]byte, error) {
 	return []byte(s), nil
 }
 
-// subtitleFromZip returns the first .srt/.vtt in a zip archive (SubDL-style
-// downloads).
+// subtitleFromZip returns the first .srt/.vtt in a zip archive (subtitle
+// sites often serve one zipped).
 func subtitleFromZip(b []byte) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {

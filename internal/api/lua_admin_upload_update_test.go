@@ -264,3 +264,42 @@ func TestUploadLuaPlugin_UpdateRemovesOrphanModules(t *testing.T) {
 		t.Error("runtime data file cache.json must survive the update")
 	}
 }
+
+// An update that doesn't load leaves the previous version installed and
+// running.
+func TestUploadLuaPlugin_FailedUpdateRestoresPreviousVersion(t *testing.T) {
+	tmp := t.TempDir()
+	oldBase := core.BasePath
+	core.BasePath = tmp
+	t.Cleanup(func() { core.BasePath = oldBase })
+
+	const id = "rollbackplug"
+	installDir := filepath.Join(core.AppPath("plugins"), id)
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "id: " + id + "\nname: T\ndirect_egress: true\nentrypoints:\n  probe: probe\n"
+	os.WriteFile(filepath.Join(installDir, "manifest.yaml"), []byte(manifest), 0o644)                       //nolint:errcheck
+	os.WriteFile(filepath.Join(installDir, "init.lua"), []byte("function probe() return {v=1} end"), 0o644) //nolint:errcheck
+	if err := engine.LuaPlugins.LoadPlugin(installDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.LuaPlugins.UnloadPlugin(id) })
+
+	rec := postLuaPluginZip(t, "broken.zip", buildZipBytes(t, map[string]string{
+		"manifest.yaml": manifest,
+		"init.lua":      "this is not lua (",
+	}))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body=%s; want 500", rec.Code, rec.Body.String())
+	}
+	if got, _ := os.ReadFile(filepath.Join(installDir, "init.lua")); string(got) != "function probe() return {v=1} end" {
+		t.Fatalf("previous init.lua not restored: %q", got)
+	}
+	if !engine.LuaPlugins.Has(id) {
+		t.Fatal("previous version not reloaded")
+	}
+	if left, _ := filepath.Glob(filepath.Join(core.AppPath("plugins"), ".backup-*")); len(left) != 0 {
+		t.Fatalf("backup left behind: %v", left)
+	}
+}

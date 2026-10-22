@@ -65,17 +65,23 @@ func hashPin(pin string) (string, error) {
 // profilePinHash returns the profile's PIN hash, "" when it has none (or
 // doesn't exist). The legacy pin_hash column is unused.
 func profilePinHash(profileID string) (string, error) {
+	_, h, err := lookupProfile(profileID)
+	return h, err
+}
+
+// lookupProfile reports whether profileID exists and its PIN hash ("" if none).
+func lookupProfile(profileID string) (exists bool, pinHash string, err error) {
 	var h sql.NullString
-	err := managers.DB.QueryRow(
+	err = managers.DB.QueryRow(
 		`SELECT access_pin_hash FROM pileus_profiles WHERE profile_id=?`, profileID,
 	).Scan(&h)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return false, "", nil
 	}
 	if err != nil {
-		return "", err
+		return false, "", err
 	}
-	return h.String, nil
+	return true, h.String, nil
 }
 
 func storeProfilePinHash(profileID, hash string) error {
@@ -144,34 +150,51 @@ var (
 	pinCache   = map[string]*pinCacheEntry{} // profileID ->
 )
 
+// pinCacheEpoch changes on every invalidation (under pinCacheMu): a lookup
+// that started before one doesn't store its result.
+var pinCacheEpoch uint64
+
 func forgetPinCache(profileID string) {
 	pinCacheMu.Lock()
+	pinCacheEpoch++
 	delete(pinCache, profileID)
 	pinCacheMu.Unlock()
 }
 
 func clearPinCache() {
 	pinCacheMu.Lock()
+	pinCacheEpoch++
 	pinCache = map[string]*pinCacheEntry{}
 	pinCacheMu.Unlock()
 }
 
 // profileProtected reports whether profileID has a PIN.
 func profileProtected(profileID string) (bool, error) {
+	_, protected, err := profileState(profileID)
+	return protected, err
+}
+
+// profileState reports whether profileID exists and has a PIN. Only existing
+// profiles are cached: ids come from clients, and caching unknown ones would
+// let a client grow the cache at will.
+func profileState(profileID string) (exists, protected bool, err error) {
 	pinCacheMu.Lock()
 	if e := pinCache[profileID]; e != nil && time.Since(e.at) < pinCacheTTL {
 		pinCacheMu.Unlock()
-		return e.protected, nil
+		return true, e.protected, nil
 	}
+	epoch := pinCacheEpoch
 	pinCacheMu.Unlock()
-	h, err := profilePinHash(profileID)
-	if err != nil {
-		return false, err
+	exists, h, err := lookupProfile(profileID)
+	if err != nil || !exists {
+		return false, false, err
 	}
 	pinCacheMu.Lock()
-	pinCache[profileID] = &pinCacheEntry{protected: h != "", trusted: map[string]bool{}, at: time.Now()}
+	if pinCacheEpoch == epoch {
+		pinCache[profileID] = &pinCacheEntry{protected: h != "", trusted: map[string]bool{}, at: time.Now()}
+	}
 	pinCacheMu.Unlock()
-	return h != "", nil
+	return true, h != "", nil
 }
 
 func deviceTrustedCached(deviceID, profileID string) bool {
@@ -183,10 +206,11 @@ func deviceTrustedCached(deviceID, profileID string) bool {
 			return v
 		}
 	}
+	epoch := pinCacheEpoch
 	pinCacheMu.Unlock()
 	v := isDeviceTrusted(deviceID, profileID)
 	pinCacheMu.Lock()
-	if e := pinCache[profileID]; e != nil {
+	if e := pinCache[profileID]; e != nil && pinCacheEpoch == epoch {
 		e.trusted[deviceID] = v
 	}
 	pinCacheMu.Unlock()
@@ -195,7 +219,8 @@ func deviceTrustedCached(deviceID, profileID string) bool {
 
 // profileAccessible reports whether deviceID may use profileID now: no PIN,
 // a trusted device, or a live one-off session of this device+profile. An
-// unknown profile counts as accessible (handlers answer NotFound).
+// unknown profile counts as accessible here: the interceptor rejects it
+// first (requireKnownProfile), AuthService handlers answer NotFound.
 func profileAccessible(deviceID, profileID, sessionToken string) (bool, error) {
 	protected, err := profileProtected(profileID)
 	if err != nil || !protected {

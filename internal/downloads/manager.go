@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"mycelium/internal/core"
 	"mycelium/internal/engine"
@@ -59,8 +61,11 @@ const (
 
 // Source is a resolved stream as the download worker consumes it.
 type Source struct {
-	URL     string            // playlist URL (a loopback /proxy URL, or upstream for direct_stream plugins)
-	Headers map[string]string // extra request headers, only for non-proxied sources
+	URL string // playlist URL (a loopback /proxy URL, or upstream for direct_stream plugins)
+	// Direct: URL is upstream (a direct_stream plugin), fetched here with
+	// Headers instead of through mycelium's /proxy.
+	Direct  bool
+	Headers map[string]string
 	IsHLS   bool
 	IsLive  bool
 	Extra   map[string]string
@@ -140,7 +145,8 @@ type Manager struct {
 	dir     string
 	resolve Resolver
 	ffmpeg  string
-	http    *http.Client
+	http    *http.Client // loopback /proxy fetches
+	direct  *http.Client // direct_stream upstream fetches (SSRF-guarded)
 	now     func() time.Time
 
 	mu       sync.Mutex
@@ -173,7 +179,21 @@ func Init(dir string, resolve Resolver) (*Manager, error) {
 		dir:     dir,
 		resolve: resolve,
 		ffmpeg:  ff,
-		http:    &http.Client{Timeout: 90 * time.Second},
+		// No total timeout on the clients: a segment can take long under
+		// download_max_mbps. Headers are bounded here, bodies by an idle
+		// watchdog (download) and playlists by fetchText's deadline.
+		http: &http.Client{Transport: &http.Transport{
+			ResponseHeaderTimeout: 90 * time.Second, // the proxy's own retry budget fits in it
+			IdleConnTimeout:       90 * time.Second,
+		}},
+		// Upstream fetches of direct_stream sources: URLs come from plugins and
+		// upstream playlists, so the SSRF guard applies (LAN allowed unless
+		// MYCELIUM_PROXY_BLOCK_PRIVATE=1: those plugins are LAN media servers).
+		direct: &http.Client{Transport: &http.Transport{
+			DialContext:           core.GuardedDialContext(nil),
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		}},
 		now:     time.Now,
 		live:    map[string]*liveJob{},
 		options: map[string]cachedOptions{},
@@ -305,16 +325,47 @@ type OptTrack struct {
 
 func unavailable(reason string) Options { return Options{Reason: reason} }
 
+// sourceAccess is how a job reaches its source's URLs: nil for the loopback
+// /proxy, else upstream directly, with the plugin's headers sent to the
+// source's own host only (a playlist may point anywhere).
+type sourceAccess struct {
+	host    string
+	headers map[string]string
+}
+
+func accessFor(src Source) *sourceAccess {
+	if !src.Direct {
+		return nil
+	}
+	a := &sourceAccess{headers: src.Headers}
+	if u, err := url.Parse(src.URL); err == nil {
+		a.host = u.Host
+	}
+	return a
+}
+
+// do sends req through the client a calls for, with its headers.
+func (m *Manager) do(req *http.Request, a *sourceAccess) (*http.Response, error) {
+	if a == nil {
+		return m.http.Do(req)
+	}
+	if req.URL.Host == a.host {
+		for k, v := range a.headers {
+			req.Header.Set(k, v)
+		}
+	}
+	return m.direct.Do(req)
+}
+
 // fetchText GETs a playlist (loopback /proxy or, for direct plugins, upstream).
-func (m *Manager) fetchText(ctx context.Context, u string, headers map[string]string) (string, error) {
+func (m *Manager) fetchText(ctx context.Context, u string, a *sourceAccess) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := m.http.Do(req)
+	resp, err := m.do(req, a)
 	if err != nil {
 		return "", err
 	}
@@ -339,7 +390,7 @@ func (m *Manager) probe(ctx context.Context, pluginID, streamID, owner string) (
 	if !src.IsHLS {
 		return src, Master{}, 0, ErrUnavailable{"Questa sorgente non è scaricabile (è supportato solo lo streaming HLS)"}
 	}
-	text, err := m.fetchText(ctx, src.URL, src.Headers)
+	text, err := m.fetchText(ctx, src.URL, accessFor(src))
 	if err != nil {
 		return src, Master{}, 0, err
 	}
@@ -349,7 +400,7 @@ func (m *Manager) probe(ctx context.Context, pluginID, streamID, owner string) (
 	}
 	media := text
 	if master.IsMaster {
-		if media, err = m.fetchText(ctx, master.Variants[0].URI, src.Headers); err != nil {
+		if media, err = m.fetchText(ctx, master.Variants[0].URI, accessFor(src)); err != nil {
 			return src, master, 0, err
 		}
 	}
@@ -451,6 +502,25 @@ type ItemMeta struct {
 	StreamID, MediaID, ParentID, Title string
 	SeriesTitle, Poster                string
 	SeasonNumber, EpisodeNumber        int32
+}
+
+// clamped bounds the client-supplied strings: they end up in the DB, in the
+// file name and as an ffmpeg argument (one argv entry is capped at 128 KiB).
+func (im ItemMeta) clamped() ItemMeta {
+	im.StreamID = clampRunes(im.StreamID, 2048)
+	im.MediaID = clampRunes(im.MediaID, 512)
+	im.ParentID = clampRunes(im.ParentID, 512)
+	im.Title = clampRunes(im.Title, 300)
+	im.SeriesTitle = clampRunes(im.SeriesTitle, 300)
+	im.Poster = clampRunes(im.Poster, 2048)
+	return im
+}
+
+func clampRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }
 
 // CreateRequest mirrors the proto's CreateDownloadRequest.
@@ -608,6 +678,7 @@ func (m *Manager) CreateBatch(ctx context.Context, r BatchRequest) ([]*Info, int
 // exists (same plugin, stream and choices — even another profile's).
 func (m *Manager) createItem(owner, device, pluginID string, meta ItemMeta, c choice, notBefore int64,
 	usePreferred, upgrade, checkSpace bool) (*Info, error) {
+	meta = meta.clamped()
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -752,6 +823,40 @@ func (m *Manager) Ack(owner, id string) error {
 		return m.Delete(owner, id)
 	}
 	return nil
+}
+
+// DeleteOwner removes every download of owner (a deleted profile, or a
+// forgotten device's own downloads); files go when nobody else uses them.
+// Nil-safe: downloads may be off.
+func (m *Manager) DeleteOwner(owner string) {
+	if m == nil || owner == "" {
+		return
+	}
+	for _, it := range itemsWhere(`owner_id=?`, owner) {
+		_ = m.Delete(owner, it.ID)
+	}
+}
+
+// DeleteProfileOwned removes the downloads of every profile, keeping those
+// of profile-less devices (owner = a paired device id): the profiles wipe.
+func (m *Manager) DeleteProfileOwned() {
+	if m == nil {
+		return
+	}
+	for _, it := range itemsWhere(`owner_id NOT IN (SELECT device_id FROM pileus_devices)`) {
+		_ = m.Delete(it.Owner, it.ID)
+	}
+}
+
+// Reset removes every download and its files (factory reset).
+func (m *Manager) Reset() {
+	if m == nil {
+		return
+	}
+	for _, b := range blobsWhere(`1=1`) {
+		m.deleteBlob(b)
+	}
+	_, _ = managers.DB.Exec(`DELETE FROM dl_items`)
 }
 
 // deleteBlob removes a blob, its items and its files.

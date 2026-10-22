@@ -2,6 +2,7 @@ package pileus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -108,5 +109,24 @@ func TestWrapInternal_Codes(t *testing.T) {
 		if got := status.Code(wrapInternal(c.err)); got != c.want {
 			t.Errorf("wrapInternal(%v) = %v, want %v", c.err, got, c.want)
 		}
+	}
+}
+
+// A number or boolean where a string map value is expected is kept as text,
+// not a decode error for the whole page.
+func TestFlexMap_ToleratesScalars(t *testing.T) {
+	var m flexMap
+	if err := json.Unmarshal([]byte(`{"a":"x","n":42,"b":true,"z":null,"o":{"k":1}}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["a"] != "x" || m["n"] != "42" || m["b"] != "true" {
+		t.Fatalf("got %v", m)
+	}
+	if _, ok := m["o"]; ok {
+		t.Fatal("nested object kept")
+	}
+	var empty flexMap
+	if err := json.Unmarshal([]byte(`[]`), &empty); err != nil || empty != nil {
+		t.Fatalf("empty array: %v %v", empty, err)
 	}
 }

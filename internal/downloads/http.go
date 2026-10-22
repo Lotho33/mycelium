@@ -94,10 +94,7 @@ func downloadFileName(it *item) string {
 	if name == "" {
 		name = "download"
 	}
-	if len(name) > 120 {
-		name = name[:120]
-	}
-	return name + ".mkv"
+	return clampRunes(name, 120) + ".mkv"
 }
 
 func pad2(n int32) string {

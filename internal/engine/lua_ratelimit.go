@@ -9,8 +9,8 @@ import (
 )
 
 // mycelium.ratelimit: named token buckets shared by every state of a plugin,
-// for the external services a plugin must not hammer (Jikan, TMDB, a
-// Telegram bot). set() configures a bucket, wait() takes a token (sleeping
+// for the external services a plugin must not hammer (metadata APIs, a
+// chat bot). set() configures a bucket, wait() takes a token (sleeping
 // if needed), pause() stops the bucket for a while after the service said
 // "slow down" (HTTP 429, FLOOD_WAIT).
 

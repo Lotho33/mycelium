@@ -54,7 +54,7 @@ func TestAuthInterceptor_RejectsRevokedDevice(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/mycelium.MediaPipeline/GetCatalog"}
 
 	orig := deviceActiveLookup
-	deviceActiveLookup = func(id string) bool { return id != "dev-revoked" }
+	deviceActiveLookup = func(id string) (bool, string) { return id != "dev-revoked", "" }
 	t.Cleanup(func() { deviceActiveLookup = orig })
 	deviceActiveCache.Delete("dev-revoked")
 
@@ -77,7 +77,7 @@ func TestAuthInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/mycelium.MediaPipeline/GetCatalog"}
 
 	orig := deviceActiveLookup
-	deviceActiveLookup = func(string) bool { return true }
+	deviceActiveLookup = func(string) (bool, string) { return true, "" }
 	t.Cleanup(func() { deviceActiveLookup = orig })
 	deviceActiveCache.Delete("dev-ok")
 
@@ -86,7 +86,7 @@ func TestAuthInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
 		t.Fatalf("mint: %v", err)
 	}
 	ctx := metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("authorization", "Bearer "+tok, "x-profile-id", "prof-9"))
+		metadata.Pairs("authorization", "Bearer "+tok, "x-profile-id", "fam"))
 
 	var gotDevice, gotProfile string
 	handler := func(ctx context.Context, req any) (any, error) {
@@ -100,8 +100,33 @@ func TestAuthInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
 	if gotDevice != "dev-ok" {
 		t.Errorf("device id in context = %q, want dev-ok", gotDevice)
 	}
-	if gotProfile != "prof-9" {
-		t.Errorf("profile id in context = %q, want prof-9", gotProfile)
+	if gotProfile != "fam" {
+		t.Errorf("profile id in context = %q, want fam", gotProfile)
+	}
+}
+
+// An x-profile-id that names no profile (e.g. another device's id, which
+// owns that device's profile-less data) is rejected.
+func TestAuthInterceptor_RejectsUnknownProfile(t *testing.T) {
+	setupPinTestDB(t)
+	h := testAuthHandler()
+	it := authInterceptor(h)
+	info := &grpc.UnaryServerInfo{FullMethod: "/mycelium.MediaPipeline/ListDownloads"}
+
+	orig := deviceActiveLookup
+	deviceActiveLookup = func(string) (bool, string) { return true, "" }
+	t.Cleanup(func() { deviceActiveLookup = orig })
+	deviceActiveCache.Delete("phone")
+
+	tok, err := h.mintJWT("phone", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("authorization", "Bearer "+tok, "x-profile-id", "tv"))
+	_, err = it(ctx, nil, info, okHandler)
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
+		t.Fatalf("error = %v, want codes.NotFound", err)
 	}
 }
 
@@ -151,7 +176,7 @@ func TestAuthStreamInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
 	info := &grpc.StreamServerInfo{FullMethod: "/mycelium.MediaPipeline/ResolveStream", IsServerStream: true}
 
 	orig := deviceActiveLookup
-	deviceActiveLookup = func(string) bool { return true }
+	deviceActiveLookup = func(string) (bool, string) { return true, "" }
 	t.Cleanup(func() { deviceActiveLookup = orig })
 	deviceActiveCache.Delete("dev-stream")
 
@@ -160,7 +185,7 @@ func TestAuthStreamInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
 		t.Fatalf("mint: %v", err)
 	}
 	ctx := metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs("authorization", "Bearer "+tok, "x-profile-id", "prof-3"))
+		metadata.Pairs("authorization", "Bearer "+tok, "x-profile-id", "me"))
 
 	var gotDevice, gotProfile string
 	handler := func(srv any, ss grpc.ServerStream) error {
@@ -171,7 +196,16 @@ func TestAuthStreamInterceptor_PassesDeviceAndProfileIDToHandler(t *testing.T) {
 	if err := it(nil, &fakeServerStream{ctx: ctx}, info, handler); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotDevice != "dev-stream" || gotProfile != "prof-3" {
-		t.Errorf("context = (%q, %q), want (dev-stream, prof-3)", gotDevice, gotProfile)
+	if gotDevice != "dev-stream" || gotProfile != "me" {
+		t.Errorf("context = (%q, %q), want (dev-stream, me)", gotDevice, gotProfile)
+	}
+}
+
+// A panicking handler answers Internal instead of crashing the server.
+func TestRecoverUnary(t *testing.T) {
+	_, err := recoverUnary(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/x/Y"},
+		func(context.Context, any) (any, error) { panic("boom") })
+	if s, ok := status.FromError(err); !ok || s.Code() != codes.Internal {
+		t.Fatalf("err = %v, want codes.Internal", err)
 	}
 }

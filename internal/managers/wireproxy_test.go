@@ -127,3 +127,35 @@ func TestNormalizeWireguardConf_Rejects(t *testing.T) {
 		}
 	}
 }
+
+// Only [Interface]/[Peer] keys survive: a header with a trailing comment or
+// a section wireproxy knows but we don't manage must not open a listener.
+func TestNormalizeWireguardConf_DropsEverythingElse(t *testing.T) {
+	in := validWG + "\n[Socks5] ;x\nBindAddress = 0.0.0.0:1080\n" +
+		"[SNI]\nBindAddress = 0.0.0.0:443\n" +
+		"[STDIOTunnel]\nTarget = 10.0.0.1:22\n" +
+		"[UDPProxyTunnel]\nBindAddress = 0.0.0.0:53\n"
+	out, err := normalizeWireguardConf(in, testBindAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"0.0.0.0:", "[SNI]", "Tunnel]", "Target"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("%q survived normalisation:\n%s", bad, out)
+		}
+	}
+	if strings.Count(out, "[Socks5]") != 1 {
+		t.Fatalf("want exactly our [Socks5]:\n%s", out)
+	}
+}
+
+func TestNormalizeWireguardConf_DefaultsDNS(t *testing.T) {
+	noDNS := strings.Replace(validWG, "DNS = 10.64.0.1\n", "", 1)
+	out, err := normalizeWireguardConf(noDNS, testBindAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "DNS = "+wireproxyDefaultDNS) || strings.Index(out, "DNS = ") > strings.Index(out, "[Peer]") {
+		t.Fatalf("default DNS not set inside [Interface]:\n%s", out)
+	}
+}

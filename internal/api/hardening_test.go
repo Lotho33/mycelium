@@ -28,7 +28,7 @@ func TestExtractZipSafe_IgnoresArchiveModesAndSymlinks(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	extractZipSafe(zr, dir, 1<<20, 10<<20, "[test]")
+	extractZipSafe(zr, dir, 1<<20, 10<<20, "[test]") //nolint:errcheck
 
 	fi, err := os.Stat(filepath.Join(dir, "run.sh"))
 	if err != nil {

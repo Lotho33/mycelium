@@ -322,14 +322,10 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	// the plugin runs, claimed once the resolve succeeds.
 	deviceID, _ := ctx.Value(ctxKeyDeviceID{}).(string)
 	profileID := profileIDFromCtx(ctx)
-	if holder := managers.PlaybackLeases.Holder(profileID, deviceID); holder != "" {
-		if !req.TakeOver {
-			return playbackInUseError(holder)
-		}
-		// "Watch here": the other device learns it from its next /proxy fetch (409)
-		// or heartbeat (playback_elsewhere).
-		managers.PlaybackLeases.TakeOver(profileID, deviceID)
-		log.Printf("[pileus/media] profilo %s: riproduzione spostata da %s a %s", profileID, holder, deviceID)
+	// A "watch here" takes the lease only once the resolve succeeds: a failed
+	// or abandoned attempt leaves the other device playing.
+	if holder := managers.PlaybackLeases.Holder(profileID, deviceID); holder != "" && !req.TakeOver {
+		return playbackInUseError(holder)
 	}
 
 	b, err := lookupBackend(req.PluginId)
@@ -365,7 +361,13 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	}
 	sessionToken := ""
 	if userID != "" {
-		if holder, ok := managers.PlaybackLeases.Claim(profileID, deviceID); !ok {
+		if req.TakeOver {
+			// "Watch here": the other device learns it from its next /proxy fetch
+			// (409) or heartbeat (playback_elsewhere).
+			if prev := managers.PlaybackLeases.TakeOver(profileID, deviceID); prev != "" {
+				log.Printf("[pileus/media] profilo %s: riproduzione spostata da %s a %s", profileID, prev, deviceID)
+			}
+		} else if holder, ok := managers.PlaybackLeases.Claim(profileID, deviceID); !ok {
 			return playbackInUseError(holder)
 		}
 		totalSec := 0.0
@@ -826,6 +828,13 @@ func profileIDFromCtx(ctx context.Context) string {
 // wrapInternal turns a backend error into a gRPC status the player can act
 // on: gRPC statuses pass through; known errors map to a user-facing message
 // and a code that says whether retrying makes sense.
+// internalError logs err server-side and answers a generic Internal: DB
+// and driver messages are no business of the client.
+func internalError(op string, err error) error {
+	log.Printf("[pileus] %s: %v", op, err)
+	return status.Error(codes.Internal, "internal error")
+}
+
 func wrapInternal(err error) error {
 	if _, ok := status.FromError(err); ok {
 		return err
@@ -842,10 +851,10 @@ func wrapInternal(err error) error {
 	case errors.Is(err, engine.ErrPluginNotLoaded):
 		return status.Error(codes.NotFound, "Plugin non disponibile")
 	}
-	return status.Error(codes.Internal, err.Error())
+	// Lua runtime errors carry file:line and raw plugin output: logged only.
+	log.Printf("[pileus] plugin error: %v", err)
+	return status.Error(codes.Internal, "Errore della sorgente, riprova")
 }
-
-var aniSkipClient = &http.Client{Timeout: 6 * time.Second}
 
 // canonicalHeaderKeys returns h with canonical keys ("cookie" → "Cookie").
 // On a collision a non-empty value wins. nil for a nil map.

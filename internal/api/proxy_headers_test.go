@@ -170,3 +170,27 @@ func TestBuildProxyRequest_DropsRangeAndValidators(t *testing.T) {
 		t.Error("other captured headers must still be replayed")
 	}
 }
+
+func TestProxiableURI(t *testing.T) {
+	for u, want := range map[string]bool{
+		"seg1.ts": true, "/a/b.m3u8": true, "https://cdn/x.ts": true, "HTTP://cdn/x": true,
+		"data:text/plain;base64,AAA": false, "skd://key-id": false, "a/b:c.ts": true,
+	} {
+		if got := proxiableURI(u); got != want {
+			t.Errorf("proxiableURI(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+// The URI attribute's own value is what gets rewritten, even when the same
+// text appears earlier in the tag, and SERVER-URI is not a URI attribute.
+func TestReKeyURISpan(t *testing.T) {
+	line := `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",URI="audio"`
+	m := reKeyURI.FindStringSubmatchIndex(line)
+	if len(m) != 4 || line[m[2]:m[3]] != "audio" || m[2] != len(line)-len(`audio"`) {
+		t.Fatalf("span %v of %q", m, line)
+	}
+	if reKeyURI.MatchString(`#EXT-X-CONTENT-STEERING:SERVER-URI="https://s/x"`) {
+		t.Fatal("SERVER-URI matched as a URI attribute")
+	}
+}

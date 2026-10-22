@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,15 +70,18 @@ func (l *LogBuffer) snapshot() (lines []string, total int64) {
 	return append([]string(nil), l.lines...), l.total
 }
 
-func getLogs(w http.ResponseWriter, r *http.Request) {
-	UILogs.mu.RLock()
-	defer UILogs.mu.RUnlock()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"logs": UILogs.lines})
-}
-
 // getLogsSSE streams the core log live as Server-Sent Events.
 func getLogsSSE(w http.ResponseWriter, r *http.Request) {
+	streamLogSSE(w, r, UILogs.snapshot)
+}
+
+// sseLine makes a log line one SSE data field: a CR or LF would end it and
+// let the rest (plugin-controlled text) inject fields of its own.
+var sseLine = strings.NewReplacer("\r", " ", "\n", " ")
+
+// streamLogSSE sends snapshot's lines, then every new one each second, until
+// the client leaves or the admin session stops being valid.
+func streamLogSSE(w http.ResponseWriter, r *http.Request, snapshot func() ([]string, int64)) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -90,27 +92,30 @@ func getLogsSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	existing, lastTotal := UILogs.snapshot()
+	existing, lastTotal := snapshot()
 	for _, line := range existing {
-		fmt.Fprintf(w, "data: %s\n\n", strings.ReplaceAll(line, "\n", " "))
+		fmt.Fprintf(w, "data: %s\n\n", sseLine.Replace(line))
 	}
 	flusher.Flush()
 
+	cookie, _ := r.Cookie(adminSessionCookie)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-
-	for {
+	for tick := 1; ; tick++ {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			lines, total := UILogs.snapshot()
-			newCount := total - lastTotal
-			if newCount > 0 {
-				// Take the last newCount lines; some may be evicted if buffer wrapped.
-				start := max(len(lines)-int(newCount), 0)
+			// A logged-out or expired session stops receiving lines.
+			if tick%20 == 0 && (cookie == nil || !isValidAdminSession(cookie.Value)) {
+				return
+			}
+			lines, total := snapshot()
+			if newCount := total - lastTotal; newCount > 0 {
+				// The last newCount lines; some may be gone if the buffer wrapped.
+				start := max(int64(len(lines))-newCount, 0)
 				for _, line := range lines[start:] {
-					fmt.Fprintf(w, "data: %s\n\n", strings.ReplaceAll(line, "\n", " "))
+					fmt.Fprintf(w, "data: %s\n\n", sseLine.Replace(line))
 				}
 			}
 			lastTotal = total

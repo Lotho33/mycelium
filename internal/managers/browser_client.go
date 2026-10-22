@@ -150,9 +150,6 @@ func ConnectBrowserClient(addr, apiKey string) error {
 	return nil
 }
 
-// CloseBrowserClient is a no-op (plain HTTP, nothing to close).
-func CloseBrowserClient() {}
-
 func (c *BrowserServiceClient) post(ctx context.Context, path string, body, out any) error {
 	b, err := json.Marshal(body)
 	if err != nil {

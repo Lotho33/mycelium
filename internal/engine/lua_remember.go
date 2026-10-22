@@ -13,7 +13,7 @@ import (
 // miss, store" pattern every plugin wrote by hand, plus request coalescing:
 // while one state computes a key, the other states of the plugin asking for
 // the same key wait for its result instead of repeating the work (two VMs
-// warming the same TMDB lookup, a carousel and a detail page at once).
+// warming the same metadata lookup, a carousel and a detail page at once).
 
 // rememberRedisTimeout bounds the cache read/write around fn.
 const rememberRedisTimeout = 2 * time.Second

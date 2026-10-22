@@ -12,6 +12,10 @@ var BasePath string
 
 func init() {
 	if override := os.Getenv("MYCELIUM_BASE"); override != "" {
+		// Absolute, because ffmpeg runs with the job's work dir as cwd.
+		if abs, err := filepath.Abs(override); err == nil {
+			override = abs
+		}
 		BasePath = override
 		return
 	}

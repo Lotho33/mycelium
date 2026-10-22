@@ -16,12 +16,6 @@ func AdminRoutes(mux *http.ServeMux) {
 	// Everything else requires a valid session.
 	auth := adminAuthMiddleware
 	mux.HandleFunc("GET /admin/dashboard", auth(adminDashboard))
-	mux.HandleFunc("GET /admin/logs", auth(getLogs))
-
-	mux.HandleFunc("GET /admin/clients", auth(listClients))
-	mux.HandleFunc("POST /admin/clients", auth(addClient))
-	mux.HandleFunc("DELETE /admin/clients/{client_id}", auth(removeClient))
-	mux.HandleFunc("GET /admin/dev-token", auth(generateDevToken))
 
 	// Lua plugin management lives under /admin/lua-plugins/* (RegisterLuaAdminRoutes).
 
@@ -35,12 +29,8 @@ func AdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/factory-reset", rateLimitMiddleware(wipeLimiter, auth(factoryResetHandler)))
 	mux.HandleFunc("GET /admin/core/resources", auth(getCoreResources))
 	mux.HandleFunc("GET /admin/plugins/info", auth(getPluginsInfo))
-	mux.HandleFunc("GET /admin/enricher-bindings", auth(getEnricherBindings))
 	mux.HandleFunc("GET /admin/info", auth(getAdminInfo))
 	mux.HandleFunc("GET /admin/browser-service/health", auth(browserServiceHealth))
-	// Generic egress proxy URL (VPN_PROXY_URL is the primary knob).
-	mux.HandleFunc("POST /admin/vpn", auth(setVPNProxy))
-	mux.HandleFunc("POST /admin/vpn/test", auth(testVPNConnection))
 	mux.HandleFunc("GET /admin/logs/stream", auth(getLogsSSE))
 	mux.HandleFunc("GET /admin/events", auth(getAdminEvents))
 	mux.HandleFunc("POST /admin/core/update", auth(coreUpdate))

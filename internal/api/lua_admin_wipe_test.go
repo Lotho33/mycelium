@@ -90,8 +90,8 @@ func TestWipePluginDataFor_WrongPasswordRejectedNothingDeleted(t *testing.T) {
 	}
 
 	rec := callWipePluginDataFor(t, "wipetest.wrongpw", "wrong-password")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, body=%s; want 401", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body=%s; want 422", rec.Code, rec.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "catalog_cache.json")); err != nil {
 		t.Errorf("catalog_cache.json was removed despite the wrong password: %v", err)

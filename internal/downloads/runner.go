@@ -241,10 +241,7 @@ func (m *Manager) runBlob(ctx context.Context, b *blob, upgrade bool) error {
 	if !upgrade {
 		setBlob(b.ID, `estimated_bytes=?, duration_sec=?, quality_label=?, height=?`, est, dur, variantLabel(v), v.Height)
 	}
-	var headers map[string]string
-	if !strings.Contains(src.URL, "/proxy/") {
-		headers = src.Headers // direct_stream plugin: no proxy to add them
-	}
+	access := accessFor(src)
 
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
@@ -252,7 +249,7 @@ func (m *Manager) runBlob(ctx context.Context, b *blob, upgrade bool) error {
 	locals := make([]*localInput, len(inputs))
 	for i, in := range inputs {
 		li := &localInput{ffInput: in, remoteURL: in.URL, prefix: "i" + strconv.Itoa(i)}
-		if err := m.loadInput(ctx, li, work, headers); err != nil {
+		if err := m.loadInput(ctx, li, work, access); err != nil {
 			return err
 		}
 		locals[i] = li
@@ -269,6 +266,10 @@ func (m *Manager) runBlob(ctx context.Context, b *blob, upgrade bool) error {
 	fetched := already
 	lastPersist := time.Time{}
 	count := 0
+	// budget bounds every single resource too, so one oversized or endless
+	// segment can't run the disk past the quota/margin before the periodic
+	// check below.
+	budget := m.AvailableBytes()
 	// Like a player: every track in content order, the video track setting
 	// the pace (see pacer).
 	pace := newPlayerPacer(paceFactor())
@@ -291,11 +292,12 @@ func (m *Manager) runBlob(ctx context.Context, b *blob, upgrade bool) error {
 					return err
 				}
 			}
-			n, err := m.fetchResource(ctx, li, ri, work, headers)
+			n, err := m.fetchResource(ctx, li, ri, work, access, min(budget, maxResourceBytes))
 			if err != nil {
 				return err
 			}
 			fetched += n
+			budget -= n
 			count++
 			if !upgrade {
 				frac := fetchProgressShare
@@ -309,7 +311,10 @@ func (m *Manager) runBlob(ctx context.Context, b *blob, upgrade bool) error {
 				}
 			}
 			// Stop before the quota or the disk margin is crossed.
-			if count%10 == 0 && m.AvailableBytes() <= 0 {
+			if count%10 == 0 {
+				budget = m.AvailableBytes()
+			}
+			if budget <= 0 {
 				return ErrUnavailable{Reason: "spazio sul server esaurito durante il download (quota o margine del disco)"}
 			}
 		}
@@ -354,8 +359,8 @@ func trackLangs(inputs []ffInput) (audio, subs string) {
 }
 
 // loadInput fetches an input's media playlist and writes its local copy.
-func (m *Manager) loadInput(ctx context.Context, li *localInput, work string, headers map[string]string) error {
-	text, err := m.fetchText(ctx, li.remoteURL, headers)
+func (m *Manager) loadInput(ctx context.Context, li *localInput, work string, access *sourceAccess) error {
+	text, err := m.fetchText(ctx, li.remoteURL, access)
 	if err != nil {
 		return fmt.Errorf("playlist %s: %w", li.Kind, err)
 	}
@@ -401,12 +406,12 @@ func reconcileWork(work string, locals []*localInput) error {
 // fetchResource downloads one segment/key/init section, retrying; after a
 // second failure it re-reads the input's playlist once or twice (fresh
 // segment URLs: a token that expired while the job waited or paused).
-func (m *Manager) fetchResource(ctx context.Context, li *localInput, ri int, work string, headers map[string]string) (int64, error) {
+func (m *Manager) fetchResource(ctx context.Context, li *localInput, ri int, work string, access *sourceAccess, limit int64) (int64, error) {
 	var lastErr error
 	// Few attempts: each already includes the proxy's own retry budget; a
 	// missing segment goes to the job-level backoff.
 	for attempt := 1; attempt <= 3; attempt++ {
-		n, err := m.download(ctx, li.res[ri].URL, filepath.Join(work, li.res[ri].Name), headers)
+		n, err := m.download(ctx, li.res[ri].URL, filepath.Join(work, li.res[ri].Name), access, limit)
 		if err == nil {
 			return n, nil
 		}
@@ -417,7 +422,7 @@ func (m *Manager) fetchResource(ctx context.Context, li *localInput, ri int, wor
 		lastErr = err
 		if attempt >= 2 && li.refreshes < 2 {
 			li.refreshes++
-			if rerr := m.refreshInput(ctx, li, headers); rerr != nil {
+			if rerr := m.refreshInput(ctx, li, access); rerr != nil {
 				log.Printf("[downloads] rilettura playlist %s fallita: %v", li.Kind, rerr)
 			}
 		}
@@ -432,8 +437,8 @@ func (m *Manager) fetchResource(ctx context.Context, li *localInput, ri int, wor
 
 // refreshInput re-reads the remote media playlist and takes its URLs, as long
 // as it still has the same shape.
-func (m *Manager) refreshInput(ctx context.Context, li *localInput, headers map[string]string) error {
-	text, err := m.fetchText(ctx, li.remoteURL, headers)
+func (m *Manager) refreshInput(ctx context.Context, li *localInput, access *sourceAccess) error {
+	text, err := m.fetchText(ctx, li.remoteURL, access)
 	if err != nil {
 		return err
 	}
@@ -447,16 +452,42 @@ func (m *Manager) refreshInput(ctx context.Context, li *localInput, headers map[
 	return nil
 }
 
-// download writes u to path (via a .tmp file, so a file that exists is whole).
-func (m *Manager) download(ctx context.Context, u, path string, headers map[string]string) (int64, error) {
+// downloadIdle is how long a resource body may stall before it is retried.
+const downloadIdle = 60 * time.Second
+
+// idleReader re-arms t on every read.
+type idleReader struct {
+	r io.Reader
+	t *time.Timer
+}
+
+func (ir idleReader) Read(b []byte) (int, error) {
+	n, err := ir.r.Read(b)
+	ir.t.Reset(downloadIdle)
+	return n, err
+}
+
+// maxResourceBytes caps one segment/key/init section, whatever the space
+// left: no HLS resource comes near it.
+const maxResourceBytes = 2 << 30
+
+// errResourceTooBig: a resource past its byte limit (see download).
+var errResourceTooBig = errors.New("risorsa oltre il limite di spazio disponibile")
+
+// download writes u to path (via a .tmp file, so a file that exists is
+// whole), refusing more than limit bytes.
+func (m *Manager) download(ctx context.Context, u, path string, access *sourceAccess, limit int64) (int64, error) {
+	// A body that stops arriving for downloadIdle is given up (the clients
+	// have no total timeout: a throttled segment may legitimately take long).
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	idle := time.AfterFunc(downloadIdle, cancel)
+	defer idle.Stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return 0, err
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := m.http.Do(req)
+	resp, err := m.do(req, access)
 	if err != nil {
 		return 0, err
 	}
@@ -469,9 +500,12 @@ func (m *Manager) download(ctx context.Context, u, path string, headers map[stri
 	if err != nil {
 		return 0, err
 	}
-	n, err := io.Copy(f, throttle(ctx, resp.Body))
+	n, err := io.Copy(f, io.LimitReader(throttle(ctx, idleReader{resp.Body, idle}), limit+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
+	}
+	if err == nil && n > limit {
+		err = errResourceTooBig
 	}
 	if err == nil && n == 0 {
 		err = errors.New("risposta vuota")

@@ -102,8 +102,8 @@ func TestFactoryReset_WrongPasswordRejectedNothingWiped(t *testing.T) {
 	rec := httptest.NewRecorder()
 	adminAuthMiddleware(factoryResetHandler)(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 for wrong password, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for wrong password, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var count int
 	if err := managers.DB.QueryRow(`SELECT COUNT(*) FROM pileus_profiles`).Scan(&count); err != nil {

@@ -132,7 +132,7 @@ func (c *segCache) ByteLen() int {
 	return c.bytes
 }
 
-// Reset drops everything — tests only.
+// Reset drops everything (the dashboard's "clear cache", the wipes).
 func (c *segCache) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

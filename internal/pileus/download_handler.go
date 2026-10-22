@@ -44,7 +44,7 @@ func DownloadResolver(ctx context.Context, pluginID, streamID, owner string) (do
 	isHLS := strings.Contains(lower, ".m3u8") || strings.Contains(lower, "/playlist/")
 	src := downloads.Source{IsHLS: isHLS, IsLive: isLive, Extra: extra}
 	if engine.LuaPlugins.ShouldSkipProxy(pluginID) {
-		src.URL, src.Headers = rawURL, headers
+		src.URL, src.Headers, src.Direct = rawURL, headers, true
 		return src, nil
 	}
 	port := managers.Settings.GetString("server_port", "8000")

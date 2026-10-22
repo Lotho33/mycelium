@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -96,9 +97,13 @@ func (opts SDKOpts) doSDKHTTP(scope *callScope, r sdkRequest, maxBody int64) sdk
 		client = http.DefaultClient
 	}
 
-	// Transport-level failures (proxy hiccup, DNS blip) are retried a couple of
-	// times; HTTP responses, error statuses included, are returned as they are.
-	const maxAttempts = 3
+	// Transport-level failures (proxy hiccup, DNS blip) of idempotent requests
+	// are retried a couple of times (a POST may have reached the server);
+	// HTTP responses, error statuses included, are returned as they are.
+	maxAttempts := 1
+	if r.method == http.MethodGet || r.method == http.MethodHead {
+		maxAttempts = 3
+	}
 	var resp *http.Response
 	var err error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -134,8 +139,18 @@ func (opts SDKOpts) doSDKHTTP(scope *callScope, r sdkRequest, maxBody int64) sdk
 	}
 	defer resp.Body.Close()
 	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, io.LimitReader(resp.Body, maxBody))
-	return sdkResponse{status: resp.StatusCode, body: buf.String(), headers: resp.Header}
+	n, err := io.Copy(&buf, io.LimitReader(resp.Body, maxBody+1))
+	out := sdkResponse{status: resp.StatusCode, headers: resp.Header}
+	switch {
+	case err != nil:
+		// A cut body is not a response: the plugin would parse half a page.
+		out.err = "body read: " + core.RedactURLError(err).Error()
+	case n > maxBody:
+		out.err = fmt.Sprintf("response too large (over %d bytes)", maxBody)
+	default:
+		out.body = buf.String()
+	}
+	return out
 }
 
 const (

@@ -25,27 +25,6 @@ func TestNormalizeVersion(t *testing.T) {
 	}
 }
 
-// Release tags are "v"-prefixed while core.Version may not be.
-func TestSameVersion(t *testing.T) {
-	cases := []struct {
-		a, b string
-		want bool
-	}{
-		{"v1.3.2", "1.3.2", true},   // release tag vs running version
-		{"1.3.2", "v1.3.2", true},   // order shouldn't matter
-		{"v1.3.2", "v1.3.2", true},  // both prefixed
-		{"1.3.2", "1.3.2", true},    // neither prefixed
-		{"v1.3.2", "v1.3.3", false}, // genuinely different releases
-		{"1.3.2", "1.3.3", false},
-		{"v1.3.2", "1.3.3", false},
-	}
-	for _, c := range cases {
-		if got := SameVersion(c.a, c.b); got != c.want {
-			t.Errorf("SameVersion(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
-		}
-	}
-}
-
 // IsNewerVersion is true only when candidate is strictly newer (being ahead
 // of the latest release is not "update available").
 func TestIsNewerVersion(t *testing.T) {

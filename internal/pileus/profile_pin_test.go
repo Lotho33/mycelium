@@ -116,7 +116,7 @@ func TestProfilePin_FamilyTrustedAndOneOffSession(t *testing.T) {
 	setupPinTestDB(t)
 	h := testAuthHandler()
 	orig := deviceActiveLookup
-	deviceActiveLookup = func(string) bool { return true }
+	deviceActiveLookup = func(string) (bool, string) { return true, "" }
 	t.Cleanup(func() { deviceActiveLookup = orig })
 	deviceActiveCache.Delete("tv")
 	deviceActiveCache.Delete("phone")

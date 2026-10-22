@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -67,7 +68,6 @@ type LuaSettingField struct {
 	ID       string `yaml:"id"`
 	Label    string `yaml:"label"`
 	Type     string `yaml:"type"` // "string" | "password" | "number" | "bool"
-	Hidden   bool   `yaml:"hidden"`
 	Required bool   `yaml:"required"`
 }
 
@@ -291,6 +291,12 @@ func (m *LuaPluginManager) SetRunEnabled(pluginID string, enabled bool) {
 	})
 }
 
+// liveRefreshCooldown is the minimum gap between two manual live refreshes
+// of one plugin; liveRefreshLast holds the last one (pluginID -> time).
+const liveRefreshCooldown = 60 * time.Second
+
+var liveRefreshLast sync.Map
+
 // TriggerLiveRefresh runs pluginID's live_refresh task(s) now, in the
 // background, gated by bgTaskSem.
 func (m *LuaPluginManager) TriggerLiveRefresh(pluginID string) (ok bool, message string) {
@@ -313,6 +319,11 @@ func (m *LuaPluginManager) TriggerLiveRefresh(pluginID string) (ok bool, message
 	if len(tasks) == 0 {
 		return false, "il plugin non supporta l'aggiornamento manuale"
 	}
+	// Any paired client can ask: one run per plugin per liveRefreshCooldown.
+	now := time.Now()
+	if v, ok := liveRefreshLast.Load(pluginID); ok && now.Sub(v.(time.Time)) < liveRefreshCooldown {
+		return false, "aggiornamento già richiesto da poco, riprova tra un minuto"
+	}
 
 	if !TryAcquireBgTaskSem() {
 		return false, "un altro task è già in corso, riprova tra poco"
@@ -322,6 +333,8 @@ func (m *LuaPluginManager) TriggerLiveRefresh(pluginID string) (ok bool, message
 		ReleaseBgTaskSem()
 		return false, "un task di questo plugin è già in corso, riprova tra poco"
 	}
+
+	liveRefreshLast.Store(pluginID, now)
 
 	go func() {
 		defer ReleaseBgTaskSem()
@@ -358,6 +371,9 @@ type LuaPlugin struct {
 	stopHR   chan struct{}
 	cronStop chan struct{}
 	taskMu   sync.Mutex // serializes this plugin's tasks
+	// taskQueued holds the functions with a run already running or waiting
+	// for taskMu, so a cron tick never stacks a second run of the same task.
+	taskQueued sync.Map
 
 	// discardedStates counts entrypoint calls whose Lua state was discarded
 	// after a timeout (see callWithTimeout); exposed to the dashboard.
@@ -374,10 +390,6 @@ func (p *LuaPlugin) recordDiscard() {
 	if n%discardWarnEvery == 0 {
 		log.Printf("[lua] plugin %s: %d stati Lua scartati per timeout finora — possibile entrypoint/task bloccato, verificare i log del plugin", p.Manifest.ID, n)
 	}
-}
-
-func (p *LuaPlugin) scriptPath() string {
-	return filepath.Join(p.Dir, "init.lua")
 }
 
 // IconPath returns the absolute path of the plugin's `icon:` (relative to
@@ -399,10 +411,31 @@ func (m *LuaPluginManager) IconPath(pluginID string) (string, bool) {
 		return "", false
 	}
 	fi, err := os.Stat(full)
-	if err != nil || fi.IsDir() {
+	if err != nil || fi.IsDir() || !resolvesInside(p.Dir, full) {
 		return "", false
 	}
 	return full, true
+}
+
+// resolvesInside reports whether full, with symlinks resolved, stays inside
+// dir: for a file that doesn't exist yet, its parent directory must. A
+// symlink in a plugin directory must not reach another plugin's files or
+// the server's.
+func resolvesInside(dir, full string) bool {
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(full)
+	if os.IsNotExist(err) {
+		var perr error
+		if resolved, perr = filepath.EvalSymlinks(filepath.Dir(full)); perr != nil {
+			return false
+		}
+	} else if err != nil {
+		return false
+	}
+	return resolved == root || strings.HasPrefix(resolved, root+string(filepath.Separator))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -417,9 +450,13 @@ type LuaPluginManager struct {
 	plugins      map[string]*LuaPlugin
 	mu           sync.RWMutex
 	pluginsRoot  string
-	proxyAddr    string
 	directClient *http.Client // uTLS, no proxy — always used for catalog/API calls
-	proxyClient  *http.Client // VPN/proxy — the default egress; skipped for direct_egress plugins
+
+	// proxyMu guards proxyAddr/proxyClient, swapped at runtime from the
+	// dashboard (SetProxyAddr) while states are being built.
+	proxyMu     sync.RWMutex
+	proxyAddr   string
+	proxyClient *http.Client // VPN/proxy — the default egress; skipped for direct_egress plugins
 
 	// proxyClients caches one plugin HTTP client per egress proxy URL.
 	proxyClients   map[string]*http.Client
@@ -449,33 +486,39 @@ func (m *LuaPluginManager) ProxyClientFor(proxyURL string) *http.Client {
 }
 
 func (m *LuaPluginManager) SetProxyAddr(addr string) {
-	m.proxyAddr = addr
+	var c *http.Client
 	if addr != "" {
-		m.proxyClient = NewPluginHTTPClient(addr)
-	} else {
-		m.proxyClient = nil
+		c = NewPluginHTTPClient(addr)
 	}
+	m.proxyMu.Lock()
+	m.proxyAddr, m.proxyClient = addr, c
+	m.proxyMu.Unlock()
+
 	// Reload all active pools so existing VMs pick up the new proxy client.
+	// Outside m.mu: a reload runs every plugin's init.lua.
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	pools := make(map[string]*LuaPool, len(m.plugins))
 	for id, p := range m.plugins {
-		if err := p.Pool.Reload(); err != nil {
+		pools[id] = p.Pool
+	}
+	m.mu.RUnlock()
+	for id, pool := range pools {
+		if err := pool.Reload(); err != nil {
 			log.Printf("[lua] SetProxyAddr: reload %s failed: %v", id, err)
 		}
 	}
 }
 
-func (m *LuaPluginManager) GetProxyAddr() string {
-	return m.proxyAddr
+// proxy returns the default VPN proxy address and its client.
+func (m *LuaPluginManager) proxy() (string, *http.Client) {
+	m.proxyMu.RLock()
+	defer m.proxyMu.RUnlock()
+	return m.proxyAddr, m.proxyClient
 }
 
-// UsesVPN reports whether the plugin routes its traffic through the VPN
-// proxy (every plugin without direct_egress). False for unknown IDs.
-func (m *LuaPluginManager) UsesVPN(id string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	p, ok := m.plugins[id]
-	return ok && !p.Manifest.DirectEgress
+func (m *LuaPluginManager) GetProxyAddr() string {
+	addr, _ := m.proxy()
+	return addr
 }
 
 func (m *LuaPluginManager) LoadAll(dir string) error {
@@ -516,7 +559,7 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	if mf.ID == "" {
 		return fmt.Errorf("manifest.yaml missing 'id' in %s", dir)
 	}
-	if !mf.DirectEgress && m.proxyClient == nil {
+	if _, pc := m.proxy(); !mf.DirectEgress && pc == nil {
 		log.Printf("[lua] plugin %s routes through the VPN by default but no VPN proxy is configured — its network calls will fail closed until one is set (or add direct_egress: true to its manifest)", mf.ID)
 	}
 	if mf.VPNOptional && !mf.DirectEgress {
@@ -549,18 +592,20 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 		if direct == nil {
 			direct = http.DefaultClient
 		}
+		proxyAddr, proxyClient := m.proxy()
 		RegisterSDK(L, SDKOpts{
 			PluginID:        mf.ID,
 			PluginDir:       dir,
 			Redis:           managers.Redis,
 			LogBuf:          logBuf,
 			HTTPClient:      direct,
-			ProxyHTTPClient: m.proxyClient,
-			ProxyURL:        m.proxyAddr,
+			ProxyHTTPClient: proxyClient,
+			ProxyURL:        proxyAddr,
 			ProxyClientFor:  m.ProxyClientFor,
 		}, scopeOf(L))
 	})
 	if err != nil {
+		logBuf.Close()
 		return fmt.Errorf("lua pool for %s: %w", mf.ID, err)
 	}
 
@@ -580,12 +625,14 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 		// the same directory is allowed.
 		m.mu.Unlock()
 		pool.Close()
+		logBuf.Close()
 		return fmt.Errorf("plugin id %q già in uso da un'altra directory (%s)", mf.ID, old.Dir)
 	}
 	if old, ok := m.plugins[mf.ID]; ok {
 		close(old.stopHR)
 		close(old.cronStop)
 		old.Pool.Close()
+		old.LogBuf.Close()
 	}
 	m.plugins[mf.ID] = p
 	m.mu.Unlock()
@@ -596,36 +643,6 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	go m.warmupCatalogCounts(p)
 	log.Printf("[lua] plugin %q loaded (v%s)", mf.ID, mf.Version)
 	return nil
-}
-
-// watchHotReloadPolling is a fallback hot-reload watcher using mtime polling.
-// Used by lua_hotreload.go when fsnotify is unavailable.
-func (m *LuaPluginManager) watchHotReloadPolling(p *LuaPlugin) {
-	path := p.scriptPath()
-	lastMod := fileMod(path)
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-p.stopHR:
-			return
-		case <-ticker.C:
-			mod := fileMod(path)
-			if mod != lastMod {
-				lastMod = mod
-				// A bad reload must not stop hot-reload for this plugin.
-				func() {
-					defer core.Guard("lua/hot-reload-poll:" + p.Manifest.ID)
-					if err := p.Pool.Reload(); err != nil {
-						log.Printf("[lua] hot-reload %s: %v", p.Manifest.ID, err)
-					} else {
-						pluginIndexes.dropPlugin(p.Manifest.ID)
-						log.Printf("[lua] hot-reload %s: OK", p.Manifest.ID)
-					}
-				}()
-			}
-		}
-	}
 }
 
 // taskLastRunKey returns the Redis key used to persist the last-run timestamp of a task.
@@ -700,19 +717,24 @@ func (m *LuaPluginManager) TryAcquirePluginTaskLock(pluginID string) (release fu
 	return p.taskMu.Unlock, true
 }
 
-// taskDue reports whether t should run now: never run before, or its cron
-// interval has elapsed. A task with cron "" is manual-only and never due.
+// taskDue reports whether t should run now: never run before, or its
+// "@every" interval has elapsed. A task with a calendar cron expression is
+// due only if it never ran (afterwards the scheduler runs it on time); one
+// with cron "" is manual-only and never due.
 func (m *LuaPluginManager) taskDue(ctx context.Context, pluginID string, t LuaManifestTask) bool {
 	if t.Cron == "" {
 		return false
 	}
-	interval := cronInterval(t.Cron)
-	if interval <= 0 || managers.Redis == nil {
+	if managers.Redis == nil {
 		return true
 	}
 	val, err := managers.Redis.Get(ctx, taskLastRunKey(pluginID, t.Function))
 	if err != nil || val == "" {
 		return true
+	}
+	interval := cronInterval(t.Cron)
+	if interval <= 0 {
+		return false
 	}
 	var lastRun int64
 	if _, err := fmt.Sscanf(val, "%d", &lastRun); err != nil {
@@ -722,16 +744,24 @@ func (m *LuaPluginManager) taskDue(ctx context.Context, pluginID string, t LuaMa
 }
 
 // runTaskNow executes t, re-checking that the plugin is running (callers may
-// race a stop or a settings change).
+// race a stop or a settings change). A run of t already running or queued
+// makes this one a no-op. The plugin's task lock is taken before the global
+// bgTaskSem slot: waiting for this plugin's other task must not hold one of
+// the process-wide slots.
 func (m *LuaPluginManager) runTaskNow(p *LuaPlugin, t LuaManifestTask) {
 	if !m.IsOperational(p.Manifest.ID) {
 		log.Printf("[lua] task %s/%s: skip (plugin non attivo: %s)", p.Manifest.ID, t.Function, m.RunStateOf(p.Manifest.ID))
 		return
 	}
-	bgTaskSem <- struct{}{}
-	defer func() { <-bgTaskSem }()
+	if _, busy := p.taskQueued.LoadOrStore(t.Function, true); busy {
+		log.Printf("[lua] task %s/%s: skip (esecuzione precedente ancora in corso)", p.Manifest.ID, t.Function)
+		return
+	}
+	defer p.taskQueued.Delete(t.Function)
 	p.taskMu.Lock()
 	defer p.taskMu.Unlock()
+	bgTaskSem <- struct{}{}
+	defer func() { <-bgTaskSem }()
 	// Recover here: this runs in its own goroutine, and an unrecovered panic
 	// would crash the process with bgTaskSem/taskMu still held.
 	defer func() {
@@ -1127,7 +1157,7 @@ func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]a
 	callErr, timedOut := callWithTimeout(ctx, L, fn, luaArgs)
 	if timedOut {
 		outcome = "timeout"
-		p.Pool.DiscardAndReplace()
+		p.Pool.DiscardAndReplace(L)
 		p.recordDiscard()
 		released = true
 		return nil, fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
@@ -1176,15 +1206,9 @@ func (m *LuaPluginManager) CallEntrypointJSONBackground(pluginID, ep string, arg
 	return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, true)
 }
 
-// CallEntrypointJSONWithProgress is CallEntrypointJSON with
+// CallEntrypointJSONWithProgressCtx is CallEntrypointJSONCtx with
 // mycelium.progress(status, message) updates forwarded to onProgress while
 // the plugin runs (used by resolve_stream).
-func (m *LuaPluginManager) CallEntrypointJSONWithProgress(pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
-	return m.CallEntrypointJSONWithProgressCtx(context.Background(), pluginID, ep, args, profileID, onProgress)
-}
-
-// CallEntrypointJSONWithProgressCtx is CallEntrypointJSONWithProgress bound to
-// the caller's ctx (see CallEntrypointJSONCtx).
 func (m *LuaPluginManager) CallEntrypointJSONWithProgressCtx(ctx context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
 	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, onProgress, false)
 }
@@ -1244,7 +1268,7 @@ func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, 
 	callErr, timedOut := callWithTimeout(ctx, L, fn, mapToLuaTable(L, args))
 	if timedOut {
 		outcome = "timeout"
-		p.Pool.DiscardAndReplace()
+		p.Pool.DiscardAndReplace(L)
 		p.recordDiscard()
 		released = true
 		return nil, fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
@@ -1288,9 +1312,12 @@ func luaValueToJSONGuarded(w *bytes.Buffer, v lua.LValue, g *luaConvGuard) {
 		}
 	case lua.LNumber:
 		f := float64(val)
-		if i := int64(f); float64(i) == f {
-			w.WriteString(strconv.FormatInt(i, 10))
-		} else {
+		switch {
+		case math.IsNaN(f) || math.IsInf(f, 0):
+			w.WriteString("null") // JSON has no NaN/Inf: the whole result would be invalid
+		case float64(int64(f)) == f:
+			w.WriteString(strconv.FormatInt(int64(f), 10))
+		default:
 			w.WriteString(strconv.FormatFloat(f, 'f', -1, 64))
 		}
 	case lua.LString:
@@ -1543,6 +1570,7 @@ func (m *LuaPluginManager) UnloadPlugin(pluginID string) {
 		close(p.stopHR)
 		close(p.cronStop)
 		p.Pool.Close()
+		p.LogBuf.Close() // a reload opens a new one
 		delete(m.plugins, pluginID)
 	}
 	m.mu.Unlock()
@@ -1558,6 +1586,7 @@ func (m *LuaPluginManager) Shutdown() {
 		close(p.stopHR)
 		close(p.cronStop)
 		p.Pool.Close()
+		p.LogBuf.Close()
 	}
 	m.plugins = make(map[string]*LuaPlugin)
 }
@@ -1588,6 +1617,10 @@ const VPNOptInSettingID = "vpn_enabled"
 // anything else here.
 var pluginIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
 
+// settingIDPattern whitelists settings.global[].id the same way: the id is
+// rendered into the dashboard and becomes part of a setting key.
+var settingIDPattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
 func readLuaManifest(dir string) (LuaManifest, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
 	if err != nil {
@@ -1602,6 +1635,11 @@ func readLuaManifest(dir string) (LuaManifest, error) {
 	}
 	if !pluginIDPattern.MatchString(mf.ID) {
 		return LuaManifest{}, fmt.Errorf("manifest.yaml 'id' %q in %s is invalid: must match %s", mf.ID, dir, pluginIDPattern.String())
+	}
+	for _, f := range mf.Settings.Global {
+		if !settingIDPattern.MatchString(f.ID) {
+			return LuaManifest{}, fmt.Errorf("manifest.yaml setting id %q in %s is invalid: must match %s", f.ID, dir, settingIDPattern.String())
+		}
 	}
 	if mf.VPNOptional && mf.DirectEgress {
 		mf.Settings.Global = append(mf.Settings.Global, LuaSettingField{

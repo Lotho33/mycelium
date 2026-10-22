@@ -10,21 +10,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"mycelium/internal/core"
 	"mycelium/internal/managers"
 )
 
-// InternalRoutes registers the utility endpoints: proxy, progress, version.
+// InternalRoutes registers the utility endpoints: proxy, images, version.
 func InternalRoutes(mux *http.ServeMux) {
-	rl := func(h http.HandlerFunc) http.HandlerFunc {
-		return rateLimitMiddleware(apiLimiter, clientAuthMiddleware(h))
-	}
 	mux.HandleFunc("GET /api/version", getVersion)
 	mux.HandleFunc("GET /api/v1/version", getVersion)
-	mux.HandleFunc("POST /api/v1/progress", rl(postProgress))
-	mux.HandleFunc("DELETE /api/v1/progress/{provider_id}/{playable_id}", rl(deleteProgress))
-	mux.HandleFunc("GET /api/v1/continue_watching", rl(getContinueWatching))
 
 	// HLS proxy: no auth (players call it directly); the URLs carry an HMAC so
 	// they can't be forged. Per-IP rate limit on top.
@@ -74,8 +69,9 @@ func serveWebApp(mux *http.ServeMux, prefix, dir string) {
 			path = "/index.html"
 		}
 		// Serve index.html for unknown paths (SPA routing).
+		// Directories too: no listings.
 		fullPath := filepath.Join(dir, filepath.Clean(path))
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		if fi, err := os.Stat(fullPath); err != nil || fi.IsDir() {
 			fullPath = indexPath
 		}
 		if fullPath == indexPath {
@@ -178,6 +174,41 @@ var setupAllowAny = os.Getenv("MYCELIUM_SETUP_ALLOW_ANY") == "1"
 // setupCGNAT is 100.64.0.0/10 (Tailscale/Headscale peers count as local).
 var setupCGNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
 
+// setupHostAllowed reports whether the setup form may be submitted under
+// Host: an IP, localhost, a single-label or LAN-suffixed name, or the
+// configured server_host. Against DNS rebinding: a public domain the
+// attacker points at the server's LAN address would pass the Origin check
+// (Origin and Host agree) and the LAN-only check (the victim's browser is
+// in the LAN), but never one of these names.
+func setupHostAllowed(hostport string) bool {
+	if setupAllowAny {
+		return true
+	}
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil || host == "localhost" || !strings.Contains(host, ".") {
+		return true
+	}
+	for _, suffix := range []string{".local", ".lan", ".home.arpa", ".internal", ".localdomain", ".localhost"} {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	if sh := effectiveServerHost(); sh != "" {
+		if h, _, err := net.SplitHostPort(sh); err == nil {
+			sh = h
+		}
+		return strings.EqualFold(host, strings.Trim(sh, "[]"))
+	}
+	return false
+}
+
 // setupAllowedFrom reports whether a first-run setup may come from ip:
 // loopback, RFC1918/ULA, link-local or the tailnet range.
 func setupAllowedFrom(ip string) bool {
@@ -195,7 +226,13 @@ func setupAllowedFrom(ip string) bool {
 	return parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsLinkLocalUnicast() || setupCGNAT.Contains(parsed)
 }
 
+// setupMu serializes saveSetup, so two concurrent first-run submissions can't
+// both pass the "not done yet" check.
+var setupMu sync.Mutex
+
 func saveSetup(w http.ResponseWriter, r *http.Request) {
+	setupMu.Lock()
+	defer setupMu.Unlock()
 	// One-shot: once an admin password exists this endpoint is closed.
 	if managers.Settings.IsSetupDone() {
 		http.Error(w, "Setup già completato", http.StatusForbidden)
@@ -206,6 +243,11 @@ func saveSetup(w http.ResponseWriter, r *http.Request) {
 	if !setupAllowedFrom(realIP(r)) {
 		log.Printf("[setup] rifiutato setup da %s (non in rete locale; MYCELIUM_SETUP_ALLOW_ANY=1 per consentirlo)", realIP(r))
 		http.Error(w, "Il setup iniziale è consentito solo dalla rete locale", http.StatusForbidden)
+		return
+	}
+	if !setupHostAllowed(r.Host) {
+		log.Printf("[setup] rifiutato setup con Host %q (usa l'IP del server o il suo nome in rete locale)", r.Host)
+		http.Error(w, "Apri il setup con l'indirizzo IP del server o il suo nome in rete locale", http.StatusForbidden)
 		return
 	}
 

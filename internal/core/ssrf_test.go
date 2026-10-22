@@ -209,7 +209,7 @@ func TestGuardLookupFallsBackToLocalResolverAndCaches(t *testing.T) {
 	fakeDNS(t,
 		func(context.Context, string) ([]net.IPAddr, error) {
 			pubCalls++
-			return nil, &net.DNSError{Err: "no such host", Name: "jellyfin", IsNotFound: true}
+			return nil, &net.DNSError{Err: "no such host", Name: "nas", IsNotFound: true}
 		},
 		func(context.Context, string) ([]net.IPAddr, error) {
 			localCalls++
@@ -217,7 +217,7 @@ func TestGuardLookupFallsBackToLocalResolverAndCaches(t *testing.T) {
 		},
 	)
 	for i := 0; i < 3; i++ {
-		ips, err := guardLookup(context.Background(), "jellyfin")
+		ips, err := guardLookup(context.Background(), "nas")
 		if err != nil || len(ips) != 1 || ips[0].IP.String() != "172.18.0.5" {
 			t.Fatalf("guardLookup = %v, %v; want the local resolver's answer", ips, err)
 		}
@@ -269,5 +269,35 @@ func TestGuardedDialContextFallsThroughToOtherFamily(t *testing.T) {
 	want := []string{"[2001:4860::1]:443", "93.184.216.34:443"}
 	if strings.Join(dialed, ",") != strings.Join(want, ",") {
 		t.Fatalf("dialed %v, want %v", dialed, want)
+	}
+}
+
+// Through an egress proxy the target is resolved on the proxy's side, so
+// anything that only means "the proxy's own host or network" is refused
+// before it's handed over.
+func TestCheckProxiedHost(t *testing.T) {
+	for _, h := range []string{
+		"127.0.0.1", "::1", "10.0.0.5", "192.168.1.1", "172.17.0.1", "100.64.0.1",
+		"169.254.169.254", "0.0.0.0", "fd00::1",
+		"localhost", "LOCALHOST.", "foo.localhost", "mycelium", "nas.local",
+		"svc.internal", "router.lan", "printer.home.arpa",
+		"2130706433", "0x7f.1", "017.0.0.1",
+	} {
+		if checkProxiedHost(h) == nil {
+			t.Errorf("%q allowed through an egress", h)
+		}
+	}
+	for _, h := range []string{"example.org", "cdn.example.com", "8.8.8.8", "2606:4700::1111"} {
+		if err := checkProxiedHost(h); err != nil {
+			t.Errorf("%q refused: %v", h, err)
+		}
+	}
+}
+
+func TestCheckURLNotSSRF_RejectsNumericHosts(t *testing.T) {
+	for _, u := range []string{"http://2130706433/", "http://0x7f.1/", "http://0177.0.0.1/"} {
+		if CheckURLNotSSRF(t.Context(), u) == nil {
+			t.Errorf("%s allowed", u)
+		}
 	}
 }

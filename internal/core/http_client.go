@@ -64,15 +64,9 @@ func parseBoolish(s string) bool {
 // ParseBoolish is parseBoolish for callers outside core.
 func ParseBoolish(s string) bool { return parseBoolish(s) }
 
-// lookupHostCF resolves host with raw DNS queries to public resolvers, never
-// the OS resolver. Family order follows egressPreferIPv6(); CFDialContext
-// tries the other family if this one won't dial.
-func lookupHostCF(ctx context.Context, host string) (string, error) {
-	return lookupHostCFFamily(ctx, host, egressPreferIPv6())
-}
-
-// lookupHostCFFamily resolves host to one A or AAAA address, cached briefly
-// per family (the segment proxy dials new hostnames constantly).
+// lookupHostCFFamily resolves host to one A or AAAA address with raw DNS
+// queries to public resolvers (never the OS resolver), cached briefly per
+// family (the segment proxy dials new hostnames constantly).
 func lookupHostCFFamily(ctx context.Context, host string, v6 bool) (string, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return host, nil
@@ -101,15 +95,23 @@ func lookupHostCFFamily(ctx context.Context, host string, v6 bool) (string, erro
 	qid := uint16(rand.Uint32())
 	query := buildDNSQuery(qid, fqdn, qtype)
 
-	deadline, ok := ctx.Deadline()
+	callDeadline, ok := ctx.Deadline()
 	if !ok {
-		deadline = time.Now().Add(8 * time.Second)
+		callDeadline = time.Now().Add(8 * time.Second)
 	}
 
 	for _, server := range dnsServers {
+		if ctx.Err() != nil {
+			break
+		}
 		conn, err := net.DialTimeout("udp4", server, 3*time.Second)
 		if err != nil {
 			continue
+		}
+		// Per server, so a silent first resolver leaves time for the next.
+		deadline := time.Now().Add(2 * time.Second)
+		if callDeadline.Before(deadline) {
+			deadline = callDeadline
 		}
 		conn.SetDeadline(deadline)
 		if _, err = conn.Write(query); err != nil {
@@ -297,21 +299,6 @@ func httpDialContext(ctx context.Context, network, addr string) (net.Conn, error
 		}
 	}
 	return nil, err
-}
-
-// CFResolver uses a public resolver; transports use CFDialContext.
-var CFResolver = &net.Resolver{
-	PreferGo: true,
-	Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return net.DialTimeout("udp4", "1.1.1.1:53", 5*time.Second)
-	},
-}
-
-// CloudflareDialer dials through CFResolver.
-var CloudflareDialer = &net.Dialer{
-	Timeout:   30 * time.Second,
-	KeepAlive: 30 * time.Second,
-	Resolver:  CFResolver,
 }
 
 var (
