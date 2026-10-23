@@ -126,7 +126,9 @@ var (
 	// allowedExactKeys: keys writable only by exact name, where a prefix would
 	// also match sensitive neighbours.
 	allowedExactKeys = map[string]bool{
-		"pileus_web_repo": true, // "owner/repo" of the Pileus web build
+		"pileus_web_repo":       true, // "owner/repo" of the Pileus web build
+		"warm_resolve_enabled":  true, // WarmStream global switch (pileus/warm_stream.go)
+		"warm_resolve_per_hour": true, // WarmStream per-plugin hourly budget
 	}
 )
 

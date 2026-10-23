@@ -175,3 +175,16 @@ func TestSaveInternal_RefusesToOverwriteCorruptConfig(t *testing.T) {
 		t.Fatalf("config.json changed: %q", got)
 	}
 }
+
+// The dashboard's "Estrazione anticipata" card saves these through the
+// generic endpoint: without them every save fails.
+func TestIsAllowedKey_WarmResolve(t *testing.T) {
+	for _, k := range []string{"warm_resolve_enabled", "warm_resolve_per_hour"} {
+		if !isAllowedKey(k) {
+			t.Errorf("%s must be writable from the dashboard", k)
+		}
+	}
+	if isAllowedKey("warm_resolve_x") {
+		t.Error("warm_resolve_* is allowed by exact name only")
+	}
+}
