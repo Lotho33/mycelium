@@ -202,6 +202,7 @@ function switchTab(id) {
     if (id === 'devices') loadPileusDevices();
     if (id === 'users') loadPileusProfiles();
     if (id === 'offline') loadDownloadsAdmin();
+    if (id === 'settings') loadWarmStats();
     closeNav();
 }
 
@@ -1359,6 +1360,9 @@ async function checkCoreVersion() {
     if (dlPause && typeof d.download_pause_while_streaming === 'boolean') dlPause.checked = d.download_pause_while_streaming;
     const dlDel = document.getElementById('dl-delete-fetched');
     if (dlDel && typeof d.download_delete_after_fetch === 'boolean') dlDel.checked = d.download_delete_after_fetch;
+    const warmEn = document.getElementById('warm-enabled');
+    if (warmEn && typeof d.warm_resolve_enabled === 'boolean') warmEn.checked = d.warm_resolve_enabled;
+    dlSet('warm-per-hour', d.warm_resolve_per_hour, 20);
 
     // Download tab (iOS/macOS): link to the web app on the dashboard's origin.
     const secureOrigin = window.location.origin;
@@ -1711,4 +1715,51 @@ async function saveDownloadSettings() {
     });
     if (r?.ok) { showToast('Salvato.', 'success'); loadDownloadsAdmin(); }
     else showToast('Salvataggio non riuscito.', 'error');
+}
+
+// ─── Warm resolve (Impostazioni → Estrazione anticipata) ─────────────────────
+async function saveWarmSettings() {
+    const n = parseFloat(document.getElementById('warm-per-hour').value);
+    const r = await apiFetch('/admin/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            warm_resolve_enabled: document.getElementById('warm-enabled').checked ? '1' : '0',
+            warm_resolve_per_hour: String(isNaN(n) || n < 0 ? 20 : Math.floor(n)),
+        }),
+    });
+    if (r?.ok) showToast('Salvato.', 'success');
+    else showToast('Salvataggio non riuscito.', 'error');
+}
+
+const _warmReasons = {
+    disabled: 'spenta', busy: 'occupato', budget: 'limite orario',
+    browser_busy: 'browser occupato', recent: 'già fatta da poco',
+};
+
+async function loadWarmStats() {
+    const box = document.getElementById('warm-stats');
+    if (!box) return;
+    const r = await apiFetch('/admin/warm-stats');
+    if (!r?.ok) return;
+    const d = await r.json();
+    const ok = d.warm_completed_ok || 0;
+    const hitPct = ok > 0 ? Math.round(100 * (d.warm_hit || 0) / ok) + '%' : '—';
+    const secs = ms => (ms / 1000).toFixed(1) + ' s';
+    const dur = x => x && x.count ? `${secs(x.mean_ms)} (p90 ${secs(x.p90_ms)}, ${x.count})` : '—';
+    const skipped = Object.entries(d.warm_skipped || {})
+        .map(([k, v]) => `${_warmReasons[k] || k} ${v}`).join(', ') || 'nessuna';
+    const fresh = d.resolve_duration_fresh || {};
+    const rows = [
+        ['Avviate', d.warm_started || 0],
+        ['Agganciate a una in corso', d.warm_joined || 0],
+        ['Completate', `${ok} ok, ${d.warm_completed_err || 0} errori`],
+        ['Durata estrazione', dur(d.warm_duration)],
+        ['Play serviti da un\'estrazione', `${d.warm_hit || 0} (${hitPct} delle completate, ${d.warm_hit_inflight || 0} mentre era in corso)`],
+        ['Saltate', skipped],
+        ['Play: estrazione propria', `${dur(fresh)}${fresh.count ? `, ${fresh.cache_hits || 0} dalla cache` : ''}`],
+        ['Play: agganciati a una in corso', dur(d.resolve_duration_joined)],
+    ];
+    box.innerHTML = rows.map(([k, v]) =>
+        `<span>${esc(k)}</span><span class="font-mono text-gray-300">${esc(v)}</span>`).join('');
 }

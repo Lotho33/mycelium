@@ -52,6 +52,11 @@ type LuaManifest struct {
 	// HLS proxy — for sources the player can reach directly (e.g. a LAN media
 	// server with native Range support).
 	DirectStream bool `yaml:"direct_stream"`
+	// WarmResolve declares that resolve_stream caches its result, so running it
+	// ahead of Play (MediaPipeline.WarmStream) makes the Play itself instant.
+	// It also adds a synthetic "warm_resolve" setting (on by default). Without
+	// a resolve cache a warm would only double the requests to the site.
+	WarmResolve bool `yaml:"warm_resolve"`
 	// Download opts the plugin into offline downloads (internal/downloads).
 	Download    LuaManifestDownload `yaml:"download"`
 	Settings    LuaManifestSettings `yaml:"settings"`
@@ -69,6 +74,8 @@ type LuaSettingField struct {
 	Label    string `yaml:"label"`
 	Type     string `yaml:"type"` // "string" | "password" | "number" | "bool"
 	Required bool   `yaml:"required"`
+	// Default is the value in effect while none is stored ("" = none).
+	Default string `yaml:"default"`
 }
 
 type LuaManifestExposes struct {
@@ -1193,27 +1200,38 @@ func (m *LuaPluginManager) CallEntrypointJSONCtx(ctx context.Context, pluginID, 
 	if coalescibleRead(ep) {
 		if key, ok := readKey(pluginID, ep, profileID, args); ok {
 			return m.readCo.do(key, func() (json.RawMessage, error) {
-				return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, false)
+				return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, false, 0)
 			})
 		}
 	}
-	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, nil, false)
+	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, nil, false, 0)
 }
 
 // CallEntrypointJSONBackground is CallEntrypointJSON for work nobody waits
 // on: it can't hold every LState, so a user request always finds one free.
 func (m *LuaPluginManager) CallEntrypointJSONBackground(pluginID, ep string, args map[string]any, profileID string) (json.RawMessage, error) {
-	return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, true)
+	return m.callEntrypointJSON(context.Background(), pluginID, ep, args, profileID, nil, true, 0)
+}
+
+// CallEntrypointJSONBackgroundCtx is CallEntrypointJSONBackground bound to
+// ctx, with progress forwarded to onProgress and a cap on the wait for a
+// state: past acquireWait (> 0) it gives up with ErrPluginBusy instead of
+// queuing behind cron tasks. Used for resolves nobody is waiting on yet
+// (WarmStream).
+func (m *LuaPluginManager) CallEntrypointJSONBackgroundCtx(ctx context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, acquireWait time.Duration) (json.RawMessage, error) {
+	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, onProgress, true, acquireWait)
 }
 
 // CallEntrypointJSONWithProgressCtx is CallEntrypointJSONCtx with
 // mycelium.progress(status, message) updates forwarded to onProgress while
 // the plugin runs (used by resolve_stream).
 func (m *LuaPluginManager) CallEntrypointJSONWithProgressCtx(ctx context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc) (json.RawMessage, error) {
-	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, onProgress, false)
+	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, onProgress, false, 0)
 }
 
-func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, background bool) (json.RawMessage, error) {
+// callEntrypointJSON runs one entrypoint. acquireWait > 0 caps the wait for
+// a free state (ErrPluginBusy past it); 0 waits as the class does.
+func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, background bool, acquireWait time.Duration) (json.RawMessage, error) {
 	m.mu.RLock()
 	p, ok := m.plugins[pluginID]
 	m.mu.RUnlock()
@@ -1233,9 +1251,18 @@ func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, 
 	if background {
 		class = classBackground
 	}
-	L, release, done, wait, err := acquireForCall(ctx, p, class)
+	acqCtx := ctx
+	if acquireWait > 0 {
+		var acqCancel context.CancelFunc
+		acqCtx, acqCancel = context.WithTimeout(ctx, acquireWait)
+		defer acqCancel()
+	}
+	L, release, done, wait, err := acquireForCall(acqCtx, p, class)
 	if err != nil {
 		p.logCall(fnName, class, wait, 0, "busy")
+		if acquireWait > 0 && ctx.Err() == nil {
+			return nil, fmt.Errorf("plugin %q: %w: nessuno stato Lua libero entro %s", pluginID, ErrPluginBusy, acquireWait)
+		}
 		return nil, fmt.Errorf("plugin %q: pool acquire: %w", pluginID, err)
 	}
 	defer done()
@@ -1648,7 +1675,38 @@ func readLuaManifest(dir string) (LuaManifest, error) {
 			Type:  "bool",
 		})
 	}
+	if mf.WarmResolve {
+		mf.Settings.Global = append(mf.Settings.Global, LuaSettingField{
+			ID:      WarmResolveSettingID,
+			Label:   "Estrai lo stream in anticipo quando si apre un dettaglio (il Play parte subito)",
+			Type:    "bool",
+			Default: "true",
+		})
+	}
 	return mf, nil
+}
+
+// WarmResolveSettingID is the synthetic setting injected for a manifest with
+// warm_resolve: true (lua:{pluginID}:global:warm_resolve, on by default).
+const WarmResolveSettingID = "warm_resolve"
+
+// WarmResolveEnabled reports whether pluginID may be warmed ahead of Play:
+// loaded, running, resolve declared, warm_resolve in the manifest and not
+// switched off from the dashboard.
+func (m *LuaPluginManager) WarmResolveEnabled(pluginID string) bool {
+	m.mu.RLock()
+	p, ok := m.plugins[pluginID]
+	m.mu.RUnlock()
+	if !ok || !p.Manifest.WarmResolve {
+		return false
+	}
+	if _, declared := p.Manifest.Entrypoints[EPResolveStream]; !declared {
+		return false
+	}
+	if !m.IsOperational(pluginID) {
+		return false
+	}
+	return managers.Settings.GetBool("lua:"+pluginID+":global:"+WarmResolveSettingID, true)
 }
 
 // EgressSettingID is the per-plugin key naming which egress profile the

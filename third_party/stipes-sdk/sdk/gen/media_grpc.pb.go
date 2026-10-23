@@ -222,6 +222,7 @@ const (
 	MediaPipeline_CreateDownloads_FullMethodName     = "/mycelium.MediaPipeline/CreateDownloads"
 	MediaPipeline_AckDownloadFetched_FullMethodName  = "/mycelium.MediaPipeline/AckDownloadFetched"
 	MediaPipeline_ReleasePlayback_FullMethodName     = "/mycelium.MediaPipeline/ReleasePlayback"
+	MediaPipeline_WarmStream_FullMethodName          = "/mycelium.MediaPipeline/WarmStream"
 )
 
 // MediaPipelineClient is the client API for MediaPipeline service.
@@ -247,6 +248,7 @@ type MediaPipelineClient interface {
 	CreateDownloads(ctx context.Context, in *CreateDownloadsRequest, opts ...grpc.CallOption) (*CreateDownloadsResponse, error)
 	AckDownloadFetched(ctx context.Context, in *DownloadIdRequest, opts ...grpc.CallOption) (*DownloadActionResponse, error)
 	ReleasePlayback(ctx context.Context, in *ReleasePlaybackRequest, opts ...grpc.CallOption) (*ReleasePlaybackResponse, error)
+	WarmStream(ctx context.Context, in *WarmStreamRequest, opts ...grpc.CallOption) (*WarmStreamResponse, error)
 }
 
 type mediaPipelineClient struct {
@@ -456,6 +458,16 @@ func (c *mediaPipelineClient) ReleasePlayback(ctx context.Context, in *ReleasePl
 	return out, nil
 }
 
+func (c *mediaPipelineClient) WarmStream(ctx context.Context, in *WarmStreamRequest, opts ...grpc.CallOption) (*WarmStreamResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmStreamResponse)
+	err := c.cc.Invoke(ctx, MediaPipeline_WarmStream_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MediaPipelineServer is the server API for MediaPipeline service.
 // All implementations must embed UnimplementedMediaPipelineServer
 // for forward compatibility.
@@ -479,6 +491,7 @@ type MediaPipelineServer interface {
 	CreateDownloads(context.Context, *CreateDownloadsRequest) (*CreateDownloadsResponse, error)
 	AckDownloadFetched(context.Context, *DownloadIdRequest) (*DownloadActionResponse, error)
 	ReleasePlayback(context.Context, *ReleasePlaybackRequest) (*ReleasePlaybackResponse, error)
+	WarmStream(context.Context, *WarmStreamRequest) (*WarmStreamResponse, error)
 	mustEmbedUnimplementedMediaPipelineServer()
 }
 
@@ -545,6 +558,9 @@ func (UnimplementedMediaPipelineServer) AckDownloadFetched(context.Context, *Dow
 }
 func (UnimplementedMediaPipelineServer) ReleasePlayback(context.Context, *ReleasePlaybackRequest) (*ReleasePlaybackResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleasePlayback not implemented")
+}
+func (UnimplementedMediaPipelineServer) WarmStream(context.Context, *WarmStreamRequest) (*WarmStreamResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmStream not implemented")
 }
 func (UnimplementedMediaPipelineServer) mustEmbedUnimplementedMediaPipelineServer() {}
 func (UnimplementedMediaPipelineServer) testEmbeddedByValue()                       {}
@@ -902,6 +918,24 @@ func _MediaPipeline_ReleasePlayback_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaPipeline_WarmStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmStreamRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPipelineServer).WarmStream(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPipeline_WarmStream_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPipelineServer).WarmStream(ctx, req.(*WarmStreamRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MediaPipeline_ServiceDesc is the grpc.ServiceDesc for MediaPipeline service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -980,6 +1014,10 @@ var MediaPipeline_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReleasePlayback",
 			Handler:    _MediaPipeline_ReleasePlayback_Handler,
+		},
+		{
+			MethodName: "WarmStream",
+			Handler:    _MediaPipeline_WarmStream_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

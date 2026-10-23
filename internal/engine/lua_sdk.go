@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mycelium/internal/core"
@@ -47,6 +48,13 @@ type browserAPI interface {
 	EvalVia(ctx context.Context, req *gen.EvalRequest, proxyURL string) (*gen.EvalResponse, error)
 	WaitInterceptVia(ctx context.Context, req *gen.WaitInterceptRequest, proxyURL string) (*gen.WaitInterceptResponse, error)
 }
+
+// browserCallsInFlight counts mycelium.browser.* calls in progress across
+// every plugin: WarmStream stays away while the browser is busy.
+var browserCallsInFlight atomic.Int64
+
+// BrowserCallsInFlight reports how many mycelium.browser.* calls are running.
+func BrowserCallsInFlight() int64 { return browserCallsInFlight.Load() }
 
 // currentBrowserClient returns managers.BrowserClient() as a browserAPI, or
 // a true nil interface when unset (a typed nil pointer would defeat the
@@ -464,6 +472,8 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			L.Push(lua.LString(err.Error()))
 			return 3
 		}
+		browserCallsInFlight.Add(1)
+		defer browserCallsInFlight.Add(-1)
 		resp, err := bm.WaitInterceptVia(ctx, &gen.WaitInterceptRequest{
 			TriggerUrl: triggerURL,
 			UrlPattern: pattern,
@@ -516,6 +526,8 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			L.Push(lua.LString(err.Error()))
 			return 3
 		}
+		browserCallsInFlight.Add(1)
+		defer browserCallsInFlight.Add(-1)
 		resp, err := bm.NavigateVia(ctx, &gen.NavigateRequest{
 			Url:       url,
 			TimeoutMs: int64(timeoutSec) * 1000,
@@ -556,6 +568,8 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			L.Push(lua.LString(err.Error()))
 			return 2
 		}
+		browserCallsInFlight.Add(1)
+		defer browserCallsInFlight.Add(-1)
 		resp, err := bm.EvalVia(ctx, &gen.EvalRequest{
 			Url:       url,
 			Js:        js,

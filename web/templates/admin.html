@@ -343,6 +343,26 @@
                 </form>
             </div>
 
+            <!-- Warm resolve -->
+            <div class="card border rounded-xl p-4">
+                <span class="text-sm font-semibold text-white">Estrazione anticipata</span>
+                <p class="text-[11px] text-gray-600 mt-1 mb-3">Quando un dispositivo apre il dettaglio di un film o di un episodio, il server estrae lo stream in anticipo: al Play resta solo il buffering. Un'estrazione alla volta, mai mentre qualcuno sta avviando un video, mai due volte lo stesso titolo in 30 minuti. Per plugin si spegne dalle sue impostazioni.</p>
+                <div class="space-y-3 text-xs">
+                    <label class="flex items-start gap-2 text-gray-400">
+                        <input id="warm-enabled" type="checkbox" class="accent-sky-600 mt-0.5" onchange="saveWarmSettings()">
+                        <span>Attiva l'estrazione anticipata</span>
+                    </label>
+                    <label class="flex flex-col gap-1 text-gray-500 max-w-[220px]">Estrazioni anticipate all'ora, per plugin
+                        <input id="warm-per-hour" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveWarmSettings()">
+                    </label>
+                </div>
+                <div class="flex items-center justify-between mt-3">
+                    <span class="text-[10px] uppercase tracking-wide text-gray-500">Dall'avvio del server</span>
+                    <button onclick="loadWarmStats()" class="text-[10px] text-gray-600 hover:text-gray-400 transition">Aggiorna</button>
+                </div>
+                <div id="warm-stats" class="grid grid-cols-2 gap-2 mt-2 text-[11px] text-gray-500">—</div>
+            </div>
+
             <!-- Maintenance -->
             <div class="card border rounded-xl p-4">
                 <span class="text-sm font-semibold text-white">Manutenzione</span>

@@ -17,6 +17,7 @@ import (
 	"mycelium/internal/core"
 	"mycelium/internal/engine"
 	"mycelium/internal/managers"
+	"mycelium/internal/pileus"
 )
 
 // serverStartTime tracks when the server process started, for uptime display.
@@ -90,6 +91,9 @@ func getPluginsInfo(w http.ResponseWriter, r *http.Request) {
 		fields := make([]luaField, 0, len(mf.Settings.Global))
 		for _, f := range mf.Settings.Global {
 			val := managers.Settings.GetString("lua:"+mf.ID+":global:"+f.ID, "")
+			if val == "" {
+				val = f.Default
+			}
 			lf := luaField{Key: f.ID, Label: f.Label, Type: f.Type, Required: f.Required}
 			if f.Type == "password" {
 				lf.IsSet = val != ""
@@ -251,7 +255,17 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		"download_pace":                  settingNumber("download_pace", 2),
 		"download_pause_while_streaming": managers.Settings.GetString("download_pause_while_streaming", "1") != "0",
 		"download_delete_after_fetch":    managers.Settings.GetString("download_delete_after_fetch", "0") == "1",
+		// Warm resolve (pileus.WarmStream): global switch and per-plugin hourly
+		// budget; the per-plugin switch is a plugin setting.
+		"warm_resolve_enabled":  managers.Settings.GetBool("warm_resolve_enabled", true),
+		"warm_resolve_per_hour": settingNumber("warm_resolve_per_hour", 20),
 	})
+}
+
+// getWarmStats returns the WarmStream counters (dashboard, Impostazioni).
+func getWarmStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(pileus.WarmStatsSnapshot())
 }
 
 func coreUpdate(w http.ResponseWriter, r *http.Request) {

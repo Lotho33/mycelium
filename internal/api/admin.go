@@ -30,6 +30,7 @@ func AdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/core/resources", auth(getCoreResources))
 	mux.HandleFunc("GET /admin/plugins/info", auth(getPluginsInfo))
 	mux.HandleFunc("GET /admin/info", auth(getAdminInfo))
+	mux.HandleFunc("GET /admin/warm-stats", auth(getWarmStats))
 	mux.HandleFunc("GET /admin/browser-service/health", auth(browserServiceHealth))
 	mux.HandleFunc("GET /admin/logs/stream", auth(getLogsSSE))
 	mux.HandleFunc("GET /admin/events", auth(getAdminEvents))

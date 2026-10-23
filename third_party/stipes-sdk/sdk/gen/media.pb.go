@@ -2815,6 +2815,116 @@ func (x *ReleasePlaybackResponse) GetOk() bool {
 	return false
 }
 
+// WarmStream: best-effort, resolve a stream ahead of Play so the plugin's
+// resolve cache is warm when ResolveStream comes. No playback lease, no
+// session, no segments. Returns at once; the work goes on in the background.
+// A server without it answers UNIMPLEMENTED: the client stops warming.
+type WarmStreamRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PluginId      string                 `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
+	StreamId      string                 `protobuf:"bytes,2,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WarmStreamRequest) Reset() {
+	*x = WarmStreamRequest{}
+	mi := &file_media_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WarmStreamRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WarmStreamRequest) ProtoMessage() {}
+
+func (x *WarmStreamRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_media_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WarmStreamRequest.ProtoReflect.Descriptor instead.
+func (*WarmStreamRequest) Descriptor() ([]byte, []int) {
+	return file_media_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *WarmStreamRequest) GetPluginId() string {
+	if x != nil {
+		return x.PluginId
+	}
+	return ""
+}
+
+func (x *WarmStreamRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+type WarmStreamResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "started" | "joined" (already in flight) | "skipped"
+	Outcome string `protobuf:"bytes,1,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	// When skipped: "disabled", "busy", "budget", "browser_busy", "recent".
+	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WarmStreamResponse) Reset() {
+	*x = WarmStreamResponse{}
+	mi := &file_media_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WarmStreamResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WarmStreamResponse) ProtoMessage() {}
+
+func (x *WarmStreamResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_media_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WarmStreamResponse.ProtoReflect.Descriptor instead.
+func (*WarmStreamResponse) Descriptor() ([]byte, []int) {
+	return file_media_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *WarmStreamResponse) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *WarmStreamResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 type DeleteProgressRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PluginId      string                 `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
@@ -2825,7 +2935,7 @@ type DeleteProgressRequest struct {
 
 func (x *DeleteProgressRequest) Reset() {
 	*x = DeleteProgressRequest{}
-	mi := &file_media_proto_msgTypes[33]
+	mi := &file_media_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2837,7 +2947,7 @@ func (x *DeleteProgressRequest) String() string {
 func (*DeleteProgressRequest) ProtoMessage() {}
 
 func (x *DeleteProgressRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[33]
+	mi := &file_media_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2850,7 +2960,7 @@ func (x *DeleteProgressRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProgressRequest.ProtoReflect.Descriptor instead.
 func (*DeleteProgressRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{33}
+	return file_media_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DeleteProgressRequest) GetPluginId() string {
@@ -2876,7 +2986,7 @@ type DeleteProgressResponse struct {
 
 func (x *DeleteProgressResponse) Reset() {
 	*x = DeleteProgressResponse{}
-	mi := &file_media_proto_msgTypes[34]
+	mi := &file_media_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2888,7 +2998,7 @@ func (x *DeleteProgressResponse) String() string {
 func (*DeleteProgressResponse) ProtoMessage() {}
 
 func (x *DeleteProgressResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[34]
+	mi := &file_media_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2901,7 +3011,7 @@ func (x *DeleteProgressResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProgressResponse.ProtoReflect.Descriptor instead.
 func (*DeleteProgressResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{34}
+	return file_media_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *DeleteProgressResponse) GetOk() bool {
@@ -2934,7 +3044,7 @@ type ContinueWatchingItem struct {
 
 func (x *ContinueWatchingItem) Reset() {
 	*x = ContinueWatchingItem{}
-	mi := &file_media_proto_msgTypes[35]
+	mi := &file_media_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2946,7 +3056,7 @@ func (x *ContinueWatchingItem) String() string {
 func (*ContinueWatchingItem) ProtoMessage() {}
 
 func (x *ContinueWatchingItem) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[35]
+	mi := &file_media_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2959,7 +3069,7 @@ func (x *ContinueWatchingItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContinueWatchingItem.ProtoReflect.Descriptor instead.
 func (*ContinueWatchingItem) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{35}
+	return file_media_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ContinueWatchingItem) GetPluginId() string {
@@ -3078,7 +3188,7 @@ type ContinueWatchingRequest struct {
 
 func (x *ContinueWatchingRequest) Reset() {
 	*x = ContinueWatchingRequest{}
-	mi := &file_media_proto_msgTypes[36]
+	mi := &file_media_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3090,7 +3200,7 @@ func (x *ContinueWatchingRequest) String() string {
 func (*ContinueWatchingRequest) ProtoMessage() {}
 
 func (x *ContinueWatchingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[36]
+	mi := &file_media_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3103,7 +3213,7 @@ func (x *ContinueWatchingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContinueWatchingRequest.ProtoReflect.Descriptor instead.
 func (*ContinueWatchingRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{36}
+	return file_media_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ContinueWatchingRequest) GetLimit() int32 {
@@ -3136,7 +3246,7 @@ type ContinueWatchingResponse struct {
 
 func (x *ContinueWatchingResponse) Reset() {
 	*x = ContinueWatchingResponse{}
-	mi := &file_media_proto_msgTypes[37]
+	mi := &file_media_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3148,7 +3258,7 @@ func (x *ContinueWatchingResponse) String() string {
 func (*ContinueWatchingResponse) ProtoMessage() {}
 
 func (x *ContinueWatchingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[37]
+	mi := &file_media_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3161,7 +3271,7 @@ func (x *ContinueWatchingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContinueWatchingResponse.ProtoReflect.Descriptor instead.
 func (*ContinueWatchingResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{37}
+	return file_media_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ContinueWatchingResponse) GetItems() []*ContinueWatchingItem {
@@ -3179,7 +3289,7 @@ type PluginListRequest struct {
 
 func (x *PluginListRequest) Reset() {
 	*x = PluginListRequest{}
-	mi := &file_media_proto_msgTypes[38]
+	mi := &file_media_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3191,7 +3301,7 @@ func (x *PluginListRequest) String() string {
 func (*PluginListRequest) ProtoMessage() {}
 
 func (x *PluginListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[38]
+	mi := &file_media_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3204,7 +3314,7 @@ func (x *PluginListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginListRequest.ProtoReflect.Descriptor instead.
 func (*PluginListRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{38}
+	return file_media_proto_rawDescGZIP(), []int{40}
 }
 
 type PluginInfo struct {
@@ -3238,7 +3348,7 @@ type PluginInfo struct {
 
 func (x *PluginInfo) Reset() {
 	*x = PluginInfo{}
-	mi := &file_media_proto_msgTypes[39]
+	mi := &file_media_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3250,7 +3360,7 @@ func (x *PluginInfo) String() string {
 func (*PluginInfo) ProtoMessage() {}
 
 func (x *PluginInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[39]
+	mi := &file_media_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3263,7 +3373,7 @@ func (x *PluginInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginInfo.ProtoReflect.Descriptor instead.
 func (*PluginInfo) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{39}
+	return file_media_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *PluginInfo) GetPluginId() string {
@@ -3404,7 +3514,7 @@ type CatalogDef struct {
 
 func (x *CatalogDef) Reset() {
 	*x = CatalogDef{}
-	mi := &file_media_proto_msgTypes[40]
+	mi := &file_media_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3416,7 +3526,7 @@ func (x *CatalogDef) String() string {
 func (*CatalogDef) ProtoMessage() {}
 
 func (x *CatalogDef) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[40]
+	mi := &file_media_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3429,7 +3539,7 @@ func (x *CatalogDef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CatalogDef.ProtoReflect.Descriptor instead.
 func (*CatalogDef) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{40}
+	return file_media_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *CatalogDef) GetId() string {
@@ -3504,7 +3614,7 @@ type PluginListResponse struct {
 
 func (x *PluginListResponse) Reset() {
 	*x = PluginListResponse{}
-	mi := &file_media_proto_msgTypes[41]
+	mi := &file_media_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3516,7 +3626,7 @@ func (x *PluginListResponse) String() string {
 func (*PluginListResponse) ProtoMessage() {}
 
 func (x *PluginListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[41]
+	mi := &file_media_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3529,7 +3639,7 @@ func (x *PluginListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginListResponse.ProtoReflect.Descriptor instead.
 func (*PluginListResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{41}
+	return file_media_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *PluginListResponse) GetPlugins() []*PluginInfo {
@@ -3555,7 +3665,7 @@ type PluginSettingField struct {
 
 func (x *PluginSettingField) Reset() {
 	*x = PluginSettingField{}
-	mi := &file_media_proto_msgTypes[42]
+	mi := &file_media_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3567,7 +3677,7 @@ func (x *PluginSettingField) String() string {
 func (*PluginSettingField) ProtoMessage() {}
 
 func (x *PluginSettingField) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[42]
+	mi := &file_media_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3580,7 +3690,7 @@ func (x *PluginSettingField) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginSettingField.ProtoReflect.Descriptor instead.
 func (*PluginSettingField) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{42}
+	return file_media_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *PluginSettingField) GetId() string {
@@ -3635,7 +3745,7 @@ type GetPluginSettingsRequest struct {
 
 func (x *GetPluginSettingsRequest) Reset() {
 	*x = GetPluginSettingsRequest{}
-	mi := &file_media_proto_msgTypes[43]
+	mi := &file_media_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3647,7 +3757,7 @@ func (x *GetPluginSettingsRequest) String() string {
 func (*GetPluginSettingsRequest) ProtoMessage() {}
 
 func (x *GetPluginSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[43]
+	mi := &file_media_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3660,7 +3770,7 @@ func (x *GetPluginSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPluginSettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetPluginSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{43}
+	return file_media_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetPluginSettingsRequest) GetPluginId() string {
@@ -3686,7 +3796,7 @@ type GetPluginSettingsResponse struct {
 
 func (x *GetPluginSettingsResponse) Reset() {
 	*x = GetPluginSettingsResponse{}
-	mi := &file_media_proto_msgTypes[44]
+	mi := &file_media_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3698,7 +3808,7 @@ func (x *GetPluginSettingsResponse) String() string {
 func (*GetPluginSettingsResponse) ProtoMessage() {}
 
 func (x *GetPluginSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[44]
+	mi := &file_media_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3711,7 +3821,7 @@ func (x *GetPluginSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPluginSettingsResponse.ProtoReflect.Descriptor instead.
 func (*GetPluginSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{44}
+	return file_media_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetPluginSettingsResponse) GetFields() []*PluginSettingField {
@@ -3733,7 +3843,7 @@ type SavePluginSettingRequest struct {
 
 func (x *SavePluginSettingRequest) Reset() {
 	*x = SavePluginSettingRequest{}
-	mi := &file_media_proto_msgTypes[45]
+	mi := &file_media_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3745,7 +3855,7 @@ func (x *SavePluginSettingRequest) String() string {
 func (*SavePluginSettingRequest) ProtoMessage() {}
 
 func (x *SavePluginSettingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[45]
+	mi := &file_media_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3758,7 +3868,7 @@ func (x *SavePluginSettingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SavePluginSettingRequest.ProtoReflect.Descriptor instead.
 func (*SavePluginSettingRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{45}
+	return file_media_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *SavePluginSettingRequest) GetPluginId() string {
@@ -3798,7 +3908,7 @@ type SavePluginSettingResponse struct {
 
 func (x *SavePluginSettingResponse) Reset() {
 	*x = SavePluginSettingResponse{}
-	mi := &file_media_proto_msgTypes[46]
+	mi := &file_media_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3810,7 +3920,7 @@ func (x *SavePluginSettingResponse) String() string {
 func (*SavePluginSettingResponse) ProtoMessage() {}
 
 func (x *SavePluginSettingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[46]
+	mi := &file_media_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3823,7 +3933,7 @@ func (x *SavePluginSettingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SavePluginSettingResponse.ProtoReflect.Descriptor instead.
 func (*SavePluginSettingResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{46}
+	return file_media_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *SavePluginSettingResponse) GetOk() bool {
@@ -3846,7 +3956,7 @@ type TriggerRefreshRequest struct {
 
 func (x *TriggerRefreshRequest) Reset() {
 	*x = TriggerRefreshRequest{}
-	mi := &file_media_proto_msgTypes[47]
+	mi := &file_media_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3858,7 +3968,7 @@ func (x *TriggerRefreshRequest) String() string {
 func (*TriggerRefreshRequest) ProtoMessage() {}
 
 func (x *TriggerRefreshRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[47]
+	mi := &file_media_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3871,7 +3981,7 @@ func (x *TriggerRefreshRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerRefreshRequest.ProtoReflect.Descriptor instead.
 func (*TriggerRefreshRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{47}
+	return file_media_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *TriggerRefreshRequest) GetPluginId() string {
@@ -3891,7 +4001,7 @@ type TriggerRefreshResponse struct {
 
 func (x *TriggerRefreshResponse) Reset() {
 	*x = TriggerRefreshResponse{}
-	mi := &file_media_proto_msgTypes[48]
+	mi := &file_media_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3903,7 +4013,7 @@ func (x *TriggerRefreshResponse) String() string {
 func (*TriggerRefreshResponse) ProtoMessage() {}
 
 func (x *TriggerRefreshResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[48]
+	mi := &file_media_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3916,7 +4026,7 @@ func (x *TriggerRefreshResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerRefreshResponse.ProtoReflect.Descriptor instead.
 func (*TriggerRefreshResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{48}
+	return file_media_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *TriggerRefreshResponse) GetOk() bool {
@@ -3943,7 +4053,7 @@ type DownloadOptionsRequest struct {
 
 func (x *DownloadOptionsRequest) Reset() {
 	*x = DownloadOptionsRequest{}
-	mi := &file_media_proto_msgTypes[49]
+	mi := &file_media_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3955,7 +4065,7 @@ func (x *DownloadOptionsRequest) String() string {
 func (*DownloadOptionsRequest) ProtoMessage() {}
 
 func (x *DownloadOptionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[49]
+	mi := &file_media_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3968,7 +4078,7 @@ func (x *DownloadOptionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadOptionsRequest.ProtoReflect.Descriptor instead.
 func (*DownloadOptionsRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{49}
+	return file_media_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *DownloadOptionsRequest) GetPluginId() string {
@@ -4001,7 +4111,7 @@ type DownloadVariant struct {
 
 func (x *DownloadVariant) Reset() {
 	*x = DownloadVariant{}
-	mi := &file_media_proto_msgTypes[50]
+	mi := &file_media_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4013,7 +4123,7 @@ func (x *DownloadVariant) String() string {
 func (*DownloadVariant) ProtoMessage() {}
 
 func (x *DownloadVariant) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[50]
+	mi := &file_media_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4026,7 +4136,7 @@ func (x *DownloadVariant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadVariant.ProtoReflect.Descriptor instead.
 func (*DownloadVariant) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{50}
+	return file_media_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *DownloadVariant) GetId() string {
@@ -4098,7 +4208,7 @@ type DownloadTrack struct {
 
 func (x *DownloadTrack) Reset() {
 	*x = DownloadTrack{}
-	mi := &file_media_proto_msgTypes[51]
+	mi := &file_media_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4110,7 +4220,7 @@ func (x *DownloadTrack) String() string {
 func (*DownloadTrack) ProtoMessage() {}
 
 func (x *DownloadTrack) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[51]
+	mi := &file_media_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4123,7 +4233,7 @@ func (x *DownloadTrack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadTrack.ProtoReflect.Descriptor instead.
 func (*DownloadTrack) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{51}
+	return file_media_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *DownloadTrack) GetId() string {
@@ -4187,7 +4297,7 @@ type DownloadOptionsResponse struct {
 
 func (x *DownloadOptionsResponse) Reset() {
 	*x = DownloadOptionsResponse{}
-	mi := &file_media_proto_msgTypes[52]
+	mi := &file_media_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4199,7 +4309,7 @@ func (x *DownloadOptionsResponse) String() string {
 func (*DownloadOptionsResponse) ProtoMessage() {}
 
 func (x *DownloadOptionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[52]
+	mi := &file_media_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4212,7 +4322,7 @@ func (x *DownloadOptionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadOptionsResponse.ProtoReflect.Descriptor instead.
 func (*DownloadOptionsResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{52}
+	return file_media_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *DownloadOptionsResponse) GetAvailable() bool {
@@ -4349,7 +4459,7 @@ type CreateDownloadRequest struct {
 
 func (x *CreateDownloadRequest) Reset() {
 	*x = CreateDownloadRequest{}
-	mi := &file_media_proto_msgTypes[53]
+	mi := &file_media_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4361,7 +4471,7 @@ func (x *CreateDownloadRequest) String() string {
 func (*CreateDownloadRequest) ProtoMessage() {}
 
 func (x *CreateDownloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[53]
+	mi := &file_media_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4374,7 +4484,7 @@ func (x *CreateDownloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDownloadRequest.ProtoReflect.Descriptor instead.
 func (*CreateDownloadRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{53}
+	return file_media_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *CreateDownloadRequest) GetPluginId() string {
@@ -4502,7 +4612,7 @@ type CreateDownloadItem struct {
 
 func (x *CreateDownloadItem) Reset() {
 	*x = CreateDownloadItem{}
-	mi := &file_media_proto_msgTypes[54]
+	mi := &file_media_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4514,7 +4624,7 @@ func (x *CreateDownloadItem) String() string {
 func (*CreateDownloadItem) ProtoMessage() {}
 
 func (x *CreateDownloadItem) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[54]
+	mi := &file_media_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4527,7 +4637,7 @@ func (x *CreateDownloadItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDownloadItem.ProtoReflect.Descriptor instead.
 func (*CreateDownloadItem) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{54}
+	return file_media_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CreateDownloadItem) GetStreamId() string {
@@ -4602,7 +4712,7 @@ type CreateDownloadsRequest struct {
 
 func (x *CreateDownloadsRequest) Reset() {
 	*x = CreateDownloadsRequest{}
-	mi := &file_media_proto_msgTypes[55]
+	mi := &file_media_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4614,7 +4724,7 @@ func (x *CreateDownloadsRequest) String() string {
 func (*CreateDownloadsRequest) ProtoMessage() {}
 
 func (x *CreateDownloadsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[55]
+	mi := &file_media_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4627,7 +4737,7 @@ func (x *CreateDownloadsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDownloadsRequest.ProtoReflect.Descriptor instead.
 func (*CreateDownloadsRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{55}
+	return file_media_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CreateDownloadsRequest) GetPluginId() string {
@@ -4696,7 +4806,7 @@ type CreateDownloadsResponse struct {
 
 func (x *CreateDownloadsResponse) Reset() {
 	*x = CreateDownloadsResponse{}
-	mi := &file_media_proto_msgTypes[56]
+	mi := &file_media_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4708,7 +4818,7 @@ func (x *CreateDownloadsResponse) String() string {
 func (*CreateDownloadsResponse) ProtoMessage() {}
 
 func (x *CreateDownloadsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[56]
+	mi := &file_media_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4721,7 +4831,7 @@ func (x *CreateDownloadsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDownloadsResponse.ProtoReflect.Descriptor instead.
 func (*CreateDownloadsResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{56}
+	return file_media_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *CreateDownloadsResponse) GetDownloads() []*DownloadInfo {
@@ -4777,7 +4887,7 @@ type DownloadInfo struct {
 
 func (x *DownloadInfo) Reset() {
 	*x = DownloadInfo{}
-	mi := &file_media_proto_msgTypes[57]
+	mi := &file_media_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4789,7 +4899,7 @@ func (x *DownloadInfo) String() string {
 func (*DownloadInfo) ProtoMessage() {}
 
 func (x *DownloadInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[57]
+	mi := &file_media_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4802,7 +4912,7 @@ func (x *DownloadInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadInfo.ProtoReflect.Descriptor instead.
 func (*DownloadInfo) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{57}
+	return file_media_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *DownloadInfo) GetDownloadId() string {
@@ -5009,7 +5119,7 @@ type ListDownloadsRequest struct {
 
 func (x *ListDownloadsRequest) Reset() {
 	*x = ListDownloadsRequest{}
-	mi := &file_media_proto_msgTypes[58]
+	mi := &file_media_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5021,7 +5131,7 @@ func (x *ListDownloadsRequest) String() string {
 func (*ListDownloadsRequest) ProtoMessage() {}
 
 func (x *ListDownloadsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[58]
+	mi := &file_media_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5034,7 +5144,7 @@ func (x *ListDownloadsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDownloadsRequest.ProtoReflect.Descriptor instead.
 func (*ListDownloadsRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{58}
+	return file_media_proto_rawDescGZIP(), []int{60}
 }
 
 type ListDownloadsResponse struct {
@@ -5049,7 +5159,7 @@ type ListDownloadsResponse struct {
 
 func (x *ListDownloadsResponse) Reset() {
 	*x = ListDownloadsResponse{}
-	mi := &file_media_proto_msgTypes[59]
+	mi := &file_media_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5061,7 +5171,7 @@ func (x *ListDownloadsResponse) String() string {
 func (*ListDownloadsResponse) ProtoMessage() {}
 
 func (x *ListDownloadsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[59]
+	mi := &file_media_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5074,7 +5184,7 @@ func (x *ListDownloadsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDownloadsResponse.ProtoReflect.Descriptor instead.
 func (*ListDownloadsResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{59}
+	return file_media_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ListDownloadsResponse) GetDownloads() []*DownloadInfo {
@@ -5114,7 +5224,7 @@ type DownloadIdRequest struct {
 
 func (x *DownloadIdRequest) Reset() {
 	*x = DownloadIdRequest{}
-	mi := &file_media_proto_msgTypes[60]
+	mi := &file_media_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5126,7 +5236,7 @@ func (x *DownloadIdRequest) String() string {
 func (*DownloadIdRequest) ProtoMessage() {}
 
 func (x *DownloadIdRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[60]
+	mi := &file_media_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5139,7 +5249,7 @@ func (x *DownloadIdRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadIdRequest.ProtoReflect.Descriptor instead.
 func (*DownloadIdRequest) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{60}
+	return file_media_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *DownloadIdRequest) GetDownloadId() string {
@@ -5158,7 +5268,7 @@ type DownloadActionResponse struct {
 
 func (x *DownloadActionResponse) Reset() {
 	*x = DownloadActionResponse{}
-	mi := &file_media_proto_msgTypes[61]
+	mi := &file_media_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5170,7 +5280,7 @@ func (x *DownloadActionResponse) String() string {
 func (*DownloadActionResponse) ProtoMessage() {}
 
 func (x *DownloadActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_proto_msgTypes[61]
+	mi := &file_media_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5183,7 +5293,7 @@ func (x *DownloadActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadActionResponse.ProtoReflect.Descriptor instead.
 func (*DownloadActionResponse) Descriptor() ([]byte, []int) {
-	return file_media_proto_rawDescGZIP(), []int{61}
+	return file_media_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DownloadActionResponse) GetOk() bool {
@@ -5456,7 +5566,13 @@ const file_media_proto_rawDesc = "" +
 	"playing_on\x18\x03 \x01(\tR\tplayingOn\"\x18\n" +
 	"\x16ReleasePlaybackRequest\")\n" +
 	"\x17ReleasePlaybackResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"O\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"M\n" +
+	"\x11WarmStreamRequest\x12\x1b\n" +
+	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x1b\n" +
+	"\tstream_id\x18\x02 \x01(\tR\bstreamId\"F\n" +
+	"\x12WarmStreamResponse\x12\x18\n" +
+	"\aoutcome\x18\x01 \x01(\tR\aoutcome\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"O\n" +
 	"\x15DeleteProgressRequest\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\"(\n" +
@@ -5672,7 +5788,7 @@ const file_media_proto_rawDesc = "" +
 	"\rPluginService\x12\\\n" +
 	"\x11GetPluginSettings\x12\".mycelium.GetPluginSettingsRequest\x1a#.mycelium.GetPluginSettingsResponse\x12\\\n" +
 	"\x11SavePluginSetting\x12\".mycelium.SavePluginSettingRequest\x1a#.mycelium.SavePluginSettingResponse\x12S\n" +
-	"\x0eTriggerRefresh\x12\x1f.mycelium.TriggerRefreshRequest\x1a .mycelium.TriggerRefreshResponse2\xd7\v\n" +
+	"\x0eTriggerRefresh\x12\x1f.mycelium.TriggerRefreshRequest\x1a .mycelium.TriggerRefreshResponse2\xa0\f\n" +
 	"\rMediaPipeline\x12A\n" +
 	"\n" +
 	"GetCatalog\x12\x18.mycelium.CatalogRequest\x1a\x19.mycelium.CatalogResponse\x12S\n" +
@@ -5695,7 +5811,9 @@ const file_media_proto_rawDesc = "" +
 	"\x0eDeleteDownload\x12\x1b.mycelium.DownloadIdRequest\x1a .mycelium.DownloadActionResponse\x12V\n" +
 	"\x0fCreateDownloads\x12 .mycelium.CreateDownloadsRequest\x1a!.mycelium.CreateDownloadsResponse\x12S\n" +
 	"\x12AckDownloadFetched\x12\x1b.mycelium.DownloadIdRequest\x1a .mycelium.DownloadActionResponse\x12V\n" +
-	"\x0fReleasePlayback\x12 .mycelium.ReleasePlaybackRequest\x1a!.mycelium.ReleasePlaybackResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
+	"\x0fReleasePlayback\x12 .mycelium.ReleasePlaybackRequest\x1a!.mycelium.ReleasePlaybackResponse\x12G\n" +
+	"\n" +
+	"WarmStream\x12\x1b.mycelium.WarmStreamRequest\x1a\x1c.mycelium.WarmStreamResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
 
 var (
 	file_media_proto_rawDescOnce sync.Once
@@ -5709,7 +5827,7 @@ func file_media_proto_rawDescGZIP() []byte {
 	return file_media_proto_rawDescData
 }
 
-var file_media_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
+var file_media_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
 var file_media_proto_goTypes = []any{
 	(*CatalogItem)(nil),               // 0: mycelium.CatalogItem
 	(*EpisodeInfo)(nil),               // 1: mycelium.EpisodeInfo
@@ -5744,46 +5862,48 @@ var file_media_proto_goTypes = []any{
 	(*ProgressResponse)(nil),          // 30: mycelium.ProgressResponse
 	(*ReleasePlaybackRequest)(nil),    // 31: mycelium.ReleasePlaybackRequest
 	(*ReleasePlaybackResponse)(nil),   // 32: mycelium.ReleasePlaybackResponse
-	(*DeleteProgressRequest)(nil),     // 33: mycelium.DeleteProgressRequest
-	(*DeleteProgressResponse)(nil),    // 34: mycelium.DeleteProgressResponse
-	(*ContinueWatchingItem)(nil),      // 35: mycelium.ContinueWatchingItem
-	(*ContinueWatchingRequest)(nil),   // 36: mycelium.ContinueWatchingRequest
-	(*ContinueWatchingResponse)(nil),  // 37: mycelium.ContinueWatchingResponse
-	(*PluginListRequest)(nil),         // 38: mycelium.PluginListRequest
-	(*PluginInfo)(nil),                // 39: mycelium.PluginInfo
-	(*CatalogDef)(nil),                // 40: mycelium.CatalogDef
-	(*PluginListResponse)(nil),        // 41: mycelium.PluginListResponse
-	(*PluginSettingField)(nil),        // 42: mycelium.PluginSettingField
-	(*GetPluginSettingsRequest)(nil),  // 43: mycelium.GetPluginSettingsRequest
-	(*GetPluginSettingsResponse)(nil), // 44: mycelium.GetPluginSettingsResponse
-	(*SavePluginSettingRequest)(nil),  // 45: mycelium.SavePluginSettingRequest
-	(*SavePluginSettingResponse)(nil), // 46: mycelium.SavePluginSettingResponse
-	(*TriggerRefreshRequest)(nil),     // 47: mycelium.TriggerRefreshRequest
-	(*TriggerRefreshResponse)(nil),    // 48: mycelium.TriggerRefreshResponse
-	(*DownloadOptionsRequest)(nil),    // 49: mycelium.DownloadOptionsRequest
-	(*DownloadVariant)(nil),           // 50: mycelium.DownloadVariant
-	(*DownloadTrack)(nil),             // 51: mycelium.DownloadTrack
-	(*DownloadOptionsResponse)(nil),   // 52: mycelium.DownloadOptionsResponse
-	(*CreateDownloadRequest)(nil),     // 53: mycelium.CreateDownloadRequest
-	(*CreateDownloadItem)(nil),        // 54: mycelium.CreateDownloadItem
-	(*CreateDownloadsRequest)(nil),    // 55: mycelium.CreateDownloadsRequest
-	(*CreateDownloadsResponse)(nil),   // 56: mycelium.CreateDownloadsResponse
-	(*DownloadInfo)(nil),              // 57: mycelium.DownloadInfo
-	(*ListDownloadsRequest)(nil),      // 58: mycelium.ListDownloadsRequest
-	(*ListDownloadsResponse)(nil),     // 59: mycelium.ListDownloadsResponse
-	(*DownloadIdRequest)(nil),         // 60: mycelium.DownloadIdRequest
-	(*DownloadActionResponse)(nil),    // 61: mycelium.DownloadActionResponse
-	nil,                               // 62: mycelium.CatalogItem.ExtraEntry
-	nil,                               // 63: mycelium.SearchRequest.FiltersEntry
-	nil,                               // 64: mycelium.ResolveResponse.HttpHeadersEntry
-	nil,                               // 65: mycelium.ResolveResponse.ExtraEntry
+	(*WarmStreamRequest)(nil),         // 33: mycelium.WarmStreamRequest
+	(*WarmStreamResponse)(nil),        // 34: mycelium.WarmStreamResponse
+	(*DeleteProgressRequest)(nil),     // 35: mycelium.DeleteProgressRequest
+	(*DeleteProgressResponse)(nil),    // 36: mycelium.DeleteProgressResponse
+	(*ContinueWatchingItem)(nil),      // 37: mycelium.ContinueWatchingItem
+	(*ContinueWatchingRequest)(nil),   // 38: mycelium.ContinueWatchingRequest
+	(*ContinueWatchingResponse)(nil),  // 39: mycelium.ContinueWatchingResponse
+	(*PluginListRequest)(nil),         // 40: mycelium.PluginListRequest
+	(*PluginInfo)(nil),                // 41: mycelium.PluginInfo
+	(*CatalogDef)(nil),                // 42: mycelium.CatalogDef
+	(*PluginListResponse)(nil),        // 43: mycelium.PluginListResponse
+	(*PluginSettingField)(nil),        // 44: mycelium.PluginSettingField
+	(*GetPluginSettingsRequest)(nil),  // 45: mycelium.GetPluginSettingsRequest
+	(*GetPluginSettingsResponse)(nil), // 46: mycelium.GetPluginSettingsResponse
+	(*SavePluginSettingRequest)(nil),  // 47: mycelium.SavePluginSettingRequest
+	(*SavePluginSettingResponse)(nil), // 48: mycelium.SavePluginSettingResponse
+	(*TriggerRefreshRequest)(nil),     // 49: mycelium.TriggerRefreshRequest
+	(*TriggerRefreshResponse)(nil),    // 50: mycelium.TriggerRefreshResponse
+	(*DownloadOptionsRequest)(nil),    // 51: mycelium.DownloadOptionsRequest
+	(*DownloadVariant)(nil),           // 52: mycelium.DownloadVariant
+	(*DownloadTrack)(nil),             // 53: mycelium.DownloadTrack
+	(*DownloadOptionsResponse)(nil),   // 54: mycelium.DownloadOptionsResponse
+	(*CreateDownloadRequest)(nil),     // 55: mycelium.CreateDownloadRequest
+	(*CreateDownloadItem)(nil),        // 56: mycelium.CreateDownloadItem
+	(*CreateDownloadsRequest)(nil),    // 57: mycelium.CreateDownloadsRequest
+	(*CreateDownloadsResponse)(nil),   // 58: mycelium.CreateDownloadsResponse
+	(*DownloadInfo)(nil),              // 59: mycelium.DownloadInfo
+	(*ListDownloadsRequest)(nil),      // 60: mycelium.ListDownloadsRequest
+	(*ListDownloadsResponse)(nil),     // 61: mycelium.ListDownloadsResponse
+	(*DownloadIdRequest)(nil),         // 62: mycelium.DownloadIdRequest
+	(*DownloadActionResponse)(nil),    // 63: mycelium.DownloadActionResponse
+	nil,                               // 64: mycelium.CatalogItem.ExtraEntry
+	nil,                               // 65: mycelium.SearchRequest.FiltersEntry
+	nil,                               // 66: mycelium.ResolveResponse.HttpHeadersEntry
+	nil,                               // 67: mycelium.ResolveResponse.ExtraEntry
 }
 var file_media_proto_depIdxs = []int32{
-	62, // 0: mycelium.CatalogItem.extra:type_name -> mycelium.CatalogItem.ExtraEntry
+	64, // 0: mycelium.CatalogItem.extra:type_name -> mycelium.CatalogItem.ExtraEntry
 	0,  // 1: mycelium.CatalogResponse.items:type_name -> mycelium.CatalogItem
 	6,  // 2: mycelium.SearchFilter.options:type_name -> mycelium.FilterOption
 	5,  // 3: mycelium.SearchFiltersResponse.filters:type_name -> mycelium.SearchFilter
-	63, // 4: mycelium.SearchRequest.filters:type_name -> mycelium.SearchRequest.FiltersEntry
+	65, // 4: mycelium.SearchRequest.filters:type_name -> mycelium.SearchRequest.FiltersEntry
 	0,  // 5: mycelium.SearchResponse.items:type_name -> mycelium.CatalogItem
 	2,  // 6: mycelium.SeriesDetails.seasons:type_name -> mycelium.SeasonInfo
 	0,  // 7: mycelium.DetailsResponse.item:type_name -> mycelium.CatalogItem
@@ -5797,23 +5917,23 @@ var file_media_proto_depIdxs = []int32{
 	0,  // 15: mycelium.BrowseResponse.items:type_name -> mycelium.CatalogItem
 	1,  // 16: mycelium.BrowseResponse.episodes:type_name -> mycelium.EpisodeInfo
 	22, // 17: mycelium.StreamsResponse.sources:type_name -> mycelium.StreamSource
-	64, // 18: mycelium.ResolveResponse.http_headers:type_name -> mycelium.ResolveResponse.HttpHeadersEntry
-	65, // 19: mycelium.ResolveResponse.extra:type_name -> mycelium.ResolveResponse.ExtraEntry
+	66, // 18: mycelium.ResolveResponse.http_headers:type_name -> mycelium.ResolveResponse.HttpHeadersEntry
+	67, // 19: mycelium.ResolveResponse.extra:type_name -> mycelium.ResolveResponse.ExtraEntry
 	27, // 20: mycelium.ResolveStreamEvent.progress:type_name -> mycelium.ResolveProgress
 	26, // 21: mycelium.ResolveStreamEvent.result:type_name -> mycelium.ResolveResponse
-	35, // 22: mycelium.ContinueWatchingResponse.items:type_name -> mycelium.ContinueWatchingItem
-	40, // 23: mycelium.PluginInfo.catalogs:type_name -> mycelium.CatalogDef
-	39, // 24: mycelium.PluginListResponse.plugins:type_name -> mycelium.PluginInfo
-	42, // 25: mycelium.GetPluginSettingsResponse.fields:type_name -> mycelium.PluginSettingField
-	50, // 26: mycelium.DownloadOptionsResponse.variants:type_name -> mycelium.DownloadVariant
-	51, // 27: mycelium.DownloadOptionsResponse.audio:type_name -> mycelium.DownloadTrack
-	51, // 28: mycelium.DownloadOptionsResponse.subtitles:type_name -> mycelium.DownloadTrack
-	54, // 29: mycelium.CreateDownloadsRequest.items:type_name -> mycelium.CreateDownloadItem
-	57, // 30: mycelium.CreateDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
-	57, // 31: mycelium.ListDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
-	43, // 32: mycelium.PluginService.GetPluginSettings:input_type -> mycelium.GetPluginSettingsRequest
-	45, // 33: mycelium.PluginService.SavePluginSetting:input_type -> mycelium.SavePluginSettingRequest
-	47, // 34: mycelium.PluginService.TriggerRefresh:input_type -> mycelium.TriggerRefreshRequest
+	37, // 22: mycelium.ContinueWatchingResponse.items:type_name -> mycelium.ContinueWatchingItem
+	42, // 23: mycelium.PluginInfo.catalogs:type_name -> mycelium.CatalogDef
+	41, // 24: mycelium.PluginListResponse.plugins:type_name -> mycelium.PluginInfo
+	44, // 25: mycelium.GetPluginSettingsResponse.fields:type_name -> mycelium.PluginSettingField
+	52, // 26: mycelium.DownloadOptionsResponse.variants:type_name -> mycelium.DownloadVariant
+	53, // 27: mycelium.DownloadOptionsResponse.audio:type_name -> mycelium.DownloadTrack
+	53, // 28: mycelium.DownloadOptionsResponse.subtitles:type_name -> mycelium.DownloadTrack
+	56, // 29: mycelium.CreateDownloadsRequest.items:type_name -> mycelium.CreateDownloadItem
+	59, // 30: mycelium.CreateDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
+	59, // 31: mycelium.ListDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
+	45, // 32: mycelium.PluginService.GetPluginSettings:input_type -> mycelium.GetPluginSettingsRequest
+	47, // 33: mycelium.PluginService.SavePluginSetting:input_type -> mycelium.SavePluginSettingRequest
+	49, // 34: mycelium.PluginService.TriggerRefresh:input_type -> mycelium.TriggerRefreshRequest
 	3,  // 35: mycelium.MediaPipeline.GetCatalog:input_type -> mycelium.CatalogRequest
 	7,  // 36: mycelium.MediaPipeline.GetSearchFilters:input_type -> mycelium.SearchFiltersRequest
 	9,  // 37: mycelium.MediaPipeline.Search:input_type -> mycelium.SearchRequest
@@ -5822,41 +5942,43 @@ var file_media_proto_depIdxs = []int32{
 	23, // 40: mycelium.MediaPipeline.GetStreams:input_type -> mycelium.StreamsRequest
 	25, // 41: mycelium.MediaPipeline.ResolveStream:input_type -> mycelium.ResolveRequest
 	29, // 42: mycelium.MediaPipeline.UpdateProgress:input_type -> mycelium.ProgressRequest
-	33, // 43: mycelium.MediaPipeline.DeleteProgress:input_type -> mycelium.DeleteProgressRequest
-	36, // 44: mycelium.MediaPipeline.GetContinueWatching:input_type -> mycelium.ContinueWatchingRequest
-	38, // 45: mycelium.MediaPipeline.ListPlugins:input_type -> mycelium.PluginListRequest
-	49, // 46: mycelium.MediaPipeline.GetDownloadOptions:input_type -> mycelium.DownloadOptionsRequest
-	53, // 47: mycelium.MediaPipeline.CreateDownload:input_type -> mycelium.CreateDownloadRequest
-	58, // 48: mycelium.MediaPipeline.ListDownloads:input_type -> mycelium.ListDownloadsRequest
-	60, // 49: mycelium.MediaPipeline.CancelDownload:input_type -> mycelium.DownloadIdRequest
-	60, // 50: mycelium.MediaPipeline.DeleteDownload:input_type -> mycelium.DownloadIdRequest
-	55, // 51: mycelium.MediaPipeline.CreateDownloads:input_type -> mycelium.CreateDownloadsRequest
-	60, // 52: mycelium.MediaPipeline.AckDownloadFetched:input_type -> mycelium.DownloadIdRequest
+	35, // 43: mycelium.MediaPipeline.DeleteProgress:input_type -> mycelium.DeleteProgressRequest
+	38, // 44: mycelium.MediaPipeline.GetContinueWatching:input_type -> mycelium.ContinueWatchingRequest
+	40, // 45: mycelium.MediaPipeline.ListPlugins:input_type -> mycelium.PluginListRequest
+	51, // 46: mycelium.MediaPipeline.GetDownloadOptions:input_type -> mycelium.DownloadOptionsRequest
+	55, // 47: mycelium.MediaPipeline.CreateDownload:input_type -> mycelium.CreateDownloadRequest
+	60, // 48: mycelium.MediaPipeline.ListDownloads:input_type -> mycelium.ListDownloadsRequest
+	62, // 49: mycelium.MediaPipeline.CancelDownload:input_type -> mycelium.DownloadIdRequest
+	62, // 50: mycelium.MediaPipeline.DeleteDownload:input_type -> mycelium.DownloadIdRequest
+	57, // 51: mycelium.MediaPipeline.CreateDownloads:input_type -> mycelium.CreateDownloadsRequest
+	62, // 52: mycelium.MediaPipeline.AckDownloadFetched:input_type -> mycelium.DownloadIdRequest
 	31, // 53: mycelium.MediaPipeline.ReleasePlayback:input_type -> mycelium.ReleasePlaybackRequest
-	44, // 54: mycelium.PluginService.GetPluginSettings:output_type -> mycelium.GetPluginSettingsResponse
-	46, // 55: mycelium.PluginService.SavePluginSetting:output_type -> mycelium.SavePluginSettingResponse
-	48, // 56: mycelium.PluginService.TriggerRefresh:output_type -> mycelium.TriggerRefreshResponse
-	4,  // 57: mycelium.MediaPipeline.GetCatalog:output_type -> mycelium.CatalogResponse
-	8,  // 58: mycelium.MediaPipeline.GetSearchFilters:output_type -> mycelium.SearchFiltersResponse
-	10, // 59: mycelium.MediaPipeline.Search:output_type -> mycelium.SearchResponse
-	19, // 60: mycelium.MediaPipeline.GetDetails:output_type -> mycelium.DetailsResponse
-	21, // 61: mycelium.MediaPipeline.Browse:output_type -> mycelium.BrowseResponse
-	24, // 62: mycelium.MediaPipeline.GetStreams:output_type -> mycelium.StreamsResponse
-	28, // 63: mycelium.MediaPipeline.ResolveStream:output_type -> mycelium.ResolveStreamEvent
-	30, // 64: mycelium.MediaPipeline.UpdateProgress:output_type -> mycelium.ProgressResponse
-	34, // 65: mycelium.MediaPipeline.DeleteProgress:output_type -> mycelium.DeleteProgressResponse
-	37, // 66: mycelium.MediaPipeline.GetContinueWatching:output_type -> mycelium.ContinueWatchingResponse
-	41, // 67: mycelium.MediaPipeline.ListPlugins:output_type -> mycelium.PluginListResponse
-	52, // 68: mycelium.MediaPipeline.GetDownloadOptions:output_type -> mycelium.DownloadOptionsResponse
-	57, // 69: mycelium.MediaPipeline.CreateDownload:output_type -> mycelium.DownloadInfo
-	59, // 70: mycelium.MediaPipeline.ListDownloads:output_type -> mycelium.ListDownloadsResponse
-	61, // 71: mycelium.MediaPipeline.CancelDownload:output_type -> mycelium.DownloadActionResponse
-	61, // 72: mycelium.MediaPipeline.DeleteDownload:output_type -> mycelium.DownloadActionResponse
-	56, // 73: mycelium.MediaPipeline.CreateDownloads:output_type -> mycelium.CreateDownloadsResponse
-	61, // 74: mycelium.MediaPipeline.AckDownloadFetched:output_type -> mycelium.DownloadActionResponse
-	32, // 75: mycelium.MediaPipeline.ReleasePlayback:output_type -> mycelium.ReleasePlaybackResponse
-	54, // [54:76] is the sub-list for method output_type
-	32, // [32:54] is the sub-list for method input_type
+	33, // 54: mycelium.MediaPipeline.WarmStream:input_type -> mycelium.WarmStreamRequest
+	46, // 55: mycelium.PluginService.GetPluginSettings:output_type -> mycelium.GetPluginSettingsResponse
+	48, // 56: mycelium.PluginService.SavePluginSetting:output_type -> mycelium.SavePluginSettingResponse
+	50, // 57: mycelium.PluginService.TriggerRefresh:output_type -> mycelium.TriggerRefreshResponse
+	4,  // 58: mycelium.MediaPipeline.GetCatalog:output_type -> mycelium.CatalogResponse
+	8,  // 59: mycelium.MediaPipeline.GetSearchFilters:output_type -> mycelium.SearchFiltersResponse
+	10, // 60: mycelium.MediaPipeline.Search:output_type -> mycelium.SearchResponse
+	19, // 61: mycelium.MediaPipeline.GetDetails:output_type -> mycelium.DetailsResponse
+	21, // 62: mycelium.MediaPipeline.Browse:output_type -> mycelium.BrowseResponse
+	24, // 63: mycelium.MediaPipeline.GetStreams:output_type -> mycelium.StreamsResponse
+	28, // 64: mycelium.MediaPipeline.ResolveStream:output_type -> mycelium.ResolveStreamEvent
+	30, // 65: mycelium.MediaPipeline.UpdateProgress:output_type -> mycelium.ProgressResponse
+	36, // 66: mycelium.MediaPipeline.DeleteProgress:output_type -> mycelium.DeleteProgressResponse
+	39, // 67: mycelium.MediaPipeline.GetContinueWatching:output_type -> mycelium.ContinueWatchingResponse
+	43, // 68: mycelium.MediaPipeline.ListPlugins:output_type -> mycelium.PluginListResponse
+	54, // 69: mycelium.MediaPipeline.GetDownloadOptions:output_type -> mycelium.DownloadOptionsResponse
+	59, // 70: mycelium.MediaPipeline.CreateDownload:output_type -> mycelium.DownloadInfo
+	61, // 71: mycelium.MediaPipeline.ListDownloads:output_type -> mycelium.ListDownloadsResponse
+	63, // 72: mycelium.MediaPipeline.CancelDownload:output_type -> mycelium.DownloadActionResponse
+	63, // 73: mycelium.MediaPipeline.DeleteDownload:output_type -> mycelium.DownloadActionResponse
+	58, // 74: mycelium.MediaPipeline.CreateDownloads:output_type -> mycelium.CreateDownloadsResponse
+	63, // 75: mycelium.MediaPipeline.AckDownloadFetched:output_type -> mycelium.DownloadActionResponse
+	32, // 76: mycelium.MediaPipeline.ReleasePlayback:output_type -> mycelium.ReleasePlaybackResponse
+	34, // 77: mycelium.MediaPipeline.WarmStream:output_type -> mycelium.WarmStreamResponse
+	55, // [55:78] is the sub-list for method output_type
+	32, // [32:55] is the sub-list for method input_type
 	32, // [32:32] is the sub-list for extension type_name
 	32, // [32:32] is the sub-list for extension extendee
 	0,  // [0:32] is the sub-list for field type_name
@@ -5886,7 +6008,7 @@ func file_media_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_media_proto_rawDesc), len(file_media_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   66,
+			NumMessages:   68,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

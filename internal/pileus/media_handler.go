@@ -333,11 +333,34 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 		return err
 	}
 
-	rs, err := b.ResolveStream(ctx, req.StreamId, onProgress)
+	// Shared with a warm or another device's Play of the same stream already
+	// resolving (resolve_flight.go). While it runs, no warm starts.
+	flightKey := resolveFlightKey(req.PluginId, req.StreamId)
+	resolvesInFlight.Add(1)
+	resolveStart := time.Now()
+	rs, joined, joinedWarm, err := resolveShared(ctx, req.PluginId, req.StreamId, false, onProgress,
+		func(rctx context.Context, p engine.ProgressFunc) (*ResolvedStream, error) {
+			return b.ResolveStream(rctx, req.StreamId, p)
+		})
+	resolvesInFlight.Add(-1)
 	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			// The user backed out; the resolve itself goes on and fills the cache.
+			return status.FromContextError(cerr).Err()
+		}
 		log.Printf("[pileus/media] ResolveStream %s/%s: %v", req.PluginId, req.StreamId, err)
 		return wrapInternal(err)
 	}
+	warmStats.recordResolve(time.Since(resolveStart), joined)
+	// Checked after the resolve: a warm this Play joined is completed by now.
+	if warmer.takeHit(flightKey) {
+		warmStats.hits.Add(1)
+		if joinedWarm {
+			warmStats.hitsInflight.Add(1)
+		}
+	}
+	// Just resolved, so the plugin's cache is warm: no warm needed for a while.
+	warmer.markRecent(flightKey)
 	rawURL, headers, isLive, extra := rs.URL, rs.Headers, rs.IsLive, rs.Extra
 	// Sniffed header names can be lowercase; the lookups below are canonical.
 	headers = canonicalHeaderKeys(headers)

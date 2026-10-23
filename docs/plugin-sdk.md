@@ -43,6 +43,9 @@ vpn_optional: true            # (with direct_egress) add an admin toggle that
                               # routes only the video flow through the proxy
 direct_stream: true           # hand the resolved URL to the player as-is,
                               # skipping mycelium's HLS proxy (LAN sources only)
+warm_resolve: true            # resolve_stream caches its result: mycelium may
+                              # run it ahead of Play (args.warm = true) when a
+                              # details page opens; adds an admin toggle, on
 
 # --- offline downloads (optional, off when absent) ---
 download:
@@ -117,7 +120,7 @@ mycelium passes.
 | `get_details`    | `media_id`                          | one item with full metadata |
 | `browse`         | `directory_id`, `page`              | array of items; use `is_dir = true` for folders |
 | `get_streams`    | `media_id`                          | array of stream sources: `{ id, label, quality, is_live }` |
-| `resolve_stream` | `stream_id`, `force_refresh` (bool) | `{ url, headers, is_live, extra }` |
+| `resolve_stream` | `stream_id`, `force_refresh` (bool), `warm` (bool) | `{ url, headers, is_live, extra }` |
 
 ### Item shape
 
@@ -161,6 +164,15 @@ tracks; ignored for non-HLS streams and `direct_stream` plugins.
 
 `force_refresh` is set by mycelium when a previously-resolved URL was rejected
 downstream — skip any cache and resolve fresh.
+
+`warm` is set when the resolve runs ahead of Play (`warm_resolve: true` in the
+manifest, see `WarmStream` in [pileus-contract.md](pileus-contract.md)):
+nobody is watching yet, so fill the cache but skip anything only a real Play
+should do, such as remembering the profile's chosen language. The Play that
+follows calls `resolve_stream` again and finds the cache warm — do those
+per-profile writes on the cache-hit path too. Only for plugins whose
+`resolve_stream` caches its result: without a cache a warm doubles the
+requests to the site.
 
 `extra` is forwarded to the client verbatim — never put secrets in it. Keys
 the Pileus client understands:

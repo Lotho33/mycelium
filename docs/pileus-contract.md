@@ -124,6 +124,25 @@ A profile plays on one device at a time; browsing is never limited.
   moving to another device never waits. Without it, the hold lapses ~90 s
   after the last activity.
 
+## Warm resolve (`WarmStream`)
+
+`WarmStream(plugin_id, stream_id)` runs the plugin's `resolve_stream` ahead of
+Play, so the Play only waits for the pre-buffer. Call it, fire-and-forget,
+when the user settles on a details page or an episode (the stream Play would
+pick), never from the home, search or carousel scrolling. It returns at once:
+
+| outcome | meaning |
+|---|---|
+| `started` | the resolve runs in the background |
+| `joined` | that stream is already being resolved |
+| `skipped` | `reason`: `disabled` (plugin without `warm_resolve`, or switched off), `busy` (another warm, or a Play resolving), `browser_busy`, `budget` (per-plugin hourly cap), `recent` (warmed or played in the last 30 min) |
+
+No playback lease, no session, no segments. A Play arriving while the warm
+still runs joins it (progress included) instead of extracting a second time.
+A warm always runs to the end and fills the plugin's cache; a Play's resolve
+stops when every caller waiting on it has backed out. A server without the RPC answers `UNIMPLEMENTED`: stop warming for the
+session. Other errors: ignore.
+
 ## Resume from Continue Watching
 
 `ResolveRequest.start_position_sec` (seconds, 0 = from the start): send the
@@ -218,6 +237,10 @@ All optional, all with sane defaults. Settable via the admin settings store
 | `prebuffer_max_bytes`      | `MYCELIUM_PREBUFFER_MAX_BYTES`    | `12000000` | stop pre-fetching once this many segment bytes are buffered |
 | `prebuffer_cache_mb`       | `MYCELIUM_PREBUFFER_CACHE_MB`     | `96`       | ceiling of the shared warm-segment cache (LRU, ~3 min TTL) |
 | `prebuffer_readahead_secs` | `MYCELIUM_PREBUFFER_READAHEAD_SECS` | `45`     | during VOD playback, media seconds fetched ahead of each segment request into the warm cache, so a slow CDN miss is absorbed before the player needs it (0 = off) |
+
+Warm resolve: `warm_resolve_enabled` (default on) and `warm_resolve_per_hour`
+(per-plugin budget, default 20; 0 = none), both in the dashboard
+(Impostazioni → Estrazione anticipata), with the counters.
 
 Cancellation: the pre-buffer inherits the RPC's `context.Context`. If the user
 backs out of the player mid-resolve, it stops promptly and the RPC returns the

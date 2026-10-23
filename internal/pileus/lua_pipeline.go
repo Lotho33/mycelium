@@ -324,6 +324,29 @@ func (p *luaPipelineProvider) ResolveStream(ctx context.Context, streamID string
 	if err != nil {
 		return nil, err
 	}
+	return parseLuaResolved(b)
+}
+
+// warmResolveAcquireWait is how long a warm waits for a free Lua state
+// before giving up: it never queues behind cron tasks.
+const warmResolveAcquireWait = 2 * time.Second
+
+// warmResolve is ResolveStream run ahead of Play (WarmStream): background
+// class, a short wait for a state, and args.warm = true so the plugin skips
+// what only a real Play should do (e.g. remembering the chosen language).
+func (p *luaPipelineProvider) warmResolve(ctx context.Context, streamID string, onProgress engine.ProgressFunc) (*ResolvedStream, error) {
+	b, err := engine.LuaPlugins.CallEntrypointJSONBackgroundCtx(ctx, p.id, engine.EPResolveStream, map[string]any{
+		"stream_id": streamID,
+		"warm":      true,
+	}, profileIDFromCtx(ctx), onProgress, warmResolveAcquireWait)
+	if err != nil {
+		return nil, err
+	}
+	return parseLuaResolved(b)
+}
+
+// parseLuaResolved decodes resolve_stream's result.
+func parseLuaResolved(b json.RawMessage) (*ResolvedStream, error) {
 	if isNullJSON(b) {
 		return nil, status.Error(codes.NotFound, "stream not resolved: plugin returned nil")
 	}
