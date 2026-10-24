@@ -710,6 +710,7 @@ func luaMetaToEpisodeInfo(lm luaMeta) *gen.EpisodeInfo {
 		Plot:          lm.Plot,
 		ShowId:        lm.ShowID,
 		ParentId:      lm.ParentID,
+		Extra:         map[string]string(lm.Extra),
 	}
 }
 

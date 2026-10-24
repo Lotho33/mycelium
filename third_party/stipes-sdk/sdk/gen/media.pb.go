@@ -215,6 +215,9 @@ type EpisodeInfo struct {
 	Plot          string                 `protobuf:"bytes,9,opt,name=plot,proto3" json:"plot,omitempty"`
 	ShowId        string                 `protobuf:"bytes,10,opt,name=show_id,json=showId,proto3" json:"show_id,omitempty"`
 	ParentId      string                 `protobuf:"bytes,11,opt,name=parent_id,json=parentId,proto3" json:"parent_id,omitempty"` // season directory_id
+	// Same convention as CatalogItem.extra. "lang": the language versions of
+	// this episode — "" / "both" (nothing to flag), "ita", "jap", "eng".
+	Extra         map[string]string `protobuf:"bytes,12,rep,name=extra,proto3" json:"extra,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -324,6 +327,13 @@ func (x *EpisodeInfo) GetParentId() string {
 		return x.ParentId
 	}
 	return ""
+}
+
+func (x *EpisodeInfo) GetExtra() map[string]string {
+	if x != nil {
+		return x.Extra
+	}
+	return nil
 }
 
 // SeasonInfo lives inside SeriesDetails.
@@ -5335,7 +5345,7 @@ const file_media_proto_rawDesc = "" +
 	"\n" +
 	"ExtraEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb9\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\x03\n" +
 	"\vEpisodeInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12%\n" +
@@ -5348,7 +5358,12 @@ const file_media_proto_rawDesc = "" +
 	"\x04plot\x18\t \x01(\tR\x04plot\x12\x17\n" +
 	"\ashow_id\x18\n" +
 	" \x01(\tR\x06showId\x12\x1b\n" +
-	"\tparent_id\x18\v \x01(\tR\bparentId\"\xec\x01\n" +
+	"\tparent_id\x18\v \x01(\tR\bparentId\x126\n" +
+	"\x05extra\x18\f \x03(\v2 .mycelium.EpisodeInfo.ExtraEntryR\x05extra\x1a8\n" +
+	"\n" +
+	"ExtraEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xec\x01\n" +
 	"\n" +
 	"SeasonInfo\x12\x16\n" +
 	"\x06number\x18\x01 \x01(\x05R\x06number\x12\x14\n" +
@@ -5827,7 +5842,7 @@ func file_media_proto_rawDescGZIP() []byte {
 	return file_media_proto_rawDescData
 }
 
-var file_media_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
+var file_media_proto_msgTypes = make([]protoimpl.MessageInfo, 69)
 var file_media_proto_goTypes = []any{
 	(*CatalogItem)(nil),               // 0: mycelium.CatalogItem
 	(*EpisodeInfo)(nil),               // 1: mycelium.EpisodeInfo
@@ -5894,94 +5909,96 @@ var file_media_proto_goTypes = []any{
 	(*DownloadIdRequest)(nil),         // 62: mycelium.DownloadIdRequest
 	(*DownloadActionResponse)(nil),    // 63: mycelium.DownloadActionResponse
 	nil,                               // 64: mycelium.CatalogItem.ExtraEntry
-	nil,                               // 65: mycelium.SearchRequest.FiltersEntry
-	nil,                               // 66: mycelium.ResolveResponse.HttpHeadersEntry
-	nil,                               // 67: mycelium.ResolveResponse.ExtraEntry
+	nil,                               // 65: mycelium.EpisodeInfo.ExtraEntry
+	nil,                               // 66: mycelium.SearchRequest.FiltersEntry
+	nil,                               // 67: mycelium.ResolveResponse.HttpHeadersEntry
+	nil,                               // 68: mycelium.ResolveResponse.ExtraEntry
 }
 var file_media_proto_depIdxs = []int32{
 	64, // 0: mycelium.CatalogItem.extra:type_name -> mycelium.CatalogItem.ExtraEntry
-	0,  // 1: mycelium.CatalogResponse.items:type_name -> mycelium.CatalogItem
-	6,  // 2: mycelium.SearchFilter.options:type_name -> mycelium.FilterOption
-	5,  // 3: mycelium.SearchFiltersResponse.filters:type_name -> mycelium.SearchFilter
-	65, // 4: mycelium.SearchRequest.filters:type_name -> mycelium.SearchRequest.FiltersEntry
-	0,  // 5: mycelium.SearchResponse.items:type_name -> mycelium.CatalogItem
-	2,  // 6: mycelium.SeriesDetails.seasons:type_name -> mycelium.SeasonInfo
-	0,  // 7: mycelium.DetailsResponse.item:type_name -> mycelium.CatalogItem
-	12, // 8: mycelium.DetailsResponse.movie:type_name -> mycelium.MovieDetails
-	13, // 9: mycelium.DetailsResponse.series:type_name -> mycelium.SeriesDetails
-	14, // 10: mycelium.DetailsResponse.episode:type_name -> mycelium.EpisodeDetails
-	15, // 11: mycelium.DetailsResponse.live:type_name -> mycelium.LiveDetails
-	16, // 12: mycelium.DetailsResponse.video:type_name -> mycelium.VideoDetails
-	17, // 13: mycelium.DetailsResponse.music:type_name -> mycelium.MusicDetails
-	18, // 14: mycelium.DetailsResponse.podcast:type_name -> mycelium.PodcastDetails
-	0,  // 15: mycelium.BrowseResponse.items:type_name -> mycelium.CatalogItem
-	1,  // 16: mycelium.BrowseResponse.episodes:type_name -> mycelium.EpisodeInfo
-	22, // 17: mycelium.StreamsResponse.sources:type_name -> mycelium.StreamSource
-	66, // 18: mycelium.ResolveResponse.http_headers:type_name -> mycelium.ResolveResponse.HttpHeadersEntry
-	67, // 19: mycelium.ResolveResponse.extra:type_name -> mycelium.ResolveResponse.ExtraEntry
-	27, // 20: mycelium.ResolveStreamEvent.progress:type_name -> mycelium.ResolveProgress
-	26, // 21: mycelium.ResolveStreamEvent.result:type_name -> mycelium.ResolveResponse
-	37, // 22: mycelium.ContinueWatchingResponse.items:type_name -> mycelium.ContinueWatchingItem
-	42, // 23: mycelium.PluginInfo.catalogs:type_name -> mycelium.CatalogDef
-	41, // 24: mycelium.PluginListResponse.plugins:type_name -> mycelium.PluginInfo
-	44, // 25: mycelium.GetPluginSettingsResponse.fields:type_name -> mycelium.PluginSettingField
-	52, // 26: mycelium.DownloadOptionsResponse.variants:type_name -> mycelium.DownloadVariant
-	53, // 27: mycelium.DownloadOptionsResponse.audio:type_name -> mycelium.DownloadTrack
-	53, // 28: mycelium.DownloadOptionsResponse.subtitles:type_name -> mycelium.DownloadTrack
-	56, // 29: mycelium.CreateDownloadsRequest.items:type_name -> mycelium.CreateDownloadItem
-	59, // 30: mycelium.CreateDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
-	59, // 31: mycelium.ListDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
-	45, // 32: mycelium.PluginService.GetPluginSettings:input_type -> mycelium.GetPluginSettingsRequest
-	47, // 33: mycelium.PluginService.SavePluginSetting:input_type -> mycelium.SavePluginSettingRequest
-	49, // 34: mycelium.PluginService.TriggerRefresh:input_type -> mycelium.TriggerRefreshRequest
-	3,  // 35: mycelium.MediaPipeline.GetCatalog:input_type -> mycelium.CatalogRequest
-	7,  // 36: mycelium.MediaPipeline.GetSearchFilters:input_type -> mycelium.SearchFiltersRequest
-	9,  // 37: mycelium.MediaPipeline.Search:input_type -> mycelium.SearchRequest
-	11, // 38: mycelium.MediaPipeline.GetDetails:input_type -> mycelium.DetailsRequest
-	20, // 39: mycelium.MediaPipeline.Browse:input_type -> mycelium.BrowseRequest
-	23, // 40: mycelium.MediaPipeline.GetStreams:input_type -> mycelium.StreamsRequest
-	25, // 41: mycelium.MediaPipeline.ResolveStream:input_type -> mycelium.ResolveRequest
-	29, // 42: mycelium.MediaPipeline.UpdateProgress:input_type -> mycelium.ProgressRequest
-	35, // 43: mycelium.MediaPipeline.DeleteProgress:input_type -> mycelium.DeleteProgressRequest
-	38, // 44: mycelium.MediaPipeline.GetContinueWatching:input_type -> mycelium.ContinueWatchingRequest
-	40, // 45: mycelium.MediaPipeline.ListPlugins:input_type -> mycelium.PluginListRequest
-	51, // 46: mycelium.MediaPipeline.GetDownloadOptions:input_type -> mycelium.DownloadOptionsRequest
-	55, // 47: mycelium.MediaPipeline.CreateDownload:input_type -> mycelium.CreateDownloadRequest
-	60, // 48: mycelium.MediaPipeline.ListDownloads:input_type -> mycelium.ListDownloadsRequest
-	62, // 49: mycelium.MediaPipeline.CancelDownload:input_type -> mycelium.DownloadIdRequest
-	62, // 50: mycelium.MediaPipeline.DeleteDownload:input_type -> mycelium.DownloadIdRequest
-	57, // 51: mycelium.MediaPipeline.CreateDownloads:input_type -> mycelium.CreateDownloadsRequest
-	62, // 52: mycelium.MediaPipeline.AckDownloadFetched:input_type -> mycelium.DownloadIdRequest
-	31, // 53: mycelium.MediaPipeline.ReleasePlayback:input_type -> mycelium.ReleasePlaybackRequest
-	33, // 54: mycelium.MediaPipeline.WarmStream:input_type -> mycelium.WarmStreamRequest
-	46, // 55: mycelium.PluginService.GetPluginSettings:output_type -> mycelium.GetPluginSettingsResponse
-	48, // 56: mycelium.PluginService.SavePluginSetting:output_type -> mycelium.SavePluginSettingResponse
-	50, // 57: mycelium.PluginService.TriggerRefresh:output_type -> mycelium.TriggerRefreshResponse
-	4,  // 58: mycelium.MediaPipeline.GetCatalog:output_type -> mycelium.CatalogResponse
-	8,  // 59: mycelium.MediaPipeline.GetSearchFilters:output_type -> mycelium.SearchFiltersResponse
-	10, // 60: mycelium.MediaPipeline.Search:output_type -> mycelium.SearchResponse
-	19, // 61: mycelium.MediaPipeline.GetDetails:output_type -> mycelium.DetailsResponse
-	21, // 62: mycelium.MediaPipeline.Browse:output_type -> mycelium.BrowseResponse
-	24, // 63: mycelium.MediaPipeline.GetStreams:output_type -> mycelium.StreamsResponse
-	28, // 64: mycelium.MediaPipeline.ResolveStream:output_type -> mycelium.ResolveStreamEvent
-	30, // 65: mycelium.MediaPipeline.UpdateProgress:output_type -> mycelium.ProgressResponse
-	36, // 66: mycelium.MediaPipeline.DeleteProgress:output_type -> mycelium.DeleteProgressResponse
-	39, // 67: mycelium.MediaPipeline.GetContinueWatching:output_type -> mycelium.ContinueWatchingResponse
-	43, // 68: mycelium.MediaPipeline.ListPlugins:output_type -> mycelium.PluginListResponse
-	54, // 69: mycelium.MediaPipeline.GetDownloadOptions:output_type -> mycelium.DownloadOptionsResponse
-	59, // 70: mycelium.MediaPipeline.CreateDownload:output_type -> mycelium.DownloadInfo
-	61, // 71: mycelium.MediaPipeline.ListDownloads:output_type -> mycelium.ListDownloadsResponse
-	63, // 72: mycelium.MediaPipeline.CancelDownload:output_type -> mycelium.DownloadActionResponse
-	63, // 73: mycelium.MediaPipeline.DeleteDownload:output_type -> mycelium.DownloadActionResponse
-	58, // 74: mycelium.MediaPipeline.CreateDownloads:output_type -> mycelium.CreateDownloadsResponse
-	63, // 75: mycelium.MediaPipeline.AckDownloadFetched:output_type -> mycelium.DownloadActionResponse
-	32, // 76: mycelium.MediaPipeline.ReleasePlayback:output_type -> mycelium.ReleasePlaybackResponse
-	34, // 77: mycelium.MediaPipeline.WarmStream:output_type -> mycelium.WarmStreamResponse
-	55, // [55:78] is the sub-list for method output_type
-	32, // [32:55] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	65, // 1: mycelium.EpisodeInfo.extra:type_name -> mycelium.EpisodeInfo.ExtraEntry
+	0,  // 2: mycelium.CatalogResponse.items:type_name -> mycelium.CatalogItem
+	6,  // 3: mycelium.SearchFilter.options:type_name -> mycelium.FilterOption
+	5,  // 4: mycelium.SearchFiltersResponse.filters:type_name -> mycelium.SearchFilter
+	66, // 5: mycelium.SearchRequest.filters:type_name -> mycelium.SearchRequest.FiltersEntry
+	0,  // 6: mycelium.SearchResponse.items:type_name -> mycelium.CatalogItem
+	2,  // 7: mycelium.SeriesDetails.seasons:type_name -> mycelium.SeasonInfo
+	0,  // 8: mycelium.DetailsResponse.item:type_name -> mycelium.CatalogItem
+	12, // 9: mycelium.DetailsResponse.movie:type_name -> mycelium.MovieDetails
+	13, // 10: mycelium.DetailsResponse.series:type_name -> mycelium.SeriesDetails
+	14, // 11: mycelium.DetailsResponse.episode:type_name -> mycelium.EpisodeDetails
+	15, // 12: mycelium.DetailsResponse.live:type_name -> mycelium.LiveDetails
+	16, // 13: mycelium.DetailsResponse.video:type_name -> mycelium.VideoDetails
+	17, // 14: mycelium.DetailsResponse.music:type_name -> mycelium.MusicDetails
+	18, // 15: mycelium.DetailsResponse.podcast:type_name -> mycelium.PodcastDetails
+	0,  // 16: mycelium.BrowseResponse.items:type_name -> mycelium.CatalogItem
+	1,  // 17: mycelium.BrowseResponse.episodes:type_name -> mycelium.EpisodeInfo
+	22, // 18: mycelium.StreamsResponse.sources:type_name -> mycelium.StreamSource
+	67, // 19: mycelium.ResolveResponse.http_headers:type_name -> mycelium.ResolveResponse.HttpHeadersEntry
+	68, // 20: mycelium.ResolveResponse.extra:type_name -> mycelium.ResolveResponse.ExtraEntry
+	27, // 21: mycelium.ResolveStreamEvent.progress:type_name -> mycelium.ResolveProgress
+	26, // 22: mycelium.ResolveStreamEvent.result:type_name -> mycelium.ResolveResponse
+	37, // 23: mycelium.ContinueWatchingResponse.items:type_name -> mycelium.ContinueWatchingItem
+	42, // 24: mycelium.PluginInfo.catalogs:type_name -> mycelium.CatalogDef
+	41, // 25: mycelium.PluginListResponse.plugins:type_name -> mycelium.PluginInfo
+	44, // 26: mycelium.GetPluginSettingsResponse.fields:type_name -> mycelium.PluginSettingField
+	52, // 27: mycelium.DownloadOptionsResponse.variants:type_name -> mycelium.DownloadVariant
+	53, // 28: mycelium.DownloadOptionsResponse.audio:type_name -> mycelium.DownloadTrack
+	53, // 29: mycelium.DownloadOptionsResponse.subtitles:type_name -> mycelium.DownloadTrack
+	56, // 30: mycelium.CreateDownloadsRequest.items:type_name -> mycelium.CreateDownloadItem
+	59, // 31: mycelium.CreateDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
+	59, // 32: mycelium.ListDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
+	45, // 33: mycelium.PluginService.GetPluginSettings:input_type -> mycelium.GetPluginSettingsRequest
+	47, // 34: mycelium.PluginService.SavePluginSetting:input_type -> mycelium.SavePluginSettingRequest
+	49, // 35: mycelium.PluginService.TriggerRefresh:input_type -> mycelium.TriggerRefreshRequest
+	3,  // 36: mycelium.MediaPipeline.GetCatalog:input_type -> mycelium.CatalogRequest
+	7,  // 37: mycelium.MediaPipeline.GetSearchFilters:input_type -> mycelium.SearchFiltersRequest
+	9,  // 38: mycelium.MediaPipeline.Search:input_type -> mycelium.SearchRequest
+	11, // 39: mycelium.MediaPipeline.GetDetails:input_type -> mycelium.DetailsRequest
+	20, // 40: mycelium.MediaPipeline.Browse:input_type -> mycelium.BrowseRequest
+	23, // 41: mycelium.MediaPipeline.GetStreams:input_type -> mycelium.StreamsRequest
+	25, // 42: mycelium.MediaPipeline.ResolveStream:input_type -> mycelium.ResolveRequest
+	29, // 43: mycelium.MediaPipeline.UpdateProgress:input_type -> mycelium.ProgressRequest
+	35, // 44: mycelium.MediaPipeline.DeleteProgress:input_type -> mycelium.DeleteProgressRequest
+	38, // 45: mycelium.MediaPipeline.GetContinueWatching:input_type -> mycelium.ContinueWatchingRequest
+	40, // 46: mycelium.MediaPipeline.ListPlugins:input_type -> mycelium.PluginListRequest
+	51, // 47: mycelium.MediaPipeline.GetDownloadOptions:input_type -> mycelium.DownloadOptionsRequest
+	55, // 48: mycelium.MediaPipeline.CreateDownload:input_type -> mycelium.CreateDownloadRequest
+	60, // 49: mycelium.MediaPipeline.ListDownloads:input_type -> mycelium.ListDownloadsRequest
+	62, // 50: mycelium.MediaPipeline.CancelDownload:input_type -> mycelium.DownloadIdRequest
+	62, // 51: mycelium.MediaPipeline.DeleteDownload:input_type -> mycelium.DownloadIdRequest
+	57, // 52: mycelium.MediaPipeline.CreateDownloads:input_type -> mycelium.CreateDownloadsRequest
+	62, // 53: mycelium.MediaPipeline.AckDownloadFetched:input_type -> mycelium.DownloadIdRequest
+	31, // 54: mycelium.MediaPipeline.ReleasePlayback:input_type -> mycelium.ReleasePlaybackRequest
+	33, // 55: mycelium.MediaPipeline.WarmStream:input_type -> mycelium.WarmStreamRequest
+	46, // 56: mycelium.PluginService.GetPluginSettings:output_type -> mycelium.GetPluginSettingsResponse
+	48, // 57: mycelium.PluginService.SavePluginSetting:output_type -> mycelium.SavePluginSettingResponse
+	50, // 58: mycelium.PluginService.TriggerRefresh:output_type -> mycelium.TriggerRefreshResponse
+	4,  // 59: mycelium.MediaPipeline.GetCatalog:output_type -> mycelium.CatalogResponse
+	8,  // 60: mycelium.MediaPipeline.GetSearchFilters:output_type -> mycelium.SearchFiltersResponse
+	10, // 61: mycelium.MediaPipeline.Search:output_type -> mycelium.SearchResponse
+	19, // 62: mycelium.MediaPipeline.GetDetails:output_type -> mycelium.DetailsResponse
+	21, // 63: mycelium.MediaPipeline.Browse:output_type -> mycelium.BrowseResponse
+	24, // 64: mycelium.MediaPipeline.GetStreams:output_type -> mycelium.StreamsResponse
+	28, // 65: mycelium.MediaPipeline.ResolveStream:output_type -> mycelium.ResolveStreamEvent
+	30, // 66: mycelium.MediaPipeline.UpdateProgress:output_type -> mycelium.ProgressResponse
+	36, // 67: mycelium.MediaPipeline.DeleteProgress:output_type -> mycelium.DeleteProgressResponse
+	39, // 68: mycelium.MediaPipeline.GetContinueWatching:output_type -> mycelium.ContinueWatchingResponse
+	43, // 69: mycelium.MediaPipeline.ListPlugins:output_type -> mycelium.PluginListResponse
+	54, // 70: mycelium.MediaPipeline.GetDownloadOptions:output_type -> mycelium.DownloadOptionsResponse
+	59, // 71: mycelium.MediaPipeline.CreateDownload:output_type -> mycelium.DownloadInfo
+	61, // 72: mycelium.MediaPipeline.ListDownloads:output_type -> mycelium.ListDownloadsResponse
+	63, // 73: mycelium.MediaPipeline.CancelDownload:output_type -> mycelium.DownloadActionResponse
+	63, // 74: mycelium.MediaPipeline.DeleteDownload:output_type -> mycelium.DownloadActionResponse
+	58, // 75: mycelium.MediaPipeline.CreateDownloads:output_type -> mycelium.CreateDownloadsResponse
+	63, // 76: mycelium.MediaPipeline.AckDownloadFetched:output_type -> mycelium.DownloadActionResponse
+	32, // 77: mycelium.MediaPipeline.ReleasePlayback:output_type -> mycelium.ReleasePlaybackResponse
+	34, // 78: mycelium.MediaPipeline.WarmStream:output_type -> mycelium.WarmStreamResponse
+	56, // [56:79] is the sub-list for method output_type
+	33, // [33:56] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_media_proto_init() }
@@ -6008,7 +6025,7 @@ func file_media_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_media_proto_rawDesc), len(file_media_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   68,
+			NumMessages:   69,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

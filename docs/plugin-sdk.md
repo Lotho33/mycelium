@@ -138,6 +138,12 @@ mycelium passes.
 }
 ```
 
+`extra` is opaque to mycelium and reaches the client as is, on catalog items
+and on episode rows (`browse` results with `media_type = "episode"`). On an
+episode, `extra.lang` names its language versions: `""` / `"both"` (nothing
+to flag), `"ita"`, `"jap"`, `"eng"`. Compute it only from data already at
+hand — no extra request per episode.
+
 ### `resolve_stream` result
 
 ```lua
