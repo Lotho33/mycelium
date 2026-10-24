@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,4 +107,46 @@ func liveBufferTail(l *raList) {
 			readAheadFetch(l, s)
 		})
 	}
+}
+
+// liveSyncTags gives every player of a live stream the same distance from
+// the live edge: EXT-X-START (where to start) and HOLD-BACK (the target the
+// player steers back to after a stall, e.g. ExoPlayer adjusting its speed by
+// a few percent). Without them each player picks its own and one that
+// rebuffered stays behind for good: two screens in one house would hear the
+// same goal seconds apart. 3 target durations is the minimum HOLD-BACK the
+// HLS spec allows. Tags the upstream already sets are kept.
+func liveSyncTags(content []byte) []string {
+	m := reTargetDuration.FindSubmatch(content)
+	if m == nil {
+		return nil
+	}
+	td, err := strconv.Atoi(string(m[1]))
+	if err != nil || td <= 0 {
+		return nil
+	}
+	off := 3 * td
+	var tags []string
+	if !bytes.Contains(content, []byte("#EXT-X-START")) {
+		tags = append(tags, "#EXT-X-START:TIME-OFFSET=-"+strconv.Itoa(off)+",PRECISE=YES")
+	}
+	if !bytes.Contains(content, []byte("#EXT-X-SERVER-CONTROL")) {
+		tags = append(tags, "#EXT-X-SERVER-CONTROL:HOLD-BACK="+strconv.Itoa(off))
+	}
+	return tags
+}
+
+// insertAfterHeader puts tags right after #EXTM3U (or first, without it).
+func insertAfterHeader(lines, tags []string) []string {
+	if len(tags) == 0 {
+		return lines
+	}
+	at := 0
+	if len(lines) > 0 && strings.HasPrefix(lines[0], "#EXTM3U") {
+		at = 1
+	}
+	out := make([]string, 0, len(lines)+len(tags))
+	out = append(out, lines[:at]...)
+	out = append(out, tags...)
+	return append(out, lines[at:]...)
 }

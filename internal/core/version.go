@@ -63,8 +63,12 @@ func CompareVersions(a, b string) int {
 
 // IsNewerVersion reports whether candidate is a strictly newer release than
 // current. False when either doesn't parse: better no update offered than a
-// wrong one.
+// wrong one. An empty candidate (the latest release not fetched yet) is
+// simply not newer, without a warning.
 func IsNewerVersion(candidate, current string) bool {
+	if strings.TrimSpace(candidate) == "" {
+		return false
+	}
 	return CompareVersions(candidate, current) > 0
 }
 

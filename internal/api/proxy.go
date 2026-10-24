@@ -424,6 +424,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	if isMaster && len(extSubs) > 0 {
 		rewritten = injectExtSubs(rewritten, extSubs, proxyBase)
 	}
+	if !isMaster && isLiveMediaPlaylist(content) {
+		// Same distance from the live edge on every screen (proxy_live.go).
+		rewritten = insertAfterHeader(rewritten, liveSyncTags(content))
+	}
 
 	out := strings.Join(rewritten, "\n")
 	if proxyDebug {

@@ -82,3 +82,18 @@ func TestCallEntrypointJSONBackgroundCtx(t *testing.T) {
 		t.Fatalf("gave up after %s, want ~50ms", d)
 	}
 }
+
+// share_live is on unless the manifest turns it off.
+func TestShareLiveEnabled_DefaultOn(t *testing.T) {
+	m := newTestManager(t)
+	for id, line := range map[string]string{"t.sharedef": "", "t.shareoff": "share_live: false\n"} {
+		dir := writeTestPlugin(t, "id: "+id+"\nname: T\ndirect_egress: true\npool_size: 1\n"+line+"entrypoints:\n  resolve: resolve_stream\n",
+			`function resolve_stream(args) return nil end`)
+		if err := m.loadPlugin(dir); err != nil {
+			t.Fatalf("load %s: %v", id, err)
+		}
+	}
+	if !m.ShareLiveEnabled("t.sharedef") || m.ShareLiveEnabled("t.shareoff") || m.ShareLiveEnabled("missing") {
+		t.Fatalf("default %v, off %v", m.ShareLiveEnabled("t.sharedef"), m.ShareLiveEnabled("t.shareoff"))
+	}
+}

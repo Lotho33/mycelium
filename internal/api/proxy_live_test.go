@@ -56,6 +56,9 @@ func TestLive_PlayersShareOneUpstreamFlow(t *testing.T) {
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "/proxy/segment.ts") {
 			t.Fatalf("player %d playlist: %d\n%s", player, rec.Code, rec.Body.String())
 		}
+		if !strings.HasPrefix(rec.Body.String(), "#EXTM3U\n#EXT-X-START:TIME-OFFSET=-18,PRECISE=YES\n#EXT-X-SERVER-CONTROL:HOLD-BACK=18\n") {
+			t.Fatalf("player %d: no live sync tags:\n%s", player, rec.Body.String())
+		}
 	}
 	if n := playlistHits.Load(); n != 1 {
 		t.Fatalf("live playlist fetched upstream %d times, want 1", n)
@@ -99,5 +102,19 @@ func TestLivePlaylistTTL(t *testing.T) {
 	}
 	if isLiveMediaPlaylist([]byte("#EXTINF:6,\na.ts\n#EXT-X-ENDLIST\n")) || !isLiveMediaPlaylist([]byte("#EXTINF:6,\na.ts\n")) {
 		t.Fatal("live detection")
+	}
+}
+
+// Tags the upstream sets itself are kept as they are.
+func TestLiveSyncTags_KeepsUpstreamOnes(t *testing.T) {
+	if tags := liveSyncTags([]byte("#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-START:TIME-OFFSET=-6\n#EXTINF:4,\na.ts\n")); len(tags) != 1 || tags[0] != "#EXT-X-SERVER-CONTROL:HOLD-BACK=12" {
+		t.Fatalf("tags = %v", tags)
+	}
+	if tags := liveSyncTags([]byte("#EXTM3U\n#EXTINF:4,\na.ts\n")); tags != nil {
+		t.Fatalf("no target duration: %v", tags)
+	}
+	got := insertAfterHeader([]string{"#EXTM3U", "#EXTINF:4,", "a.ts"}, []string{"#X"})
+	if strings.Join(got, "|") != "#EXTM3U|#X|#EXTINF:4,|a.ts" {
+		t.Fatalf("insert: %v", got)
 	}
 }

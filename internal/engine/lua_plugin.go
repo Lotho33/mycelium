@@ -57,11 +57,11 @@ type LuaManifest struct {
 	// It also adds a synthetic "warm_resolve" setting (on by default). Without
 	// a resolve cache a warm would only double the requests to the site.
 	WarmResolve bool `yaml:"warm_resolve"`
-	// ShareLive declares that a resolved live link works for every player of
-	// this server (the site ties it to the server, not to the session): Plays
-	// of a live stream already being watched reuse it, so the proxy fetches the
-	// stream once for all of them.
-	ShareLive bool `yaml:"share_live"`
+	// ShareLive: Plays of a live stream already being watched reuse its
+	// resolved link, so the proxy fetches the stream once for all of them. On
+	// unless set to false: for a site that ties a link to one viewer (a
+	// per-session token) rather than to this server.
+	ShareLive *bool `yaml:"share_live"`
 	// Download opts the plugin into offline downloads (internal/downloads).
 	Download    LuaManifestDownload `yaml:"download"`
 	Settings    LuaManifestSettings `yaml:"settings"`
@@ -1725,12 +1725,13 @@ func (m *LuaPluginManager) WarmResolveEnabled(pluginID string) bool {
 	return managers.Settings.GetBool("lua:"+pluginID+":global:"+WarmResolveSettingID, true)
 }
 
-// ShareLiveEnabled reports whether pluginID declares share_live.
+// ShareLiveEnabled reports whether pluginID shares its live links (on unless
+// the manifest says share_live: false).
 func (m *LuaPluginManager) ShareLiveEnabled(pluginID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	p, ok := m.plugins[pluginID]
-	return ok && p.Manifest.ShareLive
+	return ok && (p.Manifest.ShareLive == nil || *p.Manifest.ShareLive)
 }
 
 // EgressSettingID is the per-plugin key naming which egress profile the

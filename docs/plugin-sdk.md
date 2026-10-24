@@ -46,10 +46,10 @@ direct_stream: true           # hand the resolved URL to the player as-is,
 warm_resolve: true            # resolve_stream caches its result: mycelium may
                               # run it ahead of Play (args.warm = true) when a
                               # details page opens; adds an admin toggle, on
-share_live: true              # a resolved live link works for every player of
-                              # this server: Plays of a live stream already being
-                              # watched reuse it, and the proxy fetches the
-                              # stream once for all of them
+share_live: false             # default true: Plays of a live stream already
+                              # being watched reuse its link and the proxy fetches
+                              # it once for all; false when the site ties a link
+                              # to one viewer (a per-session token)
 
 # --- offline downloads (optional, off when absent) ---
 download:
