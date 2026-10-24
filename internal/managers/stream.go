@@ -270,6 +270,26 @@ func (r *sessionRegistry) ActiveWithin(d time.Duration) bool {
 
 // RevokeDevice retires every session of deviceID: their uids are refused
 // from now on (Revoked) instead of counting as unknown.
+// LiveWatched reports whether a live session of pluginID/sourceID fetched
+// something through the proxy within d.
+func (r *sessionRegistry) LiveWatched(pluginID, sourceID string, d time.Duration) bool {
+	cutoff := time.Now().Add(-d)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, s := range r.sessions {
+		if !s.IsLive || s.PluginID != pluginID || s.SourceID != sourceID {
+			continue
+		}
+		s.mu.Lock()
+		recent := s.lastSeen.After(cutoff)
+		s.mu.Unlock()
+		if recent {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *sessionRegistry) RevokeDevice(deviceID string) {
 	if deviceID == "" {
 		return

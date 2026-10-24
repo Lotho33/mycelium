@@ -239,6 +239,12 @@ func loadVTT(ctx context.Context, rawURL string) (vttEntry, error) {
 }
 
 func fetchSubtitle(ctx context.Context, rawURL string) ([]byte, error) {
+	if strings.HasPrefix(rawURL, core.InlineSubtitleScheme) {
+		if b, ok := core.InlineSubtitle(rawURL); ok {
+			return b, nil
+		}
+		return nil, fmt.Errorf("inline subtitle no longer in memory")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -419,7 +425,8 @@ func ProxySubtitleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawURL := proxyB64Decode(r.URL.Query().Get("data"))
-	if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	if u, err := url.Parse(rawURL); !strings.HasPrefix(rawURL, core.InlineSubtitleScheme) &&
+		(err != nil || (u.Scheme != "http" && u.Scheme != "https")) {
 		http.Error(w, "bad subtitle url", http.StatusBadRequest)
 		return
 	}

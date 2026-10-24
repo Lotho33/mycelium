@@ -44,6 +44,8 @@ type raList struct {
 	useVPN     bool
 	egr        string
 	inflight   atomic.Int32
+	// ttl of the fetched segments in the warm cache (0 = its default).
+	ttl time.Duration
 }
 
 type raPos struct {
@@ -214,7 +216,7 @@ func readAheadFetch(l *raList, s raSeg) {
 	if v.reject != "" {
 		return
 	}
-	managers.Segments.Put(s.url, v.body)
+	managers.Segments.PutTTL(s.url, v.body, l.ttl)
 	if ttfb >= readAheadSlow {
 		log.Printf("[proxy/readahead] slow upstream answer (%s) absorbed ahead of the player url=%s", ttfb.Round(time.Millisecond), logURL(s.url))
 	} else if proxyDebug {

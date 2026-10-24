@@ -336,13 +336,24 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	// Shared with a warm or another device's Play of the same stream already
 	// resolving (resolve_flight.go). While it runs, no warm starts.
 	flightKey := resolveFlightKey(req.PluginId, req.StreamId)
-	resolvesInFlight.Add(1)
 	resolveStart := time.Now()
-	rs, joined, joinedWarm, err := resolveShared(ctx, req.PluginId, req.StreamId, false, onProgress,
-		func(rctx context.Context, p engine.ProgressFunc) (*ResolvedStream, error) {
-			return b.ResolveStream(rctx, req.StreamId, p)
-		})
-	resolvesInFlight.Add(-1)
+	// A live stream someone is watching: the same link, so the proxy fetches
+	// it once for every player (live_share.go).
+	rs := liveShared(req.PluginId, req.StreamId)
+	var joined, joinedWarm bool
+	if rs != nil {
+		log.Printf("[pileus/media] ResolveStream %s/%s: live già in visione, link condiviso", req.PluginId, req.StreamId)
+	} else {
+		resolvesInFlight.Add(1)
+		rs, joined, joinedWarm, err = resolveShared(ctx, req.PluginId, req.StreamId, false, onProgress,
+			func(rctx context.Context, p engine.ProgressFunc) (*ResolvedStream, error) {
+				return b.ResolveStream(rctx, req.StreamId, p)
+			})
+		resolvesInFlight.Add(-1)
+		if err == nil {
+			liveShareStore(req.PluginId, req.StreamId, rs)
+		}
+	}
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
 			// The user backed out; the resolve itself goes on and fills the cache.

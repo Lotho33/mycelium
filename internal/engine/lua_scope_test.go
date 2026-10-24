@@ -631,3 +631,47 @@ func TestSDKStorage_RefusesSymlinkOut(t *testing.T) {
 		t.Fatalf("read through a symlink out of the plugin dir: %s", raw)
 	}
 }
+
+// write_json creates a sub-directory; remove deletes only *.json files;
+// base64_encode keeps binary bytes through a JSON file.
+func TestSDKStorageSubdirRemoveAndBase64(t *testing.T) {
+	dir := writeTestPlugin(t,
+		"id: t.storagerm\nname: T\ndirect_egress: true\npool_size: 1\nentrypoints:\n  probe: probe\n",
+		`function probe(args)
+		   local bin = "\0\255\233ok"
+		   local werr = mycelium.storage.write_json("subs/a.json", { b = mycelium.crypto.base64_encode(bin) })
+		   local t = mycelium.storage.read_json("subs/a.json")
+		   local back = mycelium.crypto.base64_decode(t and t.b or "")
+		   local same = back == bin
+		   local rerr = mycelium.storage.remove("subs/a.json")
+		   local gone = not mycelium.storage.exists("subs/a.json")
+		   local again = mycelium.storage.remove("subs/a.json")
+		   local code = mycelium.storage.remove("init.lua")
+		   return { werr = werr or "", same = same, rerr = rerr or "", gone = gone,
+		            again = again or "", code = code or "" }
+		 end`)
+	m := newTestManager(t)
+	if err := m.loadPlugin(dir); err != nil {
+		t.Fatalf("loadPlugin: %v", err)
+	}
+	raw, err := m.CallEntrypointJSON("t.storagerm", "probe", map[string]any{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Werr, Rerr, Again, Code string
+		Same, Gone              bool
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+	if out.Werr != "" || !out.Same || out.Rerr != "" || !out.Gone || out.Again != "" {
+		t.Fatalf("got %s", raw)
+	}
+	if !strings.Contains(out.Code, "only .json") {
+		t.Fatalf("remove(init.lua) err = %q", out.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "init.lua")); err != nil {
+		t.Fatalf("init.lua removed: %v", err)
+	}
+}

@@ -46,6 +46,10 @@ direct_stream: true           # hand the resolved URL to the player as-is,
 warm_resolve: true            # resolve_stream caches its result: mycelium may
                               # run it ahead of Play (args.warm = true) when a
                               # details page opens; adds an admin toggle, on
+share_live: true              # a resolved live link works for every player of
+                              # this server: Plays of a live stream already being
+                              # watched reuse it, and the proxy fetches the
+                              # stream once for all of them
 
 # --- offline downloads (optional, off when absent) ---
 download:
@@ -154,6 +158,7 @@ hand — no extra request per episode.
   extra   = { … },                             -- plugin-specific passthrough
   subtitles = {                                -- optional, HLS only
     { url = "https://…/it.srt", lang = "it", name = "Italiano", default = true },
+    { data_base64 = "…", lang = "it", name = "Italiano 2" },  -- the file itself
   },
 }
 ```
@@ -167,6 +172,11 @@ Windows-1252). Players and offline downloads see a normal track. A track
 whose language the master already has (non-forced) is skipped; a file that
 can't be fetched becomes an empty track, never a playback error. At most 4
 tracks; ignored for non-HLS streams and `direct_stream` plugins.
+
+`data_base64` hands the file itself instead of a `url` (same formats, up to
+4 MiB): for a subtitle the plugin keeps on disk, so a later Play needs no new
+download. mycelium holds it in memory only; after a restart the track is
+empty until the next resolve hands it again.
 
 `force_refresh` is set by mycelium when a previously-resolved URL was rejected
 downstream — skip any cache and resolve fresh.
@@ -273,6 +283,7 @@ per state and per global / module-level `local`, plus its indexes.
 
 ```lua
 local s, err = mycelium.crypto.base64_decode(b64)                 -- std / url / raw
+local b64    = mycelium.crypto.base64_encode(s)                  -- std, binary-safe
 local s, err = mycelium.crypto.aes_decrypt(ciphertext_b64, key_hex, iv_hex)  -- AES-CBC 128/256
 ```
 
@@ -333,11 +344,14 @@ mycelium.context.set_plugin_status("syncing", "Indexing 1200/5000")  -- ready|sy
 
 JSON files in the plugin's data area (path-traversal blocked). `write_json`
 only writes `*.json` names — never the plugin's own `.lua` code or `manifest.yaml`.
+Sub-directories (`"subs/x.json"`) are created on write. Data files survive
+plugin updates.
 
 ```lua
 local t, err = mycelium.storage.read_json("state.json")
 local err    = mycelium.storage.write_json("state.json", t)
 local exists = mycelium.storage.exists("state.json")
+local err    = mycelium.storage.remove("subs/old.json")      -- *.json only; missing = nil
 local n, err = mycelium.storage.each_json("big.json", "items", fn)  -- like json.each; missing file = 0, nil
 ```
 

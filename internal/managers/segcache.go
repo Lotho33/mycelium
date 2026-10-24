@@ -88,6 +88,12 @@ func (c *segCache) Get(url string) ([]byte, bool) {
 // entries until the byte ceiling is satisfied. A no-op for an empty body or a
 // body larger than the whole cache.
 func (c *segCache) Put(url string, body []byte) {
+	c.PutTTL(url, body, 0)
+}
+
+// PutTTL is Put with its own lifetime (0 = the cache's TTL), e.g. shorter
+// for a live segment, which nobody asks for once the live edge has passed.
+func (c *segCache) PutTTL(url string, body []byte, ttl time.Duration) {
 	if len(body) == 0 {
 		return
 	}
@@ -101,7 +107,10 @@ func (c *segCache) Put(url string, body []byte) {
 	}
 	cp := make([]byte, len(body))
 	copy(cp, body)
-	e := &segCacheEntry{body: cp, expiresAt: time.Now().Add(c.ttl)}
+	if ttl <= 0 {
+		ttl = c.ttl
+	}
+	e := &segCacheEntry{body: cp, expiresAt: time.Now().Add(ttl)}
 	e.elem = c.lru.PushFront(url)
 	c.items[url] = e
 	c.bytes += len(cp)

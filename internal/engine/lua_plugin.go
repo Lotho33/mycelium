@@ -57,6 +57,11 @@ type LuaManifest struct {
 	// It also adds a synthetic "warm_resolve" setting (on by default). Without
 	// a resolve cache a warm would only double the requests to the site.
 	WarmResolve bool `yaml:"warm_resolve"`
+	// ShareLive declares that a resolved live link works for every player of
+	// this server (the site ties it to the server, not to the session): Plays
+	// of a live stream already being watched reuse it, so the proxy fetches the
+	// stream once for all of them.
+	ShareLive bool `yaml:"share_live"`
 	// Download opts the plugin into offline downloads (internal/downloads).
 	Download    LuaManifestDownload `yaml:"download"`
 	Settings    LuaManifestSettings `yaml:"settings"`
@@ -435,9 +440,20 @@ func resolvesInside(dir, full string) bool {
 	}
 	resolved, err := filepath.EvalSymlinks(full)
 	if os.IsNotExist(err) {
-		var perr error
-		if resolved, perr = filepath.EvalSymlinks(filepath.Dir(full)); perr != nil {
-			return false
+		// Not created yet (a file, or a sub-directory write_json will make):
+		// judge by the nearest ancestor that exists. full is clean, so the
+		// missing tail holds no "..".
+		parent := filepath.Dir(full)
+		for {
+			r, perr := filepath.EvalSymlinks(parent)
+			if perr == nil {
+				resolved = r
+				break
+			}
+			if !os.IsNotExist(perr) || filepath.Dir(parent) == parent {
+				return false
+			}
+			parent = filepath.Dir(parent)
 		}
 	} else if err != nil {
 		return false
@@ -1707,6 +1723,14 @@ func (m *LuaPluginManager) WarmResolveEnabled(pluginID string) bool {
 		return false
 	}
 	return managers.Settings.GetBool("lua:"+pluginID+":global:"+WarmResolveSettingID, true)
+}
+
+// ShareLiveEnabled reports whether pluginID declares share_live.
+func (m *LuaPluginManager) ShareLiveEnabled(pluginID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.plugins[pluginID]
+	return ok && p.Manifest.ShareLive
 }
 
 // EgressSettingID is the per-plugin key naming which egress profile the

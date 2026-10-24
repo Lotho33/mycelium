@@ -178,3 +178,19 @@ func TestInjectExtSubs_SanitizesNameAndLanguage(t *testing.T) {
 		t.Fatalf("injected tag:\n%s", joined)
 	}
 }
+
+// An inline subtitle (a file the plugin handed itself) is served from memory,
+// cp1252 bytes included, with no upstream request.
+func TestProxySubtitle_Inline(t *testing.T) {
+	core.SetProxySignKey([]byte("k"))
+	defer core.SetProxySignKey(nil)
+	u, ok := core.PutInlineSubtitle([]byte("1\n00:00:01,000 --> 00:00:04,000\nPerch\xe9\n"))
+	if !ok || core.EncodeExtSubs([]core.ExtSubtitle{{URL: u}}) == "" {
+		t.Fatalf("inline url %q not accepted", u)
+	}
+	f := httptest.NewRecorder()
+	ProxySubtitleFile(f, httptest.NewRequest("GET", core.AppendProxySig("/proxy/subtitle.vtt?data="+b64url(u)), nil))
+	if got := f.Body.String(); f.Code != http.StatusOK || !strings.Contains(got, "00:00:01.000 --> 00:00:04.000\nPerché") {
+		t.Fatalf("vtt (%d):\n%s", f.Code, got)
+	}
+}

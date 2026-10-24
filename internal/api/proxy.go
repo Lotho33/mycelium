@@ -211,12 +211,16 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	// (the rewrite below still runs).
 	var content []byte
 	var fetchErr error
+	liveFetched := false // a live media playlist just fetched upstream
 	if warm, ok := managers.Segments.Get(realURL); ok {
 		content = warm
 		// Serve the pre-buffered copy once, then drop it: a live playlist's window
 		// slides, so the next reload must come from upstream.
 		managers.Segments.Delete(realURL)
 		log.Printf("[proxy/playlist] warm-cache hit (%d bytes), evicted for reload url=%s", len(warm), logURL(realURL))
+	} else if live, ok := livePlaylistGet(realURL); ok {
+		// Another player of this live stream reloaded it a moment ago.
+		content = live
 	} else {
 		// Concurrent requests for the same URL share one upstream fetch.
 		var shared bool
@@ -225,6 +229,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		})
 		if shared && proxyDebug {
 			log.Printf("[proxy/playlist] shared fetch for %s", logURL(realURL))
+		}
+		liveFetched = fetchErr == nil && isLiveMediaPlaylist(content)
+		if liveFetched {
+			livePlaylistPut(realURL, content)
 		}
 	}
 
@@ -404,6 +412,12 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		readAheadRegister(&raList{
 			segs: raSegs, origin: realOrigin, cookiesRaw: cookiesRaw, xhdrRaw: xhdrRaw,
 			useVPN: useVPN, egr: egr,
+		})
+	} else if liveFetched && len(raSegs) > 0 && !bytes.Contains(content, []byte("#EXT-X-BYTERANGE")) {
+		// Live: pull the newest segments into RAM for every player (proxy_live.go).
+		liveBufferTail(&raList{
+			segs: raSegs, origin: realOrigin, cookiesRaw: cookiesRaw, xhdrRaw: xhdrRaw,
+			useVPN: useVPN, egr: egr, ttl: liveSegTTL,
 		})
 	}
 

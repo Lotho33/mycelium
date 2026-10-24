@@ -2,6 +2,7 @@ package pileus
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -358,10 +359,12 @@ func parseLuaResolved(b json.RawMessage) (*ResolvedStream, error) {
 		Extra   flexMap `json:"extra"`
 		// An empty Lua table serialises as [] here too, which decodes fine.
 		Subtitles []struct {
-			URL     string `json:"url"`
-			Lang    string `json:"lang"`
-			Name    string `json:"name"`
-			Default bool   `json:"default"`
+			URL  string `json:"url"`
+			Lang string `json:"lang"`
+			Name string `json:"name"`
+			// DataBase64: the file itself instead of url (core.PutInlineSubtitle).
+			DataBase64 string `json:"data_base64"`
+			Default    bool   `json:"default"`
 		} `json:"subtitles"`
 	}
 	if err := json.Unmarshal(b, &result); err != nil {
@@ -377,7 +380,20 @@ func parseLuaResolved(b json.RawMessage) (*ResolvedStream, error) {
 		Extra:   map[string]string(result.Extra),
 	}
 	for _, s := range result.Subtitles {
-		rs.Subtitles = append(rs.Subtitles, core.ExtSubtitle{URL: s.URL, Lang: s.Lang, Name: s.Name, Default: s.Default})
+		u := s.URL
+		if s.DataBase64 != "" {
+			data, err := base64.StdEncoding.DecodeString(s.DataBase64)
+			if err != nil {
+				log.Printf("[pileus/lua] subtitle %q: data_base64: %v", s.Name, err)
+				continue
+			}
+			var ok bool
+			if u, ok = core.PutInlineSubtitle(data); !ok {
+				log.Printf("[pileus/lua] subtitle %q: empty or over %d bytes", s.Name, core.MaxInlineSubtitleBytes)
+				continue
+			}
+		}
+		rs.Subtitles = append(rs.Subtitles, core.ExtSubtitle{URL: u, Lang: s.Lang, Name: s.Name, Default: s.Default})
 	}
 	return rs, nil
 }

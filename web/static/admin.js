@@ -220,6 +220,10 @@ async function pollResources() {
     // Mirror into the mobile top bar (always visible, outside the tab divs).
     set('top-cpu',    cpu.toFixed(0)+'%');
     set('top-mem',    fmtBytes(mem));
+    // And into the side menu, on every page.
+    set('side-cpu',    cpu.toFixed(1)+'%');
+    set('side-mem',    fmtBytes(mem));
+    set('side-uptime', fmtUptime(core.uptime_sec));
 }
 // ─── Plugin memory profile ──────────────────────────────────────────────────
 // On demand only: /admin/lua-plugins/memory borrows every plugin's Lua states
@@ -1558,10 +1562,10 @@ async function restartService() {
 }
 
 // pollResources also feeds the always-visible header, so it never stops:
-// every 5s on the Plugin page, 20s elsewhere.
+// every 5s on the Plugin page, 10s elsewhere (the side menu shows it too).
 function scheduleResourcePoll() {
     pollResources();
-    setTimeout(scheduleResourcePoll, _activeTab === 'plugins' ? 5000 : 20000);
+    setTimeout(scheduleResourcePoll, _activeTab === 'plugins' ? 5000 : 10000);
 }
 
 // ─── Live updates ─────────────────────────────────────────────────────────────

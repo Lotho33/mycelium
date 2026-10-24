@@ -122,6 +122,13 @@
         </button>
     </nav>
 
+    <!-- Server resources, on every page (pollResources). -->
+    <div class="px-4 py-2.5 border-t border-gray-800 grid grid-cols-3 gap-2 text-[11px] font-mono text-gray-500">
+        <div>CPU<div id="side-cpu" class="text-gray-300">—</div></div>
+        <div>RAM<div id="side-mem" class="text-gray-300">—</div></div>
+        <div>Uptime<div id="side-uptime" class="text-gray-300">—</div></div>
+    </div>
+
     <div class="px-2.5 py-3 border-t border-gray-800">
         <button onclick="logout()" class="nav-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>

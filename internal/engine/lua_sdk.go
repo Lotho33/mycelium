@@ -616,6 +616,13 @@ func buildCryptoModule(L *lua.LState) *lua.LTable {
 		return 2
 	}))
 
+	// mycelium.crypto.base64_encode(string) → standard base64 (binary-safe:
+	// lets a plugin keep raw bytes in a JSON file).
+	t.RawSetString("base64_encode", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LString(base64.StdEncoding.EncodeToString([]byte(L.CheckString(1)))))
+		return 1
+	}))
+
 	// mycelium.crypto.aes_decrypt(ciphertext_b64, key_hex, iv_hex) → plaintext_string, err
 	// AES-128 or AES-256 CBC; ciphertext is base64-encoded.
 	t.RawSetString("aes_decrypt", L.NewFunction(func(L *lua.LState) int {
@@ -1210,6 +1217,11 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 			L.Push(lua.LString(fmt.Sprintf("storage.write_json: payload too large (%d bytes, max %d)", len(data), maxStorageWriteBytes)))
 			return 1
 		}
+		// A sub-directory ("subs/x.json") is created on first write.
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			L.Push(lua.LString(err.Error()))
+			return 1
+		}
 		// tmp + rename: a reader (another state, a crash mid-write) never sees
 		// half a file.
 		tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
@@ -1276,6 +1288,27 @@ func buildStorageModule(L *lua.LState, opts SDKOpts) *lua.LTable {
 		}
 		_, err = os.Stat(path)
 		L.Push(lua.LBool(err == nil))
+		return 1
+	}))
+
+	// mycelium.storage.remove(filename) → err|nil — *.json files only, like
+	// write_json; a missing file is not an error.
+	t.RawSetString("remove", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		path, err := resolvePath(name)
+		if err != nil {
+			L.Push(lua.LString(err.Error()))
+			return 1
+		}
+		if !strings.EqualFold(filepath.Ext(path), ".json") {
+			L.Push(lua.LString(fmt.Sprintf("storage.remove: only .json files may be removed (%q)", name)))
+			return 1
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			L.Push(lua.LString(err.Error()))
+			return 1
+		}
+		L.Push(lua.LNil)
 		return 1
 	}))
 
