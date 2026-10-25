@@ -189,7 +189,8 @@ func updateCatalogCount(pluginID, catalogID string, page, count int) {
 }
 
 // catalogCacheTTL is the cache lifetime of a catalog page: the manifest's
-// cache_ttl_seconds, else 15 minutes.
+// cache_ttl_seconds, or the one catalog_list gave for a run-time catalog,
+// else 15 minutes (5 for a run-time catalog not seen yet).
 func catalogCacheTTL(pluginID, catalogID string) time.Duration {
 	const def = 15 * time.Minute
 	for _, mf := range engine.LuaPlugins.GetMeta() {
@@ -200,6 +201,13 @@ func catalogCacheTTL(pluginID, catalogID string) time.Duration {
 			if c.ID == catalogID && c.CacheTTLSeconds > 0 {
 				return time.Duration(c.CacheTTLSeconds) * time.Second
 			}
+		}
+		// A catalog built at run time (catalog_list): its own TTL (catalog_ttl.go).
+		if ttl, ok := dynamicCatalogTTL(pluginID, catalogID); ok {
+			return ttl
+		}
+		if _, ok := mf.Entrypoints[engine.EPGetCatalogList]; ok {
+			return dynamicCatalogDefault
 		}
 		break
 	}
@@ -224,7 +232,10 @@ func autoHideCatalogTTL(pluginID, catalogID string) time.Duration {
 		}
 		// Dynamic catalog_list: all its catalogs are auto_hide.
 		if _, ok := mf.Entrypoints[engine.EPGetCatalogList]; ok {
-			return 5 * time.Minute
+			if ttl, ok := dynamicCatalogTTL(pluginID, catalogID); ok {
+				return ttl
+			}
+			return dynamicCatalogDefault
 		}
 	}
 	return 0
@@ -713,6 +724,7 @@ func (h *MediaHandler) ListPlugins(ctx context.Context, _ *gen.PluginListRequest
 	for _, mf := range luaMetas {
 		if engine.LuaPlugins.Has(mf.ID) {
 			resolvedCatalogs[mf.ID] = engine.LuaPlugins.ResolveCatalogDefs(mf.ID)
+			rememberCatalogTTLs(mf.ID, resolvedCatalogs[mf.ID])
 		}
 	}
 
