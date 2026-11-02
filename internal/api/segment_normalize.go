@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"strconv"
 	"strings"
+
+	"mycelium/internal/core"
 )
 
 // Segment normalisation: what the proxy does to a fully buffered media
@@ -51,7 +53,9 @@ func mediaTypeAtStart(b []byte) string {
 // normalizeSegment inspects a complete segment body. ct is the upstream
 // Content-Type, encrypted whether the playlist declared an active key (the
 // body is then AES-128 ciphertext, so only its wrapper can be recognised).
-func normalizeSegment(body []byte, ct, rawURL string, encrypted bool) segVerdict {
+// unwraps are the plugin's rules for media packed inside another container
+// (segment_unwrap.go), nil for most sources.
+func normalizeSegment(body []byte, ct, rawURL string, encrypted bool, unwraps []core.SegmentUnwrap) segVerdict {
 	v := segVerdict{body: body, ct: ct}
 	lct := strings.ToLower(strings.TrimSpace(ct))
 
@@ -99,6 +103,14 @@ func normalizeSegment(body []byte, ct, rawURL string, encrypted bool) segVerdict
 			v.trimTSTail()
 			return v
 		}
+	}
+
+	// Media packed inside another container, as the plugin describes it.
+	if m, how := applySegmentUnwraps(body, unwraps); m != nil {
+		v.body, v.ct = m, mediaTypeAtStart(m)
+		v.notes = append(v.notes, "extracted "+how+" ("+strconv.Itoa(len(m))+" bytes)")
+		v.trimTSTail()
+		return v
 	}
 
 	if looksLikeTextPage(body) {

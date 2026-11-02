@@ -3,6 +3,7 @@ package managers
 import (
 	"container/list"
 	"context"
+	"mycelium/internal/core"
 	"sync"
 	"time"
 )
@@ -185,6 +186,8 @@ type PrefetchOptions struct {
 	UseVPN bool
 	// Egress is the name of that egress profile ("" = the single VPN proxy).
 	Egress string
+	// Unwrap: the plugin's segment unwrap rules (manifest segments.unwrap).
+	Unwrap []core.SegmentUnwrap
 	// IsLive only affects logging here.
 	IsLive bool
 	// MaxSegments is the pre-fetch target. 0 disables pre-buffering entirely.

@@ -52,6 +52,11 @@ type LuaManifest struct {
 	// HLS proxy — for sources the player can reach directly (e.g. a LAN media
 	// server with native Range support).
 	DirectStream bool `yaml:"direct_stream"`
+	// Segments: how the source packs its media segments, for the HLS proxy
+	// (see core.SegmentUnwrap). Invalid rules are dropped at load.
+	Segments struct {
+		Unwrap []core.SegmentUnwrap `yaml:"unwrap"`
+	} `yaml:"segments"`
 	// WarmResolve declares that resolve_stream caches its result, so running it
 	// ahead of Play (MediaPipeline.WarmStream) makes the Play itself instant.
 	// It also adds a synthetic "warm_resolve" setting (on by default). Without
@@ -1684,6 +1689,13 @@ func readLuaManifest(dir string) (LuaManifest, error) {
 			return LuaManifest{}, fmt.Errorf("manifest.yaml setting id %q in %s is invalid: must match %s", f.ID, dir, settingIDPattern.String())
 		}
 	}
+	if len(mf.Segments.Unwrap) > 0 {
+		var problems []string
+		mf.Segments.Unwrap, problems = core.ValidSegmentUnwraps(mf.Segments.Unwrap)
+		for _, p := range problems {
+			log.Printf("[lua] plugin %s: %s (regola ignorata)", mf.ID, p)
+		}
+	}
 	if mf.VPNOptional && mf.DirectEgress {
 		mf.Settings.Global = append(mf.Settings.Global, LuaSettingField{
 			ID:    VPNOptInSettingID,
@@ -1833,6 +1845,21 @@ func (m *LuaPluginManager) ShouldSkipProxy(pluginID string) bool {
 	p, ok := m.plugins[pluginID]
 	m.mu.RUnlock()
 	return ok && p.Manifest.DirectStream
+}
+
+// SegmentUnwrap returns pluginID's segment unwrap rules (nil for none or an
+// unknown plugin). The slice is the manifest's: callers must not modify it.
+func (m *LuaPluginManager) SegmentUnwrap(pluginID string) []core.SegmentUnwrap {
+	if m == nil || pluginID == "" {
+		return nil
+	}
+	m.mu.RLock()
+	p, ok := m.plugins[pluginID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return p.Manifest.Segments.Unwrap
 }
 
 func fileMod(path string) time.Time {

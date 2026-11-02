@@ -51,6 +51,14 @@ share_live: false             # default true: Plays of a live stream already
                               # it once for all; false when the site ties a link
                               # to one viewer (a per-session token)
 
+# --- segments packed in another container (optional, see "Packed segments") ---
+segments:
+  unwrap:
+    - carrier: png_pixels       # body | png_pixels | webp_chunk
+      magic: "MAGIC"            # bytes right before the payload
+      length: u32be             # "" | u32be | u32le: length field after magic
+      codec: gzip               # "" | gzip | zlib
+
 # --- offline downloads (optional, off when absent) ---
 download:
   enabled: true                 # offer "download" for this plugin's HLS VOD streams
@@ -431,6 +439,28 @@ progress with `mycelium.context.set_plugin_status` so the dashboard and client
 show *why* a plugin isn't ready yet.
 
 ---
+
+## Packed segments
+
+Some sources serve HLS segments packed inside another container (often an
+image, because their CDN only accepts images) and unpack them in the page's
+JavaScript. `segments.unwrap` tells the proxy how to do the same: a list of
+rules, tried in order on every segment of the plugin's streams that is not
+already MPEG-TS or fMP4.
+
+| field | meaning |
+|-------|---------|
+| `carrier` | `body`: anywhere in the response, right after `magic` (searched). `png_pixels`: the samples of an 8-bit RGB/RGBA PNG, alpha dropped, row by row from the first pixel. `webp_chunk`: the data of the WebP chunk named `chunk` |
+| `chunk` | `webp_chunk` only: the FourCC, e.g. `EXIF` |
+| `magic` | bytes before the payload; required for `body`, must start the carrier otherwise |
+| `length` | `u32be` / `u32le`: a 4-byte length right after `magic`; empty = to the end |
+| `codec` | `gzip` / `zlib`, empty = raw |
+
+What a rule extracts is used only if it is MPEG-TS or fMP4; at most 8 rules,
+invalid ones are dropped at load (logged). Sizes declared by the source are
+bounded before decoding (canvas, row width, payload <= 32 MiB). The rules
+reach the proxy through its own signed URLs, so they apply to playback,
+pre-buffer, read-ahead and downloads alike, and only to this plugin.
 
 ## Network egress
 

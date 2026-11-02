@@ -104,7 +104,7 @@ func TestNormalizeSegment(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			v := normalizeSegment(c.body, c.ct, "https://cdn.example/seg-1.ts", c.encrypted)
+			v := normalizeSegment(c.body, c.ct, "https://cdn.example/seg-1.ts", c.encrypted, nil)
 			if c.reject {
 				if v.reject == "" {
 					t.Fatalf("want reject, got ct=%q notes=%v", v.ct, v.notes)

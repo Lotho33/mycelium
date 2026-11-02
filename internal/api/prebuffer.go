@@ -309,7 +309,7 @@ func fetchSegment(ctx context.Context, client *http.Client, segURL string, opts 
 		return nil, err
 	}
 	// Same normalisation as ProxySegment, so a warm hit serves the same bytes.
-	v := normalizeSegment(body, resp.Header.Get("Content-Type"), segURL, encrypted)
+	v := normalizeSegment(body, resp.Header.Get("Content-Type"), segURL, encrypted, opts.Unwrap)
 	if v.reject != "" {
 		return nil, fmt.Errorf("%s (content-type %q)", v.reject, resp.Header.Get("Content-Type"))
 	}

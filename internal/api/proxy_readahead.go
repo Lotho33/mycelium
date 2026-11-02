@@ -43,7 +43,9 @@ type raList struct {
 	xhdrRaw    string
 	useVPN     bool
 	egr        string
-	inflight   atomic.Int32
+	// unwraps: the plugin's segment unwrap rules (segment_unwrap.go).
+	unwraps  []core.SegmentUnwrap
+	inflight atomic.Int32
 	// ttl of the fetched segments in the warm cache (0 = its default).
 	ttl time.Duration
 }
@@ -212,7 +214,7 @@ func readAheadFetch(l *raList, s raSeg) {
 	if err != nil || len(body) > segmentBufferLimit {
 		return
 	}
-	v := normalizeSegment(body, resp.Header.Get("Content-Type"), s.url, s.enc)
+	v := normalizeSegment(body, resp.Header.Get("Content-Type"), s.url, s.enc, l.unwraps)
 	if v.reject != "" {
 		return
 	}

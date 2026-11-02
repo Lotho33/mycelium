@@ -77,6 +77,7 @@ func prebufferHLS(
 		Headers:     headers,
 		UseVPN:      engine.LuaPlugins.ShouldUseVPNForVideo(pluginID),
 		Egress:      engine.LuaPlugins.PluginEgress(pluginID),
+		Unwrap:      engine.LuaPlugins.SegmentUnwrap(pluginID),
 		IsLive:      isLive,
 		MaxSegments: target,
 		MaxBytes:    cfg.maxBytes,

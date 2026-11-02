@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"mycelium/internal/core"
+	"mycelium/internal/engine"
 	"mycelium/internal/managers"
 )
 
@@ -170,6 +171,13 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	cookiesRaw := q.Get("cookies")
 	xhdrRaw := q.Get("xhdr")
 	sidRaw := q.Get("sid")
+	// Plugin whose segment unwrap rules apply (segment_unwrap.go): from the
+	// sid, or carried as sp by the URLs this proxy rewrote.
+	unwrapPlugin := q.Get("sp")
+	if pid, _, ok := decodeSid(sidRaw); ok {
+		unwrapPlugin = pid
+	}
+	unwraps := engine.LuaPlugins.SegmentUnwrap(unwrapPlugin)
 	uidRaw := q.Get("uid") // playback session token
 	useVPN := q.Get("vpn") == "1"
 	egr := q.Get("egr") // egress profile name (see videoEgressSuffix)
@@ -299,6 +307,11 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		xhdrSuffix = "&xhdr=" + url.QueryEscape(xhdrRaw)
 	}
 	vpnSuffix := childVPNSuffix(q)
+	if len(unwraps) > 0 {
+		// Rides on every rewritten URL like the egress pin, so segments,
+		// variants and renditions all know the rules.
+		vpnSuffix += "&sp=" + url.QueryEscape(unwrapPlugin)
+	}
 
 	// Children of a master carry sid + their index so a failing variant reload
 	// can be recovered in place (proxy_playlist_recover.go).
@@ -411,13 +424,13 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	if len(raSegs) > 0 && bytes.Contains(content, []byte("#EXT-X-ENDLIST")) && !bytes.Contains(content, []byte("#EXT-X-BYTERANGE")) {
 		readAheadRegister(&raList{
 			segs: raSegs, origin: realOrigin, cookiesRaw: cookiesRaw, xhdrRaw: xhdrRaw,
-			useVPN: useVPN, egr: egr,
+			useVPN: useVPN, egr: egr, unwraps: unwraps,
 		})
 	} else if liveFetched && len(raSegs) > 0 && !bytes.Contains(content, []byte("#EXT-X-BYTERANGE")) {
 		// Live: pull the newest segments into RAM for every player (proxy_live.go).
 		liveBufferTail(&raList{
 			segs: raSegs, origin: realOrigin, cookiesRaw: cookiesRaw, xhdrRaw: xhdrRaw,
-			useVPN: useVPN, egr: egr, ttl: liveSegTTL,
+			useVPN: useVPN, egr: egr, ttl: liveSegTTL, unwraps: unwraps,
 		})
 	}
 
@@ -489,6 +502,7 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	useVPN := q.Get("vpn") == "1"
 	egr := q.Get("egr")
 	encrypted := q.Get("enc") == "1"
+	unwraps := engine.LuaPlugins.SegmentUnwrap(q.Get("sp"))
 	// A byte range from the player (EXT-X-BYTERANGE, a seek in a progressive
 	// file) is forwarded upstream and relayed as it comes: no warm cache, no
 	// shared fetch, no normalisation (all three work on whole segments).
@@ -812,7 +826,7 @@ func ProxySegment(w http.ResponseWriter, r *http.Request) {
 	// Buffered segment (its head needed more than a pass-through): normalise
 	// it as a whole — see segment_normalize.go.
 	if fullBody != nil {
-		v := normalizeSegment(fullBody, resp.Header.Get("Content-Type"), realURL, encrypted)
+		v := normalizeSegment(fullBody, resp.Header.Get("Content-Type"), realURL, encrypted, unwraps)
 		if v.reject != "" {
 			preview := ""
 			if os.Getenv("MYCELIUM_DEBUG") == "1" {
