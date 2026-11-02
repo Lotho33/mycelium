@@ -84,7 +84,7 @@ func serveWebApp(mux *http.ServeMux, prefix, dir string) {
 		}
 		// Serve with the original request: http.ServeFile redirects paths ending in
 		// "index.html", which would loop on a rewritten path.
-		http.ServeFile(w, r, fullPath)
+		serveWebAppFile(w, r, fullPath)
 	})
 }
 
@@ -97,6 +97,8 @@ func serveIndexHTML(w http.ResponseWriter, r *http.Request, indexPath, prefix st
 	}
 	data = baseHrefRe.ReplaceAll(data, []byte(`<base href="`+prefix+`/"`))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Always refetched: it names the scripts of the installed build.
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
 }
 
