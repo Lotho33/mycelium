@@ -161,12 +161,25 @@ func main() {
 		log.Fatalf("[server] DB init failed: %v", err)
 	}
 
+	// An explicit REDIS_ADDR means the deployment ships a Redis (the compose
+	// files do): give it time to come up instead of giving up on the first
+	// ping. Without Redis the process runs degraded for its whole life —
+	// task outcomes and plugin status are never recorded, so every plugin
+	// with scheduled tasks shows "syncing" forever in Pileus.
 	redisAddr := os.Getenv("REDIS_ADDR")
+	redisExpected := redisAddr != ""
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	if err := managers.InitRedis(redisAddr); err != nil {
+	redisWait := 5 * time.Second
+	if redisExpected {
+		redisWait = 90 * time.Second
+	}
+	if err := managers.InitRedisWait(redisAddr, redisWait); err != nil {
 		log.Printf("[server] Redis unavailable (%s): %v — running without cache", redisAddr, err)
+		if redisExpected && os.Getenv("MYCELIUM_DOCKER") == "1" {
+			core.SafeGo("redis/late-restart", func() { restartWhenRedisAppears(redisAddr) })
+		}
 	}
 
 	core.SetupHTTPClient()
@@ -379,4 +392,22 @@ func loadOrCreateJWTSecret() []byte {
 		log.Fatalf("[server] jwt secret save: %v", err)
 	}
 	return b
+}
+
+// restartWhenRedisAppears covers a Redis that comes up after InitRedisWait
+// gave up: managers.Redis is set once at boot and read without locks, so it
+// can't be swapped in later. Once Redis answers, the process exits cleanly
+// (SIGTERM, same as Network → "Riavvia" in the dashboard) and the container
+// restart policy starts it again, this time with Redis.
+func restartWhenRedisAppears(addr string) {
+	for {
+		time.Sleep(15 * time.Second)
+		if managers.RedisReachable(addr) {
+			log.Printf("[server] Redis (%s) ora raggiungibile: riavvio per collegarlo", addr)
+			if proc, err := os.FindProcess(os.Getpid()); err == nil {
+				_ = proc.Signal(syscall.SIGTERM)
+			}
+			return
+		}
+	}
 }

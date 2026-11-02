@@ -25,6 +25,50 @@ var Redis *RedisRepo
 // InitRedis connects to Redis at addr (e.g. "redis:6379" or "localhost:6379").
 // Non-fatal: if connection fails, Redis remains nil and callers must handle that.
 func InitRedis(addr string) error {
+	client, err := dialRedis(addr)
+	if err != nil {
+		return err
+	}
+	Redis = &RedisRepo{client: client}
+	log.Printf("[redis] connected to %s", addr)
+	return nil
+}
+
+// InitRedisWait is InitRedis retried until wait has elapsed. After a power
+// cut the container engine starts every container at once (compose's
+// depends_on only applies to `compose up`), so Redis may still be starting or
+// loading its AOF ("LOADING") when mycelium first pings it: a single failed
+// ping used to leave the whole process without Redis until a manual restart.
+func InitRedisWait(addr string, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for attempt := 1; ; attempt++ {
+		err := InitRedis(addr)
+		if err == nil {
+			return nil
+		}
+		if time.Now().Add(2 * time.Second).After(deadline) {
+			return err
+		}
+		if attempt == 1 {
+			log.Printf("[redis] %s non ancora pronto (%v), riprovo per al massimo %s", addr, err, wait)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// RedisReachable reports whether Redis at addr answers a PING, using a
+// throwaway client (managers.Redis is left untouched).
+func RedisReachable(addr string) bool {
+	client, err := dialRedis(addr)
+	if err != nil {
+		return false
+	}
+	client.Close()
+	return true
+}
+
+// dialRedis builds a client for addr and checks it with a PING.
+func dialRedis(addr string) (*redis.Client, error) {
 	if addr == "" {
 		addr = "localhost:6379"
 	}
@@ -52,11 +96,9 @@ func InitRedis(addr string) error {
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
 		client.Close()
-		return err
+		return nil, err
 	}
-	Redis = &RedisRepo{client: client}
-	log.Printf("[redis] connected to %s", addr)
-	return nil
+	return client, nil
 }
 
 // Close shuts down the Redis client.
