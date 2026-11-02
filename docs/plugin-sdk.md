@@ -398,7 +398,15 @@ plugin, 256 MiB (estimated) and 4M records per index.
 local info, err = mycelium.image.analyze_logo(url)
 -- info = { is_dark = bool, norm_w = int, norm_h = int }
 local infos = mycelium.image.analyze_logos(urls)   -- up to 32, 3 at a time; infos[i] = info or { error = "…" }
+local cover = mycelium.image.versus_url(home_badge_url, away_badge_url)  -- or nil
 ```
+
+`versus_url` returns a 16:9 cover the server draws from two badges (home on
+the left, each half tinted with its badge's colour), for events without
+artwork of their own: use it as `poster_url`. The URL is relative to the
+server (`mycelium:/img/versus?…`); every client receives it absolute, with
+the address it reaches the server at. Any string a plugin returns that
+starts with `mycelium:/` gets the same treatment.
 
 ### Misc
 

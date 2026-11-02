@@ -61,8 +61,8 @@ func Start(addr string, jwtSecret []byte, tlsCert *tls.Certificate) *grpc.Server
 
 	tlsEnabled := tlsCert != nil
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(recoverUnary, authInterceptor(authHandler)),
-		grpc.ChainStreamInterceptor(recoverStream, authStreamInterceptor(authHandler)),
+		grpc.ChainUnaryInterceptor(recoverUnary, authInterceptor(authHandler), serverURLUnary),
+		grpc.ChainStreamInterceptor(recoverStream, authStreamInterceptor(authHandler), serverURLStream),
 		// Requests are small (ids, filters, preferences): 1 MiB is ample, and
 		// keeps a device from making the server hold or store 4 MiB blobs.
 		grpc.MaxRecvMsgSize(1 << 20),

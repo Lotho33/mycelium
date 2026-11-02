@@ -27,3 +27,17 @@ func TestValidSegmentUnwraps(t *testing.T) {
 		t.Fatalf("kept %d rules, cap is %d", len(valid), MaxSegmentUnwrapRules)
 	}
 }
+
+func TestServerURLs(t *testing.T) {
+	u := VersusCoverURL("https://cdn/a.png", "https://cdn/b.png")
+	if !IsServerURL(u) {
+		t.Fatalf("%q is not server-relative", u)
+	}
+	got := AbsoluteServerURL(u, "http://10.0.0.5:8000/")
+	if got != "http://10.0.0.5:8000/img/versus?h=aHR0cHM6Ly9jZG4vYS5wbmc&a=aHR0cHM6Ly9jZG4vYi5wbmc" {
+		t.Fatalf("absolute = %q", got)
+	}
+	if AbsoluteServerURL("https://cdn/x.png", "http://h") != "https://cdn/x.png" {
+		t.Fatal("non-server URL changed")
+	}
+}

@@ -31,6 +31,8 @@ func InternalRoutes(mux *http.ServeMux) {
 
 	// Image proxy: no auth, SSRF-guarded, per-IP rate limit.
 	mux.HandleFunc("GET /img", rateLimitMiddleware(imgLimiter, ImageProxy))
+	// Versus cover built from two badges (image_versus.go), same guards.
+	mux.HandleFunc("GET /img/versus", rateLimitMiddleware(imgLimiter, ImageVersus))
 }
 
 // SetupRoutes registers the setup and public endpoints.

@@ -870,6 +870,24 @@ func buildImageModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable
 		return []byte(r.body), nil
 	}
 
+	// mycelium.image.versus_url(home_badge, away_badge) → url | nil
+	//
+	// A 16:9 cover built by the server from two badge images (GET
+	// /img/versus), for events without artwork. The URL is server-relative
+	// (core.ServerURLPrefix): each client receives it absolute. nil unless
+	// both are http(s) URLs.
+	t.RawSetString("versus_url", L.NewFunction(func(L *lua.LState) int {
+		h, a := L.CheckString(1), L.CheckString(2)
+		for _, u := range []string{h, a} {
+			if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+				L.Push(lua.LNil)
+				return 1
+			}
+		}
+		L.Push(lua.LString(core.VersusCoverURL(h, a)))
+		return 1
+	}))
+
 	// mycelium.image.analyze_logo(url) → {is_dark=bool, norm_w=int, norm_h=int}, err
 	//
 	// Samples the mean luminance of the non-transparent pixels and computes a

@@ -103,7 +103,7 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "SAMEORIGIN")
 		h.Set("Referrer-Policy", "same-origin")
 		p := r.URL.Path
-		if p == "/img" || p == "/plugin-icon" || strings.HasPrefix(p, "/plugin-icon/") || strings.HasPrefix(p, "/proxy/") {
+		if p == "/img" || p == "/img/versus" || p == "/plugin-icon" || strings.HasPrefix(p, "/plugin-icon/") || strings.HasPrefix(p, "/proxy/") {
 			h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 		}
 		next.ServeHTTP(w, r)
