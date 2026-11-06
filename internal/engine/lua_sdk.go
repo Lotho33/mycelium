@@ -46,7 +46,7 @@ type ProgressFunc func(status, message string)
 type browserAPI interface {
 	NavigateVia(ctx context.Context, req *gen.NavigateRequest, proxyURL string) (*gen.NavigateResponse, error)
 	EvalVia(ctx context.Context, req *gen.EvalRequest, proxyURL string) (*gen.EvalResponse, error)
-	WaitInterceptVia(ctx context.Context, req *gen.WaitInterceptRequest, proxyURL string) (*gen.WaitInterceptResponse, error)
+	WaitInterceptVia(ctx context.Context, req *gen.WaitInterceptRequest, proxyURL, referer string) (*gen.WaitInterceptResponse, error)
 }
 
 // browserCallsInFlight counts mycelium.browser.* calls in progress across
@@ -444,12 +444,20 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		return scope.proxyURL, false
 	}
 
-	// mycelium.browser.sniff(trigger_url, url_pattern, timeout_seconds) → intercepted_url, headers, err
+	// mycelium.browser.sniff(trigger_url, url_pattern, timeout_seconds [, opts]) → intercepted_url, headers, err
 	// headers holds the intercepted request's headers ({[name]=value}).
+	// opts (optional table): referer = Referer of the navigation to
+	// trigger_url — some embeds answer a plain 403 without one.
 	t.RawSetString("sniff", L.NewFunction(func(L *lua.LState) int {
 		triggerURL := L.CheckString(1)
 		pattern := L.CheckString(2)
 		timeoutSec := L.OptInt(3, 30)
+		referer := ""
+		if o, ok := L.Get(4).(*lua.LTable); ok {
+			if s, ok := o.RawGetString("referer").(lua.LString); ok {
+				referer = string(s)
+			}
+		}
 		bm := browser()
 		if bm == nil {
 			L.Push(lua.LNil)
@@ -478,7 +486,7 @@ func buildBrowserModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 			TriggerUrl: triggerURL,
 			UrlPattern: pattern,
 			TimeoutMs:  int64(timeoutSec) * 1000,
-		}, proxyURL)
+		}, proxyURL, referer)
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LNil)

@@ -213,8 +213,9 @@ func (c *BrowserServiceClient) EvalVia(ctx context.Context, req *gen.EvalRequest
 	return &gen.EvalResponse{Result: out.Result}, nil
 }
 
-// WaitInterceptVia sniffs network traffic, routing through proxyURL when non-empty.
-func (c *BrowserServiceClient) WaitInterceptVia(ctx context.Context, req *gen.WaitInterceptRequest, proxyURL string) (*gen.WaitInterceptResponse, error) {
+// WaitInterceptVia sniffs network traffic, routing through proxyURL when
+// non-empty; referer (optional) is sent as the Referer of the navigation.
+func (c *BrowserServiceClient) WaitInterceptVia(ctx context.Context, req *gen.WaitInterceptRequest, proxyURL, referer string) (*gen.WaitInterceptResponse, error) {
 	var out struct {
 		InterceptedURL string            `json:"intercepted_url"`
 		Headers        map[string]string `json:"headers"`
@@ -222,6 +223,10 @@ func (c *BrowserServiceClient) WaitInterceptVia(ctx context.Context, req *gen.Wa
 	body := map[string]any{
 		"trigger_url": req.TriggerUrl, "url_pattern": req.UrlPattern,
 		"timeout_ms": req.TimeoutMs, "proxy_url": proxyURL,
+	}
+	if referer != "" {
+		// An older cobweb ignores the unknown field (serde default).
+		body["referer"] = referer
 	}
 	if err := c.post(ctx, "/v1/sniff", body, &out); err != nil {
 		return nil, err

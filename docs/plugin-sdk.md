@@ -251,12 +251,16 @@ Returns `"browser service not available"` when none is configured.
 ```lua
 local html, final_url, err = mycelium.browser.navigate(url [, timeout_seconds])
 local result, err          = mycelium.browser.eval(url, js_code [, timeout_seconds])
-local hit_url, headers, err = mycelium.browser.sniff(trigger_url, url_pattern [, timeout_seconds])
+local hit_url, headers, err = mycelium.browser.sniff(trigger_url, url_pattern [, timeout_seconds [, { referer = "https://…" }]])
 ```
 
 `sniff` opens `trigger_url` and returns the first network request whose URL
 matches `url_pattern` (glob), plus that request's headers — the usual way to
-grab a stream URL a page builds in JavaScript.
+grab a stream URL a page builds in JavaScript. The optional `referer` is sent
+as the Referer of that navigation: some embed players answer a plain 403
+when opened without one. Prefer plain HTTP when the page already carries
+what you need (e.g. a player config in the HTML): the browser is the slow,
+fragile path, so keep `sniff` as the fallback.
 
 ### `mycelium.dom`
 

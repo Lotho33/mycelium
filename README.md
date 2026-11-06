@@ -256,7 +256,7 @@ and point `MYCELIUM_BROWSER_URL` at. The service implements a small JSON API:
 |----------|---------|
 | `POST /v1/navigate` `{url, wait_for, timeout_ms, proxy_url}` → `{html, final_url}` | `mycelium.browser.navigate` |
 | `POST /v1/eval` `{url, js, timeout_ms, proxy_url}` → `{result}` | `mycelium.browser.eval` |
-| `POST /v1/sniff` `{trigger_url, url_pattern, timeout_ms, proxy_url}` → `{intercepted_url, headers}` | `mycelium.browser.sniff` |
+| `POST /v1/sniff` `{trigger_url, url_pattern, timeout_ms, proxy_url, referer?}` → `{intercepted_url, headers}` | `mycelium.browser.sniff` |
 | `POST /v1/fetch` `{url, headers, timeout_ms, proxy_url}` → upstream response, mirrored | HLS proxy upstream relay |
 | `GET /health` → `{ready, engine}` | dashboard status |
 
