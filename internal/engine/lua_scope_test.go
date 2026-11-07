@@ -157,6 +157,19 @@ func TestSDKScope_RequireProxyFailsClosed(t *testing.T) {
 	}
 }
 
+// pluginCallGoroutines counts the goroutines started by callWithTimeout,
+// i.e. Lua calls still running (abandoned or not).
+func pluginCallGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "engine.callWithTimeout.func")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
 // mycelium.sleep(ms) is cut short when the call's context expires.
 func TestSDKSleep_InterruptedByEntrypointTimeout(t *testing.T) {
 	dir := writeTestPlugin(t,
@@ -173,7 +186,10 @@ func TestSDKSleep_InterruptedByEntrypointTimeout(t *testing.T) {
 		t.Fatalf("loadPlugin: %v", err)
 	}
 
-	baseline := runtime.NumGoroutine()
+	// Count only the goroutines running a plugin call: the total goroutine
+	// count also moves with unrelated runtime/library goroutines and made
+	// this test flaky on a busy CI runner.
+	baseline := pluginCallGoroutines()
 	start := time.Now()
 	_, err := m.CallEntrypointJSON("t.sleep", "probe", nil, "")
 	if err == nil {
@@ -188,9 +204,9 @@ func TestSDKSleep_InterruptedByEntrypointTimeout(t *testing.T) {
 	// the same ctx by callWithTimeout) aborts at the next instruction — so
 	// "after-sleep" is never logged, and the goroutine count drops back.
 	deadline := time.Now().Add(4 * time.Second)
-	for runtime.NumGoroutine() > baseline {
+	for pluginCallGoroutines() > baseline {
 		if time.Now().After(deadline) {
-			t.Fatalf("abandoned plugin goroutine still alive 4s after the timeout (goroutines %d > baseline %d) — mycelium.sleep(10000) is not respecting the entrypoint ctx", runtime.NumGoroutine(), baseline)
+			t.Fatalf("abandoned plugin goroutine still alive 4s after the timeout (plugin-call goroutines %d > baseline %d) — mycelium.sleep(10000) is not respecting the entrypoint ctx", pluginCallGoroutines(), baseline)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
