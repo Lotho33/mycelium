@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"testing"
 )
 
 // BasePath is the directory holding the server binary; relative paths
@@ -11,7 +12,11 @@ import (
 var BasePath string
 
 func init() {
-	if override := os.Getenv("MYCELIUM_BASE"); override != "" {
+	// Under `go test` MYCELIUM_BASE is ignored: the devcontainer sets it to
+	// the workspace, and tests that write settings, reset the server or wipe
+	// data would otherwise do it to the developer's real data/. Tests get the
+	// test binary's own temporary directory, as they do in CI.
+	if override := os.Getenv("MYCELIUM_BASE"); override != "" && !testing.Testing() {
 		// Absolute, because ffmpeg runs with the job's work dir as cwd.
 		if abs, err := filepath.Abs(override); err == nil {
 			override = abs

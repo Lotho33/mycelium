@@ -223,6 +223,8 @@ const (
 	MediaPipeline_AckDownloadFetched_FullMethodName  = "/mycelium.MediaPipeline/AckDownloadFetched"
 	MediaPipeline_ReleasePlayback_FullMethodName     = "/mycelium.MediaPipeline/ReleasePlayback"
 	MediaPipeline_WarmStream_FullMethodName          = "/mycelium.MediaPipeline/WarmStream"
+	MediaPipeline_GetMyList_FullMethodName           = "/mycelium.MediaPipeline/GetMyList"
+	MediaPipeline_SetMyListItem_FullMethodName       = "/mycelium.MediaPipeline/SetMyListItem"
 )
 
 // MediaPipelineClient is the client API for MediaPipeline service.
@@ -249,6 +251,8 @@ type MediaPipelineClient interface {
 	AckDownloadFetched(ctx context.Context, in *DownloadIdRequest, opts ...grpc.CallOption) (*DownloadActionResponse, error)
 	ReleasePlayback(ctx context.Context, in *ReleasePlaybackRequest, opts ...grpc.CallOption) (*ReleasePlaybackResponse, error)
 	WarmStream(ctx context.Context, in *WarmStreamRequest, opts ...grpc.CallOption) (*WarmStreamResponse, error)
+	GetMyList(ctx context.Context, in *MyListRequest, opts ...grpc.CallOption) (*MyListResponse, error)
+	SetMyListItem(ctx context.Context, in *SetMyListItemRequest, opts ...grpc.CallOption) (*SetMyListItemResponse, error)
 }
 
 type mediaPipelineClient struct {
@@ -468,6 +472,26 @@ func (c *mediaPipelineClient) WarmStream(ctx context.Context, in *WarmStreamRequ
 	return out, nil
 }
 
+func (c *mediaPipelineClient) GetMyList(ctx context.Context, in *MyListRequest, opts ...grpc.CallOption) (*MyListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MyListResponse)
+	err := c.cc.Invoke(ctx, MediaPipeline_GetMyList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mediaPipelineClient) SetMyListItem(ctx context.Context, in *SetMyListItemRequest, opts ...grpc.CallOption) (*SetMyListItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMyListItemResponse)
+	err := c.cc.Invoke(ctx, MediaPipeline_SetMyListItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MediaPipelineServer is the server API for MediaPipeline service.
 // All implementations must embed UnimplementedMediaPipelineServer
 // for forward compatibility.
@@ -492,6 +516,8 @@ type MediaPipelineServer interface {
 	AckDownloadFetched(context.Context, *DownloadIdRequest) (*DownloadActionResponse, error)
 	ReleasePlayback(context.Context, *ReleasePlaybackRequest) (*ReleasePlaybackResponse, error)
 	WarmStream(context.Context, *WarmStreamRequest) (*WarmStreamResponse, error)
+	GetMyList(context.Context, *MyListRequest) (*MyListResponse, error)
+	SetMyListItem(context.Context, *SetMyListItemRequest) (*SetMyListItemResponse, error)
 	mustEmbedUnimplementedMediaPipelineServer()
 }
 
@@ -561,6 +587,12 @@ func (UnimplementedMediaPipelineServer) ReleasePlayback(context.Context, *Releas
 }
 func (UnimplementedMediaPipelineServer) WarmStream(context.Context, *WarmStreamRequest) (*WarmStreamResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WarmStream not implemented")
+}
+func (UnimplementedMediaPipelineServer) GetMyList(context.Context, *MyListRequest) (*MyListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMyList not implemented")
+}
+func (UnimplementedMediaPipelineServer) SetMyListItem(context.Context, *SetMyListItemRequest) (*SetMyListItemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetMyListItem not implemented")
 }
 func (UnimplementedMediaPipelineServer) mustEmbedUnimplementedMediaPipelineServer() {}
 func (UnimplementedMediaPipelineServer) testEmbeddedByValue()                       {}
@@ -936,6 +968,42 @@ func _MediaPipeline_WarmStream_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaPipeline_GetMyList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MyListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPipelineServer).GetMyList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPipeline_GetMyList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPipelineServer).GetMyList(ctx, req.(*MyListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MediaPipeline_SetMyListItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMyListItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPipelineServer).SetMyListItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPipeline_SetMyListItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPipelineServer).SetMyListItem(ctx, req.(*SetMyListItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MediaPipeline_ServiceDesc is the grpc.ServiceDesc for MediaPipeline service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1018,6 +1086,14 @@ var MediaPipeline_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WarmStream",
 			Handler:    _MediaPipeline_WarmStream_Handler,
+		},
+		{
+			MethodName: "GetMyList",
+			Handler:    _MediaPipeline_GetMyList_Handler,
+		},
+		{
+			MethodName: "SetMyListItem",
+			Handler:    _MediaPipeline_SetMyListItem_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

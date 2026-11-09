@@ -10,6 +10,7 @@ import (
 
 	"mycelium/internal/core"
 	"mycelium/internal/downloads"
+	"mycelium/internal/logometa"
 	"mycelium/internal/managers"
 	"mycelium/internal/pileus"
 )
@@ -47,6 +48,7 @@ func wipeProfilesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	_ = os.RemoveAll(core.AppPath("data", "avatars"))
 	// Profile PIN trusts go with the profiles (one-off sessions live in memory).
 	if _, err := managers.DB.Exec(`DELETE FROM pileus_profile_trust`); err != nil {
 		log.Printf("[admin] wipe profiles: profile trust: %v", err)
@@ -60,6 +62,10 @@ func wipeProfilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	nProf, _ := profRes.RowsAffected()
 	nHist, _ := histRes.RowsAffected()
+	// "La mia lista" is per profile too.
+	if _, err := managers.DB.Exec(`DELETE FROM my_list`); err != nil {
+		log.Printf("[admin] wipe profiles: my_list: %v", err)
+	}
 
 	if _, err := managers.DB.DeleteAllPluginSecrets(); err != nil {
 		log.Printf("[admin] wipe profiles: plugin secrets: %v", err)
@@ -95,6 +101,7 @@ func wipePluginDataHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	imgN := clearDirContents(core.AppPath("data", "imgcache"))
+	logometa.Forget()
 	fileN := clearPluginCacheFiles()
 	managers.Segments.Reset() // warm segments come from plugin streams too
 

@@ -206,6 +206,30 @@ Prepared on the server (`internal/downloads`), then fetched by the device.
   whole file. With the server option "delete after the device fetched it"
   the server copy goes (`fetched = true` otherwise).
 
+## Logo readability (`logo_meta`)
+
+`CatalogItem`, `MovieDetails`, `SeriesDetails` and `MyListItem` carry
+`logo_meta` next to `logo_url`, filled by the core (never by plugins). The
+first response with a new logo has it unset (the core measures it in the
+background, once per URL, cached 30 days); later ones have it. `logo_url`
+itself is passed through unchanged.
+
+- `halo`: `"light"` when the logo needs a light halo on a **dark**
+  background (mostly dark logo, or a big share of it is). Empty otherwise,
+  including logos with a background of their own (`coverage` ≈ 1).
+- To draw on another background, decide from the numbers: WCAG relative
+  luminances `lum_low`/`lum_mid`/`lum_high` (10th/50th/90th percentile of the
+  visible pixels), `dark_share` (< 0.10) and `light_share` (> 0.60). E.g.
+  on a light background, a dark halo when `lum_mid` > 0.6 or
+  `light_share` ≥ 0.35. A low `coverage` means thin strokes: a stronger halo.
+- `width`/`height`: the measured image's size, for the aspect ratio.
+- `color`: dominant colour, 0xRRGGBB.
+- Unset `logo_meta`: fall back to the legacy `url|w|h|dark` suffix some
+  plugins still put in `logo_url` (`logoDark`, `logoRenderSize`), else no
+  halo.
+- TMDB logos are measured on their 300 px PNG, SVG ones included; other
+  SVG logos are not measured.
+
 ## Plugin result conventions the server relies on
 
 - `get_streams`: an explicit list — even empty — is returned as-is (empty =
@@ -240,7 +264,7 @@ All optional, all with sane defaults. Settable via the admin settings store
 
 Warm resolve: `warm_resolve_enabled` (default on) and `warm_resolve_per_hour`
 (per-plugin budget, default 20; 0 = none), both in the dashboard
-(Impostazioni → Estrazione anticipata), with the counters.
+(Sistema → Estrazione anticipata), with the counters.
 
 Cancellation: the pre-buffer inherits the RPC's `context.Context`. If the user
 backs out of the player mid-resolve, it stops promptly and the RPC returns the

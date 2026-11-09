@@ -15,10 +15,19 @@ import (
 
 const dockerSecretsDir = "/run/secrets"
 
-var (
-	configPath = core.AppPath("data", "config.json")
-	envFile    = core.AppPath(".env")
-)
+// configPath overrides the config file location (tests); "" derives it from
+// core.BasePath at every use. Never computed once at package init: a test
+// that moves core.BasePath must not keep writing to the real data/.
+var configPath string
+
+func configFile() string {
+	if configPath != "" {
+		return configPath
+	}
+	return core.AppPath("data", "config.json")
+}
+
+func envFile() string { return core.AppPath(".env") }
 
 type SettingsManager struct {
 	data map[string]any
@@ -48,7 +57,7 @@ func (s *SettingsManager) Load() {
 	}
 
 	// 3. .env file
-	if envData, err := os.ReadFile(envFile); err == nil {
+	if envData, err := os.ReadFile(envFile()); err == nil {
 		for line := range strings.SplitSeq(string(envData), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
@@ -89,12 +98,12 @@ func (s *SettingsManager) Load() {
 // an empty object and is reloaded. Env vars and Docker secrets still apply;
 // master_admin_hash is gone, so the next request goes to /setup.
 func (s *SettingsManager) ResetAll() error {
-	os.MkdirAll(filepath.Dir(configPath), 0755)
-	tmpPath := configPath + ".tmp"
+	os.MkdirAll(filepath.Dir(configFile()), 0755)
+	tmpPath := configFile() + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte("{}"), 0600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, configPath); err != nil {
+	if err := os.Rename(tmpPath, configFile()); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
@@ -126,9 +135,10 @@ var (
 	// allowedExactKeys: keys writable only by exact name, where a prefix would
 	// also match sensitive neighbours.
 	allowedExactKeys = map[string]bool{
-		"pileus_web_repo":       true, // "owner/repo" of the Pileus web build
-		"warm_resolve_enabled":  true, // WarmStream global switch (pileus/warm_stream.go)
-		"warm_resolve_per_hour": true, // WarmStream per-plugin hourly budget
+		"pileus_web_repo":        true, // "owner/repo" of the Pileus web build
+		"pileus_web_auto_update": true, // keep the web app on the latest release (api/pileus_web.go)
+		"warm_resolve_enabled":   true, // WarmStream global switch (pileus/warm_stream.go)
+		"warm_resolve_per_hour":  true, // WarmStream per-plugin hourly budget
 	}
 )
 
@@ -170,19 +180,19 @@ func (s *SettingsManager) SaveInternal(newData map[string]any) error {
 	}
 	maps.Copy(fileData, newData)
 
-	os.MkdirAll(filepath.Dir(configPath), 0755)
+	os.MkdirAll(filepath.Dir(configFile()), 0755)
 
 	data, err := json.MarshalIndent(fileData, "", "    ")
 	if err != nil {
 		return err
 	}
 
-	tmpPath := configPath + ".tmp"
+	tmpPath := configFile() + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		log.Printf("Errore scrittura config tmp: %v", err)
 		return err
 	}
-	if err := os.Rename(tmpPath, configPath); err != nil {
+	if err := os.Rename(tmpPath, configFile()); err != nil {
 		log.Printf("Errore rename config: %v", err)
 		os.Remove(tmpPath)
 		return err
@@ -197,15 +207,15 @@ func (s *SettingsManager) SaveInternal(newData map[string]any) error {
 // readConfigFile decodes config.json into into. A missing file is not an
 // error (found=false).
 func readConfigFile(into map[string]any) (found bool, err error) {
-	raw, err := os.ReadFile(configPath)
+	raw, err := os.ReadFile(configFile())
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	if err != nil {
-		return true, fmt.Errorf("lettura %s: %w", configPath, err)
+		return true, fmt.Errorf("lettura %s: %w", configFile(), err)
 	}
 	if err := json.Unmarshal(raw, &into); err != nil {
-		return true, fmt.Errorf("%s non è JSON valido (correggilo o ripristina un backup): %w", configPath, err)
+		return true, fmt.Errorf("%s non è JSON valido (correggilo o ripristina un backup): %w", configFile(), err)
 	}
 	return true, nil
 }

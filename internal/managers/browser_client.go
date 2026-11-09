@@ -166,7 +166,8 @@ func (c *BrowserServiceClient) post(ctx context.Context, path string, body, out 
 		return fmt.Errorf("browser service %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	// Generous cap: a trusted local sidecar, but never an unbounded read.
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if resp.StatusCode != http.StatusOK {
 		ae := &BrowserAPIError{Status: resp.StatusCode, Msg: strings.TrimSpace(string(respBody))}
 		var j struct{ Error, Kind, Domain string }

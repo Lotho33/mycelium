@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"mycelium/internal/core"
@@ -36,6 +37,7 @@ const maxPileusWebAssetBytes = 100 << 20
 // RegisterPileusWebRoutes wires the Pileus web-app updater endpoint onto mux.
 func RegisterPileusWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/pileus-web/update", adminAuthMiddleware(updatePileusWebApp))
+	startPileusWebAutoUpdate()
 }
 
 // updatePileusWebApp installs the latest web build of the configured repo.
@@ -49,50 +51,59 @@ func updatePileusWebApp(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
+	status, resp := runPileusWebUpdate(body.Force)
+	writeJSON(w, status, resp)
+}
 
+// pileusWebInstalledTagKey remembers the release tag last installed, so the
+// automatic check updates only when a new release is out.
+const pileusWebInstalledTagKey = "pileus_web_installed_tag"
+
+// runPileusWebUpdate installs the latest web build; it answers what the
+// endpoint returns (status, body). Shared by the dashboard button and the
+// automatic updates.
+func runPileusWebUpdate(force bool) (int, map[string]any) {
 	repoSlug := strings.TrimSpace(managers.Settings.GetString("pileus_web_repo", defaultPileusWebRepo))
 	if repoSlug == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
+		return http.StatusBadRequest, map[string]any{
 			"detail": "configura il repo Pileus nelle impostazioni (pileus_web_repo, formato owner/repo) prima di aggiornare l'app web",
-		})
-		return
+		}
 	}
-	if !repoSlugRe.MatchString(repoSlug) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"detail": "pileus_web_repo non è nel formato owner/repo: " + repoSlug,
-		})
-		return
+	// "owner/repo" or the repository's GitHub URL.
+	slug, ok := normalizeRepoSlug(repoSlug)
+	if !ok {
+		return http.StatusBadRequest, map[string]any{
+			"detail": "pileus_web_repo deve essere owner/repo o l'indirizzo GitHub del repository: " + repoSlug,
+		}
 	}
+	repoSlug = slug
 
 	// Compatibility gate: a core behind its latest release may lack something
 	// the new web build expects. "" (latest version not fetched yet) counts as
 	// unknown, not as outdated.
 	latestCore := core.LatestVersion()
 	myceliumUpToDate := latestCore == "" || !core.IsNewerVersion(latestCore, core.Version)
-	if !myceliumUpToDate && !body.Force {
-		writeJSON(w, http.StatusOK, map[string]any{
+	if !myceliumUpToDate && !force {
+		return http.StatusOK, map[string]any{
 			"ok":                  false,
 			"mycelium_up_to_date": false,
 			"mycelium_version":    core.Version,
 			"mycelium_latest":     latestCore,
 			"warning":             "mycelium non è sull'ultima versione — il build web più recente potrebbe assumere funzionalità non ancora presenti in questa versione del server. Riprova con force per procedere comunque.",
-		})
-		return
+		}
 	}
 
 	tag, assets, err := core.LatestVersionOf(repoSlug)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{
+		return http.StatusBadGateway, map[string]any{
 			"detail": fmt.Sprintf("impossibile leggere l'ultima release di %s: %v", repoSlug, err),
-		})
-		return
+		}
 	}
 	asset, ok := pickWebAsset(assets)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{
+		return http.StatusNotFound, map[string]any{
 			"detail": fmt.Sprintf("nessun asset .zip o .tar.gz che sembri il build web trovato nella release %s di %s", tag, repoSlug),
-		})
-		return
+		}
 	}
 
 	// Integrity: when the release ships a SHA256SUMS file the archive must
@@ -100,14 +111,15 @@ func updatePileusWebApp(w http.ResponseWriter, r *http.Request) {
 	// catches a corrupted or swapped download, not a compromised release.
 	expectedSHA, sumsErr := releaseChecksumFor(assets, asset.Name)
 	if sumsErr != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"detail": "lettura checksum della release: " + sumsErr.Error()})
-		return
+		return http.StatusBadGateway, map[string]any{"detail": "lettura checksum della release: " + sumsErr.Error()}
 	}
 
 	destDir := core.AppPath("data", "pileus-web")
 	if err := installPileusWebAsset(asset, destDir, expectedSHA); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"detail": err.Error()})
-		return
+		return http.StatusInternalServerError, map[string]any{"detail": err.Error()}
+	}
+	if err := managers.Settings.SaveInternal(map[string]any{pileusWebInstalledTagKey: repoSlug + "@" + tag}); err != nil {
+		log.Printf("[pileus-web] salvataggio della release installata: %v", err)
 	}
 
 	log.Printf("[pileus-web] app web aggiornata a %s (asset %s, checksum verificato: %v) da %s", tag, asset.Name, expectedSHA != "", repoSlug)
@@ -121,7 +133,70 @@ func updatePileusWebApp(w http.ResponseWriter, r *http.Request) {
 	if expectedSHA == "" {
 		resp["warning"] = "la release non pubblica un file SHA256SUMS: integrità dell'archivio non verificata"
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return http.StatusOK, resp
+}
+
+// ─── Automatic updates ────────────────────────────────────────────────────────
+
+const pileusWebAutoEvery = 6 * time.Hour
+
+var pileusWebAutoOnce sync.Once
+
+// startPileusWebAutoUpdate keeps the web app on the latest release of the
+// configured repository (setting pileus_web_auto_update, on by default): a
+// few minutes after start and then every pileusWebAutoEvery.
+func startPileusWebAutoUpdate() {
+	pileusWebAutoOnce.Do(func() {
+		core.SafeGo("pileus-web/auto-update", func() {
+			time.Sleep(4 * time.Minute)
+			for {
+				autoUpdatePileusWeb()
+				time.Sleep(pileusWebAutoEvery)
+			}
+		})
+	})
+}
+
+// pileusWebNeedsUpdate decides whether latestTag of repoSlug should be
+// installed: not when it is the release installed last; with no record of
+// that (an install from before this was tracked), when the installed build
+// is missing or older.
+func pileusWebNeedsUpdate(repoSlug, latestTag string) bool {
+	if rec := managers.Settings.GetString(pileusWebInstalledTagKey, ""); rec != "" {
+		return rec != repoSlug+"@"+latestTag
+	}
+	info, ok := pileusWebVersion()
+	if !ok {
+		return true
+	}
+	return core.IsNewerVersion(latestTag, info.Version)
+}
+
+func autoUpdatePileusWeb() {
+	if !managers.Settings.GetBool("pileus_web_auto_update", true) {
+		return
+	}
+	slug, ok := normalizeRepoSlug(managers.Settings.GetString("pileus_web_repo", defaultPileusWebRepo))
+	if !ok {
+		return
+	}
+	tag, _, err := core.LatestVersionOf(slug)
+	if err != nil {
+		log.Printf("[pileus-web] controllo aggiornamenti di %s non riuscito: %v", slug, err)
+		return
+	}
+	if !pileusWebNeedsUpdate(slug, tag) {
+		return
+	}
+	// Never forced: a server behind its own latest release waits (the
+	// dashboard can still force it).
+	status, resp := runPileusWebUpdate(false)
+	switch {
+	case status != http.StatusOK:
+		log.Printf("[pileus-web] aggiornamento automatico non riuscito: %v", resp["detail"])
+	case resp["ok"] == false:
+		log.Printf("[pileus-web] aggiornamento automatico rimandato: %v", resp["warning"])
+	}
 }
 
 // pickWebAsset chooses the web-build asset among a release's assets: the

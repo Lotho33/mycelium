@@ -16,6 +16,13 @@ func AdminRoutes(mux *http.ServeMux) {
 	// Everything else requires a valid session.
 	auth := adminAuthMiddleware
 	mux.HandleFunc("GET /admin/dashboard", auth(adminDashboard))
+	// /admin and /admin/ are what people type or bookmark: send them to the
+	// dashboard (which sends them on to login or setup when needed).
+	toDashboard := func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/dashboard", http.StatusSeeOther)
+	}
+	mux.HandleFunc("GET /admin", toDashboard)
+	mux.HandleFunc("GET /admin/{$}", toDashboard)
 
 	// Lua plugin management lives under /admin/lua-plugins/* (RegisterLuaAdminRoutes).
 

@@ -10,8 +10,11 @@ FROM golang:1.26.10-bookworm
 #   protoc             v3.21.12   ← bookworm's protobuf-compiler
 #   protoc-gen-go       v1.36.12
 #   protoc-gen-go-grpc  v1.6.2
+# ffmpeg: offline downloads mux the fetched segments with it (the release
+# image ships its own minimal build, see the main Dockerfile); without it the
+# dashboard reports downloads as unavailable.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler \
+    && apt-get install -y --no-install-recommends protobuf-compiler ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12 \
     && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2

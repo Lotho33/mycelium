@@ -58,7 +58,7 @@ func setupFactoryResetTestDB(t *testing.T) {
 		t.Fatalf("open test db: %v", err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(testFactoryResetSchema); err != nil {
+	if _, err := db.Exec(testFactoryResetSchema + managers.MyListSchema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO pileus_devices(device_id) VALUES('dev1')`); err != nil {

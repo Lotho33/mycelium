@@ -211,6 +211,8 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		"in_docker":       os.Getenv("MYCELIUM_DOCKER") == "1",
 		// "owner/repo" of the Pileus web build (POST /admin/pileus-web/update).
 		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", "Lotho33/pileus"),
+		// Automatic updates of the web app (api/pileus_web.go), on by default.
+		"pileus_web_auto_update": managers.Settings.GetBool("pileus_web_auto_update", true),
 		// Prefer IPv6 on direct connections (core.egressPreferIPv6).
 		"egress_ipv6": core.EgressPreferIPv6(),
 		// Version of the installed Pileus web build ("" = none).
@@ -307,7 +309,7 @@ func coreUpdate(w http.ResponseWriter, r *http.Request) {
 		"status":  "manual_required",
 		"detail":  "mycelium è supportato solo in Docker: aggiorna l'immagine (docker compose pull && docker compose up -d).",
 		"version": latest,
-		"url":     "https://github.com/Lotho33/mycelium-core/releases/latest",
+		"url":     "https://github.com/Lotho33/mycelium/releases/latest",
 	})
 }
 

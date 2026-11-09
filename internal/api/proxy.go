@@ -178,6 +178,8 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		unwrapPlugin = pid
 	}
 	unwraps := engine.LuaPlugins.SegmentUnwrap(unwrapPlugin)
+	// Same plugin's sealed-playlist rule (core.PlaylistSeal), nil for none.
+	seal := engine.LuaPlugins.PlaylistSeal(unwrapPlugin)
 	uidRaw := q.Get("uid") // playback session token
 	useVPN := q.Get("vpn") == "1"
 	egr := q.Get("egr") // egress profile name (see videoEgressSuffix)
@@ -264,6 +266,20 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return // player hung up
 	}
+	// Sealed segment URIs (manifest playlist.sealed_uris): decrypted with the
+	// key the plugin's resolve put in the URL's #mpk= fragment. Child
+	// playlists get the same fragment (sealFrag) so they can do the same.
+	sealFrag := ""
+	if seal != nil && fetchErr == nil {
+		sealFrag = core.PlaylistSealFragment(realURL)
+		if key := core.PlaylistSealKey(realURL); key != nil {
+			if out, ok, err := core.UnsealPlaylist(content, key, *seal); err != nil {
+				log.Printf("[proxy/playlist] sealed playlist: %v url=%s", err, logURL(realURL))
+			} else if ok {
+				content = out
+			}
+		}
+	}
 	if fetchErr != nil {
 		log.Printf("[proxy/playlist] fetch error: %v", fetchErr)
 		if sidRaw != "" && childIdx == "" && q.Get("rr") == "" {
@@ -307,7 +323,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		xhdrSuffix = "&xhdr=" + url.QueryEscape(xhdrRaw)
 	}
 	vpnSuffix := childVPNSuffix(q)
-	if len(unwraps) > 0 {
+	if len(unwraps) > 0 || seal != nil {
 		// Rides on every rewritten URL like the egress pin, so segments,
 		// variants and renditions all know the rules.
 		vpnSuffix += "&sp=" + url.QueryEscape(unwrapPlugin)
@@ -367,6 +383,7 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 						// proxy, but aren't whole segments of playback (nr=1).
 						replacement = fmt.Sprintf("%s/segment.ts?data=%s&origin=%s&cookies=%s%s%s%s&nr=1", proxyBase, encURI, originRaw, cookiesRaw, uidSuffix, xhdrSuffix, vpnSuffix)
 					default:
+						encURI = b64enc(absURI + sealFrag)
 						rtSuffix := ""
 						if isMaster {
 							// A URI tag in a master names an alternate rendition, never the
@@ -410,6 +427,9 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 				// Every URI line of a master is a variant playlist.
 				endpoint = "playlist.m3u8"
 				encSuffix = childSuffix()
+			}
+			if endpoint == "playlist.m3u8" && sealFrag != "" {
+				encURI = b64enc(absURI + sealFrag)
 			}
 			if endpoint == "segment.ts" && !isMaster {
 				raSegs = append(raSegs, raSeg{url: absURI, dur: segDur, enc: encrypted})

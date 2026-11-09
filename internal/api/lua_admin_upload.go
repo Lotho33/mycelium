@@ -34,8 +34,6 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pluginsRoot := filepath.Clean(core.AppPath("plugins"))
-
 	// Write ZIP to temp file so zip.OpenReader can seek.
 	tmp, err := os.CreateTemp("", "lua_upload_*.zip")
 	if err != nil {
@@ -52,10 +50,55 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	tmp.Close()
 
-	zr, err := zip.OpenReader(tmpPath)
-	if err != nil {
-		http.Error(w, "ZIP corrotto", http.StatusBadRequest)
+	res, ierr := installPluginZip(tmpPath)
+	if ierr != nil {
+		http.Error(w, ierr.Error(), ierr.status)
 		return
+	}
+	verb := "installato"
+	if res.Update {
+		verb = "aggiornato"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"ok":      "true",
+		"message": "Plugin Lua " + verb + " e caricato.",
+		"id":      res.ID,
+		"update":  boolToString(res.Update),
+	})
+}
+
+// installResult is what installPluginZip installed.
+type installResult struct {
+	ID      string
+	Version string // manifest version
+	Update  bool   // it replaced an installed copy
+}
+
+// installError carries the HTTP status an install failure maps to.
+type installError struct {
+	status int
+	msg    string
+}
+
+func (e *installError) Error() string { return e.msg }
+
+func installErr(status int, msg string) *installError { return &installError{status, msg} }
+
+// installPluginZip installs (or updates) the plugin packed in the ZIP at
+// zipPath: the id comes from its manifest.yaml, which may sit at the root or
+// inside one top-level folder (a GitHub source archive). An update keeps the
+// installed copy until the new one loads, and puts it back on failure. Used by
+// the dashboard upload and by installs from a URL.
+func installPluginZip(zipPath string) (installResult, *installError) {
+	pluginsRoot := filepath.Clean(core.AppPath("plugins"))
+	if err := os.MkdirAll(pluginsRoot, 0755); err != nil {
+		return installResult{}, installErr(http.StatusInternalServerError, "errore creazione cartella plugins")
+	}
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return installResult{}, installErr(http.StatusBadRequest, "ZIP corrotto")
 	}
 	defer zr.Close()
 
@@ -71,8 +114,7 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !hasManifest || !hasInit {
-		http.Error(w, "ZIP deve contenere manifest.yaml e init.lua", http.StatusBadRequest)
-		return
+		return installResult{}, installErr(http.StatusBadRequest, "ZIP deve contenere manifest.yaml e init.lua")
 	}
 
 	// Extract to a staging directory first: the destination is derived from the
@@ -80,8 +122,7 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	// version updates the installed plugin.
 	stagingDir, err := os.MkdirTemp(pluginsRoot, ".staging-*")
 	if err != nil {
-		http.Error(w, "errore creazione staging", http.StatusInternalServerError)
-		return
+		return installResult{}, installErr(http.StatusInternalServerError, "errore creazione staging")
 	}
 	defer os.RemoveAll(stagingDir) // no-op once renamed into place below
 
@@ -91,18 +132,19 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	const maxTotalExtractedSize = 200 << 20 // 200 MiB
 	aborted, _, xerr := extractZipSafe(&zr.Reader, stagingDir, 10<<20, maxTotalExtractedSize, "[lua/upload]")
 	if xerr != nil {
-		http.Error(w, "archivio non valido: "+xerr.Error(), http.StatusBadRequest)
-		return
+		return installResult{}, installErr(http.StatusBadRequest, "archivio non valido: "+xerr.Error())
 	}
 	if aborted {
-		http.Error(w, "archivio troppo grande una volta estratto", http.StatusBadRequest)
-		return
+		return installResult{}, installErr(http.StatusBadRequest, "archivio troppo grande una volta estratto")
 	}
+	srcDir := pluginRootIn(stagingDir)
 
-	mf, err := readLuaManifest(stagingDir)
+	mf, err := readLuaManifest(srcDir)
 	if err != nil {
-		http.Error(w, "manifest.yaml non valido: "+err.Error(), http.StatusBadRequest)
-		return
+		return installResult{}, installErr(http.StatusBadRequest, "manifest.yaml non valido: "+err.Error())
+	}
+	if err := engine.CheckMinCore(mf); err != nil {
+		return installResult{}, installErr(http.StatusBadRequest, err.Error())
 	}
 	// readLuaManifest already validated mf.ID against the id whitelist: use it
 	// as the directory name.
@@ -110,15 +152,13 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	destDir := core.AppPath("plugins", pluginName)
 	destDirClean := filepath.Clean(destDir)
 	if destDirClean == pluginsRoot || filepath.Dir(destDirClean) != pluginsRoot {
-		http.Error(w, "id plugin non valido", http.StatusBadRequest)
-		return
+		return installResult{}, installErr(http.StatusBadRequest, "id plugin non valido")
 	}
 
 	// "shared" is not a plugin: its modules are preloaded into every plugin, so
 	// an upload with that id would run code under other plugins' identity.
 	if pluginName == "shared" {
-		http.Error(w, "id plugin riservato: shared", http.StatusBadRequest)
-		return
+		return installResult{}, installErr(http.StatusBadRequest, "id plugin riservato: shared")
 	}
 	// One install at a time: two uploads of the same id would race on the
 	// directory.
@@ -137,8 +177,7 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	if !isUpdate {
 		if _, err := os.Stat(destDir); err == nil {
 			if existing, merr := readLuaManifest(destDir); merr != nil || existing.ID != pluginName {
-				http.Error(w, "la cartella plugins/"+pluginName+" esiste già e non contiene questo plugin", http.StatusConflict)
-				return
+				return installResult{}, installErr(http.StatusConflict, "la cartella plugins/"+pluginName+" esiste già e non contiene questo plugin")
 			}
 			isUpdate = true // installed but not loaded
 		}
@@ -151,8 +190,7 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		backupDir = filepath.Join(pluginsRoot, fmt.Sprintf(".backup-%s-%d", pluginName, time.Now().UnixNano()))
 		if err := os.CopyFS(backupDir, os.DirFS(destDir)); err != nil {
 			os.RemoveAll(backupDir)
-			http.Error(w, "errore backup della versione installata", http.StatusInternalServerError)
-			return
+			return installResult{}, installErr(http.StatusInternalServerError, "errore backup della versione installata")
 		}
 		defer os.RemoveAll(backupDir) // no-op once restored
 		// Hot-swap: unload the old pool before its directory changes. Files are
@@ -175,22 +213,19 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		http.Error(w, "errore creazione directory", http.StatusInternalServerError)
-		return
+		return installResult{}, installErr(http.StatusInternalServerError, "errore creazione directory")
 	}
 	if isUpdate {
 		// Code comes only from the new ZIP: drop the old .lua modules first so a
 		// removed one doesn't stay require-able.
 		if err := removeLuaFiles(destDir); err != nil {
 			restore()
-			http.Error(w, "errore rimozione moduli precedenti: "+err.Error(), http.StatusInternalServerError)
-			return
+			return installResult{}, installErr(http.StatusInternalServerError, "errore rimozione moduli precedenti: "+err.Error())
 		}
 	}
-	if err := mergeDirInto(stagingDir, destDir); err != nil {
+	if err := mergeDirInto(srcDir, destDir); err != nil {
 		restore()
-		http.Error(w, "errore installazione file: "+err.Error(), http.StatusInternalServerError)
-		return
+		return installResult{}, installErr(http.StatusInternalServerError, "errore installazione file: "+err.Error())
 	}
 
 	if err := engine.LuaPlugins.LoadPlugin(destDir); err != nil {
@@ -199,8 +234,7 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		if isUpdate {
 			msg += " (ripristinata la versione precedente)"
 		}
-		http.Error(w, msg, http.StatusInternalServerError)
-		return
+		return installResult{}, installErr(http.StatusInternalServerError, msg)
 	}
 
 	verb := "installato"
@@ -208,13 +242,38 @@ func uploadLuaPlugin(w http.ResponseWriter, r *http.Request) {
 		verb = "aggiornato"
 	}
 	log.Printf("[lua/upload] plugin %s: %s", verb, pluginName)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"ok":      "true",
-		"message": "Plugin Lua " + verb + " e caricato.",
-		"id":      pluginName,
-		"update":  boolToString(isUpdate),
-	})
+	return installResult{ID: pluginName, Version: mf.Version, Update: isUpdate}, nil
+}
+
+// pluginRootIn is the directory of an extracted archive that holds
+// manifest.yaml: the archive root, or its single top-level folder (GitHub
+// source archives and ZIPs made by compressing a folder).
+func pluginRootIn(dir string) string {
+	if _, err := os.Stat(filepath.Join(dir, "manifest.yaml")); err == nil {
+		return dir
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return dir
+	}
+	var only string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") || strings.HasPrefix(e.Name(), "__MACOSX") {
+			continue
+		}
+		if !e.IsDir() || only != "" {
+			return dir
+		}
+		only = e.Name()
+	}
+	if only == "" {
+		return dir
+	}
+	sub := filepath.Join(dir, only)
+	if _, err := os.Stat(filepath.Join(sub, "manifest.yaml")); err == nil {
+		return sub
+	}
+	return dir
 }
 
 var pluginUploadMu sync.Mutex
@@ -308,6 +367,7 @@ func uninstallLuaPlugin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		removed = true
+		forgetPluginSource(body.PluginID)
 		log.Printf("[lua/uninstall] plugin rimosso: %s", body.PluginID)
 		break
 	}

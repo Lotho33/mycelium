@@ -107,11 +107,11 @@ func loginHTML(withErr bool) string {
 	if withErr {
 		errLine = `<p style="color:#f87171;font-size:.8rem;margin:0 0 .75rem">Password errata.</p>`
 	}
-	return `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8">
+	return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0d12">
 <title>Mycelium — Accesso</title>
-<link rel="icon" href="/static/icon-192.png">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <style>
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
@@ -121,8 +121,7 @@ func loginHTML(withErr bool) string {
        -webkit-tap-highlight-color:transparent}
   .box{width:100%;max-width:22rem;background:#141820;border:1px solid #1e2530;
        border-radius:1rem;padding:1.75rem}
-  .mark{width:3rem;height:3rem;border-radius:.85rem;display:flex;align-items:center;justify-content:center;
-        margin:0 auto .9rem;background:linear-gradient(135deg,#7c6af7,#5a4fd4)}
+  .mark{display:block;width:3.25rem;height:3.25rem;margin:0 auto .9rem;border-radius:.85rem}
   h1{font-size:1.15rem;font-weight:700;color:#fff;text-align:center;margin:0 0 .25rem}
   p.sub{font-size:.8rem;color:#6b7280;text-align:center;margin:0 0 1.4rem}
   label{display:block;font-size:.75rem;color:#9ca3af;margin-bottom:.4rem}
@@ -134,9 +133,7 @@ func loginHTML(withErr bool) string {
   button:active{background:#6a58e8}
 </style></head>
 <body><div class="box">
-  <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"
-       stroke-linecap="round" stroke-linejoin="round" width="26" height="26">
-       <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+  <img class="mark" src="/static/logo.svg" alt="">
   <h1>Mycelium</h1>
   <p class="sub">Accesso amministratore</p>
   <form method="POST" action="/admin/login">
@@ -147,6 +144,13 @@ func loginHTML(withErr bool) string {
     <button type="submit">Accedi</button>
   </form>
 </div>
+<script src="/static/i18n.js"></script>
+<script>
+  // Same language as the dashboard (chosen there, English until then).
+  document.documentElement.lang = getLang();
+  document.title = t(document.title);
+  translateStatic();
+</script>
 </body></html>`
 }
 

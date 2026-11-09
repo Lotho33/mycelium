@@ -44,6 +44,7 @@ func SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /pileus/info", pileusInfo)
 	// Public: a plugin's branding icon (manifest `icon:`).
 	mux.HandleFunc("GET /plugin-icon/{plugin_id}", pluginIcon)
+	mux.HandleFunc("GET /profile-avatar/{id}", serveProfileAvatar)
 	// Web-app install guide.
 	mux.HandleFunc("GET /install", installUI)
 	mux.HandleFunc("GET /manifest.json", serveManifest)
@@ -239,19 +240,19 @@ func saveSetup(w http.ResponseWriter, r *http.Request) {
 	defer setupMu.Unlock()
 	// One-shot: once an admin password exists this endpoint is closed.
 	if managers.Settings.IsSetupDone() {
-		http.Error(w, "Setup già completato", http.StatusForbidden)
+		http.Error(w, "Setup already completed", http.StatusForbidden)
 		return
 	}
 	// Until then it is unauthenticated (first boot, or after a factory reset):
 	// accept it only from the local network.
 	if !setupAllowedFrom(realIP(r)) {
 		log.Printf("[setup] rifiutato setup da %s (non in rete locale; MYCELIUM_SETUP_ALLOW_ANY=1 per consentirlo)", realIP(r))
-		http.Error(w, "Il setup iniziale è consentito solo dalla rete locale", http.StatusForbidden)
+		http.Error(w, "The initial setup is only allowed from the local network", http.StatusForbidden)
 		return
 	}
 	if !setupHostAllowed(r.Host) {
 		log.Printf("[setup] rifiutato setup con Host %q (usa l'IP del server o il suo nome in rete locale)", r.Host)
-		http.Error(w, "Apri il setup con l'indirizzo IP del server o il suo nome in rete locale", http.StatusForbidden)
+		http.Error(w, "Open the setup using the server's IP address or its local network name", http.StatusForbidden)
 		return
 	}
 
@@ -260,25 +261,25 @@ func saveSetup(w http.ResponseWriter, r *http.Request) {
 	adminPassConfirm := r.FormValue("master_admin_password_confirm")
 
 	if len(adminPass) < 8 {
-		http.Error(w, "La password deve essere di almeno 8 caratteri", http.StatusBadRequest)
+		http.Error(w, "The password must be at least 8 characters long", http.StatusBadRequest)
 		return
 	}
 	// The form checks this too; the server must as well.
 	if adminPass != adminPassConfirm {
-		http.Error(w, "Le due password non coincidono", http.StatusBadRequest)
+		http.Error(w, "The two passwords do not match", http.StatusBadRequest)
 		return
 	}
 
 	hashedPassword, err := core.GetPasswordHash(adminPass)
 	if err != nil {
-		http.Error(w, "Errore generazione hash", http.StatusInternalServerError)
+		http.Error(w, "Could not hash the password", http.StatusInternalServerError)
 		return
 	}
 	// SaveInternal: master_admin_hash is not writable through Save.
 	if err := managers.Settings.SaveInternal(map[string]any{
 		"master_admin_hash": hashedPassword,
 	}); err != nil {
-		http.Error(w, "Errore salvataggio configurazione", http.StatusInternalServerError)
+		http.Error(w, "Could not save the configuration", http.StatusInternalServerError)
 		return
 	}
 

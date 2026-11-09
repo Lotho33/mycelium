@@ -43,6 +43,17 @@ func parseVersionParts(s string) (parts [3]int, ok bool) {
 // CompareVersions compares two "major.minor.patch" versions ("v" prefix
 // optional, missing parts 0): -1, 0 or 1. An unparsable one yields 0 and a
 // warning.
+// IsComparableVersion reports whether s is a "major[.minor[.patch]]"
+// version CompareVersions can order ("dev" and the like are not).
+func IsComparableVersion(s string) bool {
+	s = normalizeVersion(strings.TrimSpace(s))
+	if s == "" {
+		return false
+	}
+	_, ok := parseVersionParts(s)
+	return ok
+}
+
 func CompareVersions(a, b string) int {
 	an, aOK := parseVersionParts(normalizeVersion(a))
 	bn, bOK := parseVersionParts(normalizeVersion(b))
@@ -165,6 +176,9 @@ func SetGitHubAPIBaseForTest(base string) func() {
 	githubAPIBase = base
 	return func() { githubAPIBase = orig }
 }
+
+// GitHubAPIBase is the GitHub REST API root (a test server in tests).
+func GitHubAPIBase() string { return githubAPIBase }
 
 // GitHubReleaseAsset is one asset of a GitHub release.
 type GitHubReleaseAsset struct {

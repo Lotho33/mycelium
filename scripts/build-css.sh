@@ -1,7 +1,8 @@
 #!/bin/sh
-# Regenerates web/static/tailwind.css (dashboard, setup, install pages) from
-# the classes used in web/templates and web/static/admin.js, in a throwaway
-# Node container (nothing to install on the host).
+# Regenerates web/static/tailwind.css (setup and install pages) from the
+# classes used in those templates, in a throwaway Node container (nothing to
+# install on the host). The dashboard has its own hand-written
+# web/static/admin.css and does not use Tailwind.
 set -eu
 cd "$(dirname "$0")/.."
 RUNTIME=${CONTAINER_RUNTIME:-$(command -v docker || command -v podman)}

@@ -10,6 +10,7 @@ import (
 	"mycelium/internal/core"
 	"mycelium/internal/downloads"
 	"mycelium/internal/engine"
+	"mycelium/internal/logometa"
 	"mycelium/internal/managers"
 	"mycelium/internal/pileus"
 )
@@ -28,6 +29,9 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "db error (profiles): "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := os.RemoveAll(core.AppPath("data", "avatars")); err != nil {
+		log.Printf("[admin] factory reset: foto profili: %v", err)
+	}
 	// Profile PIN trusts go with the profiles (one-off sessions live in memory).
 	if _, err := managers.DB.Exec(`DELETE FROM pileus_profile_trust`); err != nil {
 		log.Printf("[admin] factory reset: profile trust: %v", err)
@@ -38,6 +42,10 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "db error (watch_history): "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// "La mia lista" goes with the profiles and devices that own it.
+	if _, err := managers.DB.Exec(`DELETE FROM my_list`); err != nil {
+		log.Printf("[admin] factory reset: my_list: %v", err)
 	}
 	devRes, err := managers.DB.Exec(`DELETE FROM pileus_devices`)
 	if err != nil {
@@ -59,6 +67,7 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	imgN := clearDirContents(core.AppPath("data", "imgcache"))
+	logometa.Forget()
 	managers.Segments.Reset()
 
 	// Unload every running Lua plugin before touching its files on disk —

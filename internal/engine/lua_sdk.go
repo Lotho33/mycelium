@@ -713,7 +713,9 @@ func buildCacheModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable
 			L.Push(lua.LString("redis unavailable"))
 			return 2
 		}
-		if err := opts.Redis.Set(context.Background(), cacheKey(key), val, time.Duration(ttl)*time.Second); err != nil {
+		ctx, cancel := context.WithTimeout(scope.parentCtx(), rememberRedisTimeout)
+		defer cancel()
+		if err := opts.Redis.Set(ctx, cacheKey(key), val, time.Duration(ttl)*time.Second); err != nil {
 			L.Push(lua.LFalse)
 			L.Push(lua.LString(err.Error()))
 			return 2
@@ -733,7 +735,9 @@ func buildCacheModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable
 		}
 		// found is true for a stored "" too: plugins cache "nothing there"
 		// that way.
-		val, found, err := opts.Redis.GetFound(context.Background(), cacheKey(key))
+		ctx, cancel := context.WithTimeout(scope.parentCtx(), rememberRedisTimeout)
+		defer cancel()
+		val, found, err := opts.Redis.GetFound(ctx, cacheKey(key))
 		if err != nil || !found {
 			L.Push(lua.LString(""))
 			L.Push(lua.LFalse)
@@ -751,7 +755,9 @@ func buildCacheModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTable
 	t.RawSetString("del", L.NewFunction(func(L *lua.LState) int {
 		key := L.CheckString(1)
 		if opts.Redis != nil {
-			_ = opts.Redis.Del(context.Background(), cacheKey(key))
+			ctx, cancel := context.WithTimeout(scope.parentCtx(), rememberRedisTimeout)
+			_ = opts.Redis.Del(ctx, cacheKey(key))
+			cancel()
 		}
 		return 0
 	}))
@@ -782,7 +788,9 @@ func buildContextModule(L *lua.LState, opts SDKOpts, scope *callScope) *lua.LTab
 		}
 		val := ""
 		if opts.Redis != nil {
-			val, _ = opts.Redis.HGet(context.Background(), managers.SecretsKey(opts.PluginID, scope.profileID), key)
+			ctx, cancel := context.WithTimeout(scope.parentCtx(), rememberRedisTimeout)
+			val, _ = opts.Redis.HGet(ctx, managers.SecretsKey(opts.PluginID, scope.profileID), key)
+			cancel()
 			if val != "" && managers.DB != nil {
 				_ = managers.DB.SetPluginSecret(opts.PluginID, scope.profileID, key, val)
 			}

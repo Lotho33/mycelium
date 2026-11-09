@@ -48,7 +48,7 @@ func setupProfileTestDB(t *testing.T) {
 		t.Fatalf("open test db: %v", err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(testProfileSchema); err != nil {
+	if _, err := db.Exec(testProfileSchema + managers.MyListSchema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 	prev := managers.DB

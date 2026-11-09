@@ -103,7 +103,7 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "SAMEORIGIN")
 		h.Set("Referrer-Policy", "same-origin")
 		p := r.URL.Path
-		if p == "/img" || p == "/img/versus" || p == "/plugin-icon" || strings.HasPrefix(p, "/plugin-icon/") || strings.HasPrefix(p, "/proxy/") {
+		if p == "/img" || p == "/img/versus" || p == "/plugin-icon" || strings.HasPrefix(p, "/plugin-icon/") || strings.HasPrefix(p, "/profile-avatar/") || strings.HasPrefix(p, "/proxy/") {
 			h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 		}
 		next.ServeHTTP(w, r)
@@ -117,6 +117,8 @@ func maxRequestBody(p string) int64 {
 	switch {
 	case p == "/admin/lua-plugins/upload":
 		return 64 << 20
+	case strings.HasPrefix(p, "/admin/pileus/profiles/") && strings.HasSuffix(p, "/avatar"):
+		return 11 << 20
 	case strings.HasPrefix(p, "/admin/lua-plugins/file/"):
 		return 4 << 20
 	case strings.HasPrefix(p, "/grpc/") || strings.HasPrefix(p, "/mycelium."):

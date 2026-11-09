@@ -152,14 +152,39 @@ func (p *LuaPool) DiscardAndReplace(old *lua.LState) {
 	if !current {
 		return // a Reload already replaced it
 	}
-	L, err := p.newState()
-	if err != nil {
-		// The pool shrinks by one state until the next Reload.
-		log.Printf("[lua] pool discard-replace: could not create replacement state: %v", err)
-		return
+	// A failed rebuild (init.lua timing out on a busy box, a transient error)
+	// is retried a few times: otherwise the pool would serve one state short
+	// until the next Reload.
+	var err error
+	for attempt := range replaceAttempts {
+		if attempt > 0 {
+			time.Sleep(replaceRetryDelay * time.Duration(attempt))
+		}
+		if !p.isCurrentGen(g) {
+			return // reloaded meanwhile: the new generation is full
+		}
+		var L *lua.LState
+		if L, err = p.newState(); err == nil {
+			p.track(L, g)
+			p.put(L) // closes L if a Reload happened during newState
+			return
+		}
+		log.Printf("[lua] pool discard-replace: tentativo %d/%d fallito: %v", attempt+1, replaceAttempts, err)
 	}
-	p.track(L, g)
-	p.put(L)
+	log.Printf("[lua] pool discard-replace: pool ridotto di uno stato fino al prossimo reload: %v", err)
+}
+
+// replaceAttempts / replaceRetryDelay pace DiscardAndReplace's retries
+// (vars for tests).
+var (
+	replaceAttempts   = 3
+	replaceRetryDelay = 5 * time.Second
+)
+
+func (p *LuaPool) isCurrentGen(g uint64) bool {
+	p.genMu.Lock()
+	defer p.genMu.Unlock()
+	return g == p.gen
 }
 
 // Reload re-reads the script and replaces every pooled state.

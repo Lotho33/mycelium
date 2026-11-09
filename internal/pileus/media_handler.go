@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 // MediaHandler implements gen.MediaPipelineServer; every method delegates to
@@ -113,53 +112,28 @@ func upstreamHost(raw string) string {
 func (h *MediaHandler) GetCatalog(ctx context.Context, req *gen.CatalogRequest) (*gen.CatalogResponse, error) {
 	page := max(int(req.Page), 1)
 
-	// Shared, profile-independent response cache (pluginID+catalogID+page).
-	// Skipped without Redis.
-	cacheKey := managers.CatalogCacheKey(req.PluginId, req.CatalogId, page)
-	if managers.Redis != nil {
-		if raw, gErr := managers.Redis.Get(ctx, cacheKey); gErr == nil && raw != "" {
-			cached := &gen.CatalogResponse{}
-			if proto.Unmarshal([]byte(raw), cached) == nil {
-				if debugLog {
-					log.Printf("[catalog-cache] hit %s/%s p%d (%d items)",
-						req.PluginId, req.CatalogId, page, len(cached.Items))
-				}
-				updateCatalogCount(req.PluginId, req.CatalogId, page, len(cached.Items))
-				return cached, nil
-			}
-			log.Printf("[catalog-cache] corrupt entry, refetching: %s", cacheKey)
-		}
-	}
-
+	// Shared, profile-independent response cache (pluginID+catalogID+page),
+	// with a stale copy served while the page refreshes (catalog_swr.go).
 	b, err := lookupBackend(req.PluginId)
 	if err != nil {
 		return nil, err
 	}
-	items, hasMore, err := b.GetCatalog(ctx, req.CatalogId, page)
+	var store catalogStore
+	if managers.Redis != nil {
+		store = managers.Redis
+	}
+	catalogID := req.CatalogId
+	resp, err := cachedCatalogPage(ctx, store,
+		managers.CatalogCacheKey(req.PluginId, catalogID, page),
+		catalogCacheTTL(req.PluginId, catalogID),
+		func(fctx context.Context) ([]*gen.CatalogItem, bool, error) {
+			return b.GetCatalog(fctx, catalogID, page)
+		})
 	if err != nil {
-		log.Printf("[pileus/media] GetCatalog %s/%s: %v", req.PluginId, req.CatalogId, err)
+		log.Printf("[pileus/media] GetCatalog %s/%s: %v", req.PluginId, catalogID, err)
 		return nil, wrapInternal(err)
 	}
-
-	resp := &gen.CatalogResponse{Items: items, HasMore: hasMore}
-
-	// Write-through, fire-and-forget; TTL from cache_ttl_seconds, else 15 min.
-	// Empty pages aren't cached: they are as often a transient failure.
-	if managers.Redis != nil && len(items) > 0 {
-		if blob, mErr := proto.Marshal(resp); mErr == nil {
-			ttl := catalogCacheTTL(req.PluginId, req.CatalogId)
-			wCtx, wCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			core.SafeGo("pileus/catalog-cache-store", func() {
-				defer wCancel()
-				if sErr := managers.Redis.Set(wCtx, cacheKey, string(blob), ttl); sErr == nil {
-					log.Printf("[catalog-cache] stored %s/%s p%d (%d items, %d B, ttl %s)",
-						req.PluginId, req.CatalogId, page, len(items), len(blob), ttl)
-				}
-			})
-		}
-	}
-
-	updateCatalogCount(req.PluginId, req.CatalogId, page, len(items))
+	updateCatalogCount(req.PluginId, catalogID, page, len(resp.Items))
 	return resp, nil
 }
 

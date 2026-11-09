@@ -94,7 +94,7 @@ func TestSaveSetup_RejectsNonLocalClient(t *testing.T) {
 func TestSetupAllowedFrom(t *testing.T) {
 	for ip, want := range map[string]bool{
 		"127.0.0.1": true, "::1": true, "192.168.1.5": true, "10.1.2.3": true,
-		"172.16.0.1": true, "100.100.1.1": true, "fd00::1": true, "fe80::e080:78ff:fe85:f0e5%enp8s0": true, "2001:db8::1%eth0": false,
+		"172.16.0.1": true, "100.100.1.1": true, "fd00::1": true, "fe80::1%eth0": true, "2001:db8::1%eth0": false,
 		"203.0.113.9": false, "8.8.8.8": false, "2001:db8::1": false, "garbage": false,
 	} {
 		if got := setupAllowedFrom(ip); got != want {

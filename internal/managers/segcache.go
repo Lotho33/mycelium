@@ -188,6 +188,9 @@ type PrefetchOptions struct {
 	Egress string
 	// Unwrap: the plugin's segment unwrap rules (manifest segments.unwrap).
 	Unwrap []core.SegmentUnwrap
+	// Seal: the plugin's sealed-playlist rule (manifest playlist.sealed_uris);
+	// the key is in the URL's #mpk= fragment.
+	Seal *core.PlaylistSeal
 	// IsLive only affects logging here.
 	IsLive bool
 	// MaxSegments is the pre-fetch target. 0 disables pre-buffering entirely.

@@ -141,9 +141,9 @@ func TestResetAll_ClearsFileAndInMemoryData(t *testing.T) {
 		t.Errorf("expected server_port to be cleared, got %q", got)
 	}
 
-	raw, err := os.ReadFile(configPath)
+	raw, err := os.ReadFile(configFile())
 	if err != nil {
-		t.Fatalf("ReadFile(configPath): %v", err)
+		t.Fatalf("ReadFile(configFile()): %v", err)
 	}
 	var onDisk map[string]any
 	if err := json.Unmarshal(raw, &onDisk); err != nil {
@@ -159,7 +159,7 @@ func TestResetAll_ClearsFileAndInMemoryData(t *testing.T) {
 func TestSaveInternal_RefusesToOverwriteCorruptConfig(t *testing.T) {
 	withTempSettings(t)
 	corrupt := []byte(`{"master_admin_hash": "x",`)
-	if err := os.WriteFile(configPath, corrupt, 0o600); err != nil {
+	if err := os.WriteFile(configFile(), corrupt, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s := &SettingsManager{data: map[string]any{}}
@@ -170,7 +170,7 @@ func TestSaveInternal_RefusesToOverwriteCorruptConfig(t *testing.T) {
 	if err := s.SaveInternal(map[string]any{"k": "v"}); err == nil {
 		t.Fatal("SaveInternal overwrote a corrupt config.json")
 	}
-	got, _ := os.ReadFile(configPath)
+	got, _ := os.ReadFile(configFile())
 	if string(got) != string(corrupt) {
 		t.Fatalf("config.json changed: %q", got)
 	}

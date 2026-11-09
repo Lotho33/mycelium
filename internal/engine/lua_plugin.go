@@ -37,6 +37,10 @@ type LuaManifest struct {
 	Author      string `yaml:"author"`
 	Description string `yaml:"description"`
 	Icon        string `yaml:"icon"`
+	// MinCore is the oldest core version the plugin works with ("1.9.0").
+	// Optional: a core older than that refuses to load it, with a clear
+	// error, instead of failing later on an SDK call it doesn't have.
+	MinCore string `yaml:"min_core"`
 	// PoolSize controls how many concurrent Lua VMs are kept for this plugin.
 	// Defaults to 2. Increase only for plugins with high parallel traffic.
 	PoolSize int `yaml:"pool_size"`
@@ -57,6 +61,11 @@ type LuaManifest struct {
 	Segments struct {
 		Unwrap []core.SegmentUnwrap `yaml:"unwrap"`
 	} `yaml:"segments"`
+	// Playlist: how the source seals its media playlists' segment URIs, for
+	// the HLS proxy (see core.PlaylistSeal). An invalid rule is dropped at load.
+	Playlist struct {
+		SealedURIs *core.PlaylistSeal `yaml:"sealed_uris"`
+	} `yaml:"playlist"`
 	// WarmResolve declares that resolve_stream caches its result, so running it
 	// ahead of Play (MediaPipeline.WarmStream) makes the Play itself instant.
 	// It also adds a synthetic "warm_resolve" setting (on by default). Without
@@ -586,6 +595,9 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	}
 	if mf.ID == "" {
 		return fmt.Errorf("manifest.yaml missing 'id' in %s", dir)
+	}
+	if err := CheckMinCore(mf); err != nil {
+		return err
 	}
 	if _, pc := m.proxy(); !mf.DirectEgress && pc == nil {
 		log.Printf("[lua] plugin %s routes through the VPN by default but no VPN proxy is configured — its network calls will fail closed until one is set (or add direct_egress: true to its manifest)", mf.ID)
@@ -1124,88 +1136,17 @@ func (p *LuaPlugin) logCall(fnName string, class callClass, wait, exec time.Dura
 		wait.Round(time.Millisecond), exec.Round(time.Millisecond), free, size)
 }
 
-// CallEntrypoint calls a named entrypoint (by manifest key OR by Lua function name directly).
+// CallEntrypoint calls a named entrypoint (by manifest key OR by Lua function
+// name directly) as background work: cron tasks and manual runs, capped so
+// they can't hold every LState.
 func (m *LuaPluginManager) CallEntrypoint(pluginID, ep string, args map[string]any, profileID string) (any, error) {
-	m.mu.RLock()
-	p, ok := m.plugins[pluginID]
-	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrPluginNotLoaded, pluginID)
-	}
-
-	// Resolve entrypoint alias from manifest, fall back to direct function name.
-	fnName := ep
-	if alias, ok := p.Manifest.Entrypoints[ep]; ok {
-		fnName = alias
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), entrypointTimeout(p.Manifest, ep, fnName))
-	defer cancel()
-
-	// Cron tasks and manual runs: background work, capped so it can't hold
-	// every LState.
-	const class = classBackground
-	L, release, done, wait, err := acquireForCall(ctx, p, class)
+	var out any
+	err := m.runEntrypoint(context.Background(), pluginID, ep, args, profileID, nil, classBackground, 0,
+		func(ret lua.LValue) { out = luaToGo(ret) })
 	if err != nil {
-		p.logCall(fnName, class, wait, 0, "busy")
-		return nil, fmt.Errorf("plugin %q: pool acquire: %w", pluginID, err)
+		return nil, err
 	}
-	defer done()
-	execStart := time.Now()
-	outcome := "ok"
-	defer func() { p.logCall(fnName, class, wait, time.Since(execStart), outcome) }()
-	// Return L to the pool only when the call finished within ctx: after a
-	// timeout the abandoned goroutine may still use it (and its scope), so it
-	// is discarded instead (LuaPool.DiscardAndReplace).
-	released := false
-	sc := scopeOf(L)
-	defer func() {
-		if !released {
-			// Strip globals the call leaked and reset the per-call scope before the
-			// state goes back: its next user can be another profile.
-			sc.resetNewGlobals(L)
-			sc.reset()
-			release()
-		}
-	}()
-
-	// Per-call state lives in the LState's callScope, read live by the SDK
-	// closures. requireProxy is forced for a video-flow entrypoint of a
-	// VPN-optional plugin.
-	scReqProxy, scProxyURL := m.pluginCallProxy(pluginID, ep)
-	sc.set(ctx, profileID, scReqProxy, scProxyURL, nil)
-
-	fn := L.GetGlobal(fnName)
-	if fn == lua.LNil {
-		return nil, fmt.Errorf("plugin %q: function %q not defined", pluginID, fnName)
-	}
-
-	luaArgs := mapToLuaTable(L, args)
-
-	callErr, timedOut := callWithTimeout(ctx, L, fn, luaArgs)
-	if timedOut {
-		outcome = "timeout"
-		p.Pool.DiscardAndReplace(L)
-		p.recordDiscard()
-		released = true
-		return nil, fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
-	}
-	if callErr != nil {
-		outcome = "error"
-		return nil, fmt.Errorf("plugin %q %s: %w", pluginID, fnName, callErr)
-	}
-
-	// Lua convention: return value, err_string
-	errVal := L.Get(-1)
-	ret := L.Get(-2)
-	L.Pop(2)
-
-	if errVal != lua.LNil {
-		if errStr, ok := errVal.(lua.LString); ok && string(errStr) != "" {
-			return nil, &PluginError{PluginID: pluginID, Fn: fnName, Msg: string(errStr)}
-		}
-	}
-	return luaToGo(ret), nil
+	return out, nil
 }
 
 // CallEntrypointJSON is like CallEntrypoint but serialises the Lua return
@@ -1250,14 +1191,46 @@ func (m *LuaPluginManager) CallEntrypointJSONWithProgressCtx(ctx context.Context
 	return m.callEntrypointJSON(ctx, pluginID, ep, args, profileID, onProgress, false, 0)
 }
 
-// callEntrypointJSON runs one entrypoint. acquireWait > 0 caps the wait for
-// a free state (ErrPluginBusy past it); 0 waits as the class does.
+// callEntrypointJSON runs one entrypoint and serialises its result to JSON.
+// acquireWait > 0 caps the wait for a free state (ErrPluginBusy past it); 0
+// waits as the class does.
 func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, background bool, acquireWait time.Duration) (json.RawMessage, error) {
+	class := classOf(ep)
+	if background {
+		class = classBackground
+	}
+	var out json.RawMessage
+	err := m.runEntrypoint(parent, pluginID, ep, args, profileID, onProgress, class, acquireWait,
+		func(ret lua.LValue) {
+			if ret == lua.LNil {
+				out = json.RawMessage("null")
+				return
+			}
+			var buf bytes.Buffer
+			luaValueToJSON(&buf, ret)
+			out = buf.Bytes()
+		})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// runEntrypoint is the one path every plugin call takes: borrow a state for
+// class, run the function bounded by the entrypoint's timeout, and hand its
+// first return value to convert while the state is still held. The Lua
+// convention is `return value, err_string`; a non-empty err_string becomes a
+// *PluginError.
+//
+// After a timeout the abandoned goroutine may still run on the state (and
+// read its scope), so the state is discarded and replaced instead of being
+// returned to the pool.
+func (m *LuaPluginManager) runEntrypoint(parent context.Context, pluginID, ep string, args map[string]any, profileID string, onProgress ProgressFunc, class callClass, acquireWait time.Duration, convert func(lua.LValue)) error {
 	m.mu.RLock()
 	p, ok := m.plugins[pluginID]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrPluginNotLoaded, pluginID)
+		return fmt.Errorf("%w: %q", ErrPluginNotLoaded, pluginID)
 	}
 
 	fnName := ep
@@ -1268,10 +1241,6 @@ func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, 
 	ctx, cancel := context.WithTimeout(parent, entrypointTimeout(p.Manifest, ep, fnName))
 	defer cancel()
 
-	class := classOf(ep)
-	if background {
-		class = classBackground
-	}
 	acqCtx := ctx
 	if acquireWait > 0 {
 		var acqCancel context.CancelFunc
@@ -1282,16 +1251,15 @@ func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, 
 	if err != nil {
 		p.logCall(fnName, class, wait, 0, "busy")
 		if acquireWait > 0 && ctx.Err() == nil {
-			return nil, fmt.Errorf("plugin %q: %w: nessuno stato Lua libero entro %s", pluginID, ErrPluginBusy, acquireWait)
+			return fmt.Errorf("plugin %q: %w: nessuno stato Lua libero entro %s", pluginID, ErrPluginBusy, acquireWait)
 		}
-		return nil, fmt.Errorf("plugin %q: pool acquire: %w", pluginID, err)
+		return fmt.Errorf("plugin %q: pool acquire: %w", pluginID, err)
 	}
 	defer done()
 	execStart := time.Now()
 	outcome := "ok"
 	defer func() { p.logCall(fnName, class, wait, time.Since(execStart), outcome) }()
-	// On timeout L may still be in use by the abandoned goroutine: discard it
-	// instead of returning it (and skip scope.reset()).
+
 	released := false
 	sc := scopeOf(L)
 	defer func() {
@@ -1305,42 +1273,39 @@ func (m *LuaPluginManager) callEntrypointJSON(parent context.Context, pluginID, 
 	}()
 
 	// Per-call state goes into the LState's callScope, read live by the SDK.
+	// requireProxy is forced for a video-flow entrypoint of a VPN-optional
+	// plugin.
 	scReqProxy, scProxyURL := m.pluginCallProxy(pluginID, ep)
 	sc.set(ctx, profileID, scReqProxy, scProxyURL, onProgress)
 
 	fn := L.GetGlobal(fnName)
 	if fn == lua.LNil {
-		return nil, fmt.Errorf("plugin %q: function %q not defined", pluginID, fnName)
+		return fmt.Errorf("plugin %q: function %q not defined", pluginID, fnName)
 	}
 
 	callErr, timedOut := callWithTimeout(ctx, L, fn, mapToLuaTable(L, args))
 	if timedOut {
 		outcome = "timeout"
-		p.Pool.DiscardAndReplace(L)
-		p.recordDiscard()
 		released = true
-		return nil, fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
+		p.recordDiscard()
+		// Rebuilding the state re-runs init.lua and every module: off the
+		// caller's path, which has already waited out the whole timeout.
+		core.SafeGo("lua/discard-replace", func() { p.Pool.DiscardAndReplace(L) })
+		return fmt.Errorf("plugin %q %s: %w, esecuzione abbandonata", pluginID, fnName, ErrPluginTimeout)
 	}
 	if callErr != nil {
 		outcome = "error"
-		return nil, fmt.Errorf("plugin %q %s: %w", pluginID, fnName, callErr)
+		return fmt.Errorf("plugin %q %s: %w", pluginID, fnName, callErr)
 	}
 
 	errVal := L.Get(-1)
 	ret := L.Get(-2)
 	L.Pop(2)
-
-	if errVal != lua.LNil {
-		if errStr, ok := errVal.(lua.LString); ok && string(errStr) != "" {
-			return nil, &PluginError{PluginID: pluginID, Fn: fnName, Msg: string(errStr)}
-		}
+	if errStr, ok := errVal.(lua.LString); ok && string(errStr) != "" {
+		return &PluginError{PluginID: pluginID, Fn: fnName, Msg: string(errStr)}
 	}
-	if ret == lua.LNil {
-		return json.RawMessage("null"), nil
-	}
-	var buf bytes.Buffer
-	luaValueToJSON(&buf, ret)
-	return buf.Bytes(), nil
+	convert(ret)
+	return nil
 }
 
 // luaValueToJSON serialises a Lua value straight to JSON.
@@ -1669,6 +1634,22 @@ var pluginIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
 // rendered into the dashboard and becomes part of a setting key.
 var settingIDPattern = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 
+// CheckMinCore fails when the running core is older than the plugin's
+// min_core. A development build (a version that doesn't parse) passes.
+func CheckMinCore(mf LuaManifest) error {
+	want := strings.TrimSpace(mf.MinCore)
+	if want == "" || !core.IsComparableVersion(core.Version) {
+		return nil
+	}
+	if !core.IsComparableVersion(want) {
+		return fmt.Errorf("plugin %s: min_core %q non è una versione valida (es. \"1.9.0\")", mf.ID, mf.MinCore)
+	}
+	if core.IsNewerVersion(want, core.Version) {
+		return fmt.Errorf("plugin %s richiede mycelium %s o successivo (in uso: %s): aggiorna il server", mf.ID, want, core.Version)
+	}
+	return nil
+}
+
 func readLuaManifest(dir string) (LuaManifest, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
 	if err != nil {
@@ -1694,6 +1675,12 @@ func readLuaManifest(dir string) (LuaManifest, error) {
 		mf.Segments.Unwrap, problems = core.ValidSegmentUnwraps(mf.Segments.Unwrap)
 		for _, p := range problems {
 			log.Printf("[lua] plugin %s: %s (regola ignorata)", mf.ID, p)
+		}
+	}
+	if seal := mf.Playlist.SealedURIs; seal != nil {
+		if err := seal.Validate(); err != nil {
+			log.Printf("[lua] plugin %s: playlist.sealed_uris: %v (regola ignorata)", mf.ID, err)
+			mf.Playlist.SealedURIs = nil
 		}
 	}
 	if mf.VPNOptional && mf.DirectEgress {
@@ -1860,6 +1847,21 @@ func (m *LuaPluginManager) SegmentUnwrap(pluginID string) []core.SegmentUnwrap {
 		return nil
 	}
 	return p.Manifest.Segments.Unwrap
+}
+
+// PlaylistSeal returns pluginID's sealed-playlist rule (nil for none or an
+// unknown plugin).
+func (m *LuaPluginManager) PlaylistSeal(pluginID string) *core.PlaylistSeal {
+	if m == nil || pluginID == "" {
+		return nil
+	}
+	m.mu.RLock()
+	p, ok := m.plugins[pluginID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return p.Manifest.Playlist.SealedURIs
 }
 
 func fileMod(path string) time.Time {

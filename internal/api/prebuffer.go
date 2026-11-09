@@ -119,12 +119,19 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 	managers.Segments.Put(rawURL, topBody)
 
 	mediaURL, mediaBody := rawURL, topBody
+	sealFrag := ""
+	if opts.Seal != nil {
+		sealFrag = core.PlaylistSealFragment(rawURL)
+	}
 	if isMasterPlaylist(topBody) {
 		variantURL := bestVariant(rawURL, topBody)
 		if variantURL == "" {
 			res.Err = errors.New("master playlist: no variant")
 			return res
 		}
+		// The proxy names the variant the same way (proxy.go: sealFrag), so
+		// the warm copy is found under the same key.
+		variantURL += sealFrag
 		vb, verr := fetchBody(ctx, plClient, variantURL, opts, playlistReadLimit)
 		if verr != nil {
 			res.Err = fmt.Errorf("variant fetch: %w", verr)
@@ -145,6 +152,13 @@ func prefetchHLSHead(ctx context.Context, rawURL string, opts managers.PrefetchO
 		// Range, which bypasses the warm cache — fetching whole files here
 		// (once per segment line) would only waste the line.
 		return res
+	}
+	if opts.Seal != nil {
+		if key := core.PlaylistSealKey(rawURL); key != nil {
+			if out, ok, err := core.UnsealPlaylist(mediaBody, key, *opts.Seal); err == nil && ok {
+				mediaBody = out // only for the segment list: the warm copy stays as fetched
+			}
+		}
 	}
 	targets := segmentURLs(mediaURL, mediaBody, opts.MaxSegments, start)
 	encrypted := playlistEncrypted(mediaBody)

@@ -1,601 +1,437 @@
 <!DOCTYPE html>
-<html lang="it" class="dark">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#0a0d12">
-    <title>Mycelium Admin</title>
-    <link rel="icon" href="/static/icon-192.png">
-    <link rel="stylesheet" href="/static/tailwind.css">
-    <style>
-        :root { --card-bg: #141820; --card-border: #1e2530; --panel-bg: #0d1017; --accent: #7c6af7; }
-        html, body { background: #0a0d12; -webkit-tap-highlight-color: transparent; }
-        .card { background: var(--card-bg); border-color: var(--card-border); }
-        .panel { background: var(--panel-bg); }
-        .code-editor {
-            font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
-            font-size: 12px; line-height: 1.6; tab-size: 4;
-            background: #060810; color: #c9d1d9;
-            border: 1px solid #1e2530; border-radius: 8px;
-            resize: vertical; min-height: 320px; width: 100%;
-            padding: 12px 16px; outline: none;
-        }
-        .code-editor:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
-        .log-line { display: block; }
-        .spinner { border: 2px solid #1e2530; border-top-color: #38bdf8; border-radius: 50%;
-                   width: 14px; height: 14px; animation: spin .6s linear infinite; display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .pulse-dot { animation: pdot 1.4s ease-in-out infinite; }
-        @keyframes pdot { 0%,100%{opacity:1} 50%{opacity:.3} }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #3a4050; }
-        /* Drawer: off-canvas on mobile, docked on desktop */
-        #sidebar { transition: transform .25s ease; }
-        @supports (padding: env(safe-area-inset-top)) {
-            .safe-t { padding-top: env(safe-area-inset-top); }
-            .safe-b { padding-bottom: env(safe-area-inset-bottom); }
-            .safe-l { padding-left: env(safe-area-inset-left); }
-        }
-        .nav-item { display:flex; align-items:center; gap:.75rem; width:100%; padding:.7rem .85rem;
-                    border-radius:.6rem; font-size:.875rem; font-weight:600; color:#9ca3af;
-                    transition:background .15s, color .15s; text-align:left; }
-        .nav-item:hover { background:#1a1f2b; color:#e5e7eb; }
-        .nav-item.active { background:rgba(124,106,247,.14); color:#c7bdff; }
-        .nav-item svg { width:18px; height:18px; flex-shrink:0; }
-    </style>
+    <meta name="theme-color" content="#0b0d12">
+    <meta name="color-scheme" content="dark">
+    <title>Mycelium</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/admin.css">
 </head>
-<body class="text-gray-200 font-sans antialiased min-h-screen lg:pl-64">
+<body>
 
-<!-- ── Toast (z above modals) ── -->
-<div id="toast-container" class="fixed top-4 right-4 z-[80] space-y-2 max-w-[calc(100vw-2rem)] sm:max-w-xs"></div>
+<!-- Icon sprite: <svg class="i"><use href="#i-name"/></svg> -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+        <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
+        <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5"/></symbol>
+        <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+        <symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+        <symbol id="i-device" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+        <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+        <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></symbol>
+        <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></symbol>
+        <symbol id="i-phone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></symbol>
+        <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+        <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+        <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+        <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
+        <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+        <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></symbol>
+        <symbol id="i-code" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+        <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4-4L14 6l7 7-8 8zM10 21h11M9 11l7 7"/></symbol>
+        <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+        <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+        <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+        <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+        <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+        <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></symbol>
+        <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+        <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+        <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+        <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></symbol>
+        <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
+        <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+        <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></symbol>
+        <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/></symbol>
+    </defs>
+</svg>
 
-<!-- ── Install overlay ── -->
-<div id="install-overlay" class="hidden fixed inset-0 bg-black/70 z-[70] flex flex-col items-center justify-center gap-3 backdrop-blur-sm">
-    <div class="w-10 h-10 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
-    <p class="text-white font-semibold">Installazione in corso…</p>
-    <p class="text-gray-400 text-sm">Non chiudere la pagina</p>
-</div>
-
-<!-- ════════════════ NAV BACKDROP (mobile) ════════════════ -->
-<div id="nav-backdrop" onclick="closeNav()"
-     class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"></div>
-
-<!-- ════════════════ SIDE DRAWER ════════════════ -->
-<aside id="sidebar"
-       class="fixed inset-y-0 left-0 w-64 z-50 -translate-x-full lg:translate-x-0
-              flex flex-col border-r border-gray-800 bg-[#0d1017] safe-t safe-b safe-l">
-
-    <div class="flex items-center gap-2.5 px-4 py-4 border-b border-gray-800">
-        <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-             style="background:linear-gradient(135deg,#7c6af7,#5a4fd4)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
-                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-            </svg>
-        </div>
-        <div class="leading-tight">
-            <div class="text-sm font-bold text-white">Mycelium</div>
-            <div class="text-[11px] text-gray-500">Admin Node</div>
-        </div>
-        <button onclick="closeNav()" class="ml-auto lg:hidden text-gray-500 hover:text-white p-1" aria-label="Chiudi menu">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        </button>
-    </div>
-
-    <nav class="flex-1 overflow-y-auto px-2.5 py-3 space-y-1">
-        <button class="nav-item active" id="nav-btn-devices" onclick="switchTab('devices')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/></svg>
-            Dispositivi
-        </button>
-        <button class="nav-item" id="nav-btn-plugins" onclick="switchTab('plugins')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6M6 15v6M18 3v6M18 15v6M6 9a3 3 0 0 0 0 6M18 9a3 3 0 0 1 0 6"/></svg>
-            Plugin
-        </button>
-        <button class="nav-item" id="nav-btn-users" onclick="switchTab('users')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            Utenti
-        </button>
-        <button class="nav-item" id="nav-btn-offline" onclick="switchTab('offline')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Download offline
-        </button>
-        <button class="nav-item" id="nav-btn-vpn" onclick="switchTab('vpn')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            Rete
-        </button>
-        <button class="nav-item" id="nav-btn-settings" onclick="switchTab('settings')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.31.22.65.22 1s-.08.69-.22 1z"/></svg>
-            Impostazioni
-        </button>
-        <button class="nav-item" id="nav-btn-logs" onclick="switchTab('logs')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-            Log di Sistema
-        </button>
-
-        <div class="pt-2 mt-2 border-t border-gray-800/70"></div>
-
-        <button class="nav-item" id="nav-btn-download" onclick="switchTab('download')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>
-            iOS / macOS
-        </button>
-    </nav>
-
-    <!-- Server resources, on every page (pollResources). -->
-    <div class="px-4 py-2.5 border-t border-gray-800 grid grid-cols-3 gap-2 text-[11px] font-mono text-gray-500">
-        <div>CPU<div id="side-cpu" class="text-gray-300">—</div></div>
-        <div>RAM<div id="side-mem" class="text-gray-300">—</div></div>
-        <div>Uptime<div id="side-uptime" class="text-gray-300">—</div></div>
-    </div>
-
-    <div class="px-2.5 py-3 border-t border-gray-800">
-        <button onclick="logout()" class="nav-item">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-            Esci
-        </button>
-    </div>
-</aside>
-
-<!-- ════════════════ TOP BAR (mobile) ════════════════ -->
-<header class="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-3 py-2.5 border-b border-gray-800 bg-[#0a0d12]/95 backdrop-blur safe-t">
-    <button onclick="openNav()" class="p-2 -ml-1 text-gray-300 hover:text-white" aria-label="Apri menu">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-    </button>
-    <span id="topbar-title" class="text-sm font-bold text-white">Dispositivi</span>
-    <div class="ml-auto flex items-center gap-3 text-[11px] font-mono text-gray-500">
-        <span>CPU <span id="top-cpu" class="text-gray-300">—</span></span>
-        <span>RAM <span id="top-mem" class="text-gray-300">—</span></span>
-    </div>
-</header>
-
-<!-- ════════════════ MAIN CONTENT ════════════════ -->
-<main class="px-3 sm:px-6 py-4 sm:py-6 max-w-5xl mx-auto">
-
-    <!-- ════════════════ TAB: PLUGIN ════════════════ -->
-    <div id="tab-plugins" class="hidden">
-        <!-- Server status -->
-        <div class="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs font-mono text-gray-500 mb-4 pb-3 border-b border-gray-800/60">
-            <span>mycelium <span class="text-gray-300">v<span id="ov-core-version">—</span></span></span>
-            <span id="update-banner" class="hidden flex items-center gap-2">
-                <span class="text-amber-400">↑ <span id="update-version"></span></span>
-                <button onclick="triggerCoreUpdate()" id="update-btn"
-                    class="bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 text-[10px] px-2 py-0.5 rounded transition font-bold">Aggiorna</button>
-            </span>
-            <span>CPU <span id="agg-cpu" class="text-gray-300">—</span></span>
-            <span>RAM <span id="agg-mem" class="text-gray-300">—</span></span>
-            <span>Uptime <span id="agg-uptime" class="text-gray-300">—</span></span>
-        </div>
-
-        <div class="flex items-center gap-2 mb-4">
-            <h2 class="hidden lg:block text-lg font-bold text-white">Plugin</h2>
-            <button onclick="loadPlugins()" class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Aggiorna</button>
-        </div>
-
-        <!-- Upload bar -->
-        <div class="card border rounded-xl p-4 mb-5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <input type="file" id="lua_plugin_input" accept=".zip" class="hidden">
-            <label for="lua_plugin_input"
-                class="flex-1 border border-dashed border-gray-700 hover:border-sky-600 text-gray-500 hover:text-sky-400
-                       text-sm px-4 py-2.5 rounded-lg cursor-pointer transition text-center font-mono"
-                id="lua_plugin_label">
-                Scegli plugin .zip …
-            </label>
-            <button onclick="uploadLuaPlugin()" id="lua_upload_btn" disabled
-                class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
-                       text-white text-sm px-5 py-2.5 rounded-lg font-semibold transition whitespace-nowrap">
-                Installa
-            </button>
-        </div>
-
-        <!-- Plugin list -->
-        <div id="plugins-container" class="space-y-2">
-            <div class="animate-pulse space-y-2">
-                <div class="h-14 bg-gray-800/50 rounded-xl border border-gray-800"></div>
-                <div class="h-14 bg-gray-800/30 rounded-xl border border-gray-800 opacity-60"></div>
+<div class="app">
+    <!-- ── Sidebar: navigation only ── -->
+    <aside class="sidebar" id="sidebar" aria-label="Navigazione">
+        <div class="brand">
+            <img src="/static/logo.svg" alt="" width="34" height="34">
+            <div>
+                <div class="brand-name">Mycelium</div>
+                <div class="brand-sub" id="brand-version" data-dyn>&nbsp;</div>
             </div>
+            <button class="icon-btn only-mobile" data-nav-close aria-label="Chiudi menu"><svg class="i"><use href="#i-x"/></svg></button>
         </div>
 
-        <!-- Memory profile (on demand: it borrows every plugin's Lua states) -->
-        <div class="card border rounded-xl p-4 mt-5">
-            <div class="flex items-center gap-2 mb-2">
-                <h3 class="text-sm font-bold text-white">Memoria dei plugin</h3>
-                <span class="text-[10px] text-gray-500">stima per VM Lua</span>
-                <button onclick="loadPluginMemory()" id="mem-profile-btn"
-                    class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Misura</button>
-            </div>
-            <div id="mem-profile" class="text-xs text-gray-500">
-                Stima la RAM che ogni plugin tiene nelle sue VM Lua (ogni VM del pool ha la sua copia dei dati) e quali tabelle la occupano. Blocca i plugin per qualche istante.
-            </div>
-        </div>
-    </div>
+        <nav class="nav">
+            <a href="#/" data-nav="overview"><svg class="i"><use href="#i-home"/></svg>Panoramica</a>
 
-    <!-- ════════════════ TAB: DEVICES ════════════════ -->
-    <div id="tab-devices">
-        <div class="flex items-center flex-wrap gap-3 mb-4">
-            <h2 class="hidden lg:block text-lg font-bold text-white">Dispositivi</h2>
+            <div class="nav-group">Contenuti</div>
+            <a href="#/plugins" data-nav="plugins"><svg class="i"><use href="#i-plug"/></svg>Plugin<span class="nav-badge" id="nav-badge-plugins" hidden></span></a>
+            <a href="#/downloads" data-nav="downloads"><svg class="i"><use href="#i-download"/></svg>Download offline</a>
 
-            <!-- Pair a Pileus device -->
-            <div class="w-full lg:w-auto lg:ml-auto">
-                <div id="pairing-idle">
-                    <button onclick="generatePairingCode()"
-                        class="w-full lg:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-full
-                               text-sm font-semibold bg-emerald-900/40 hover:bg-emerald-900/70 text-emerald-300 transition">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg>
-                        Abbina un dispositivo
-                    </button>
-                </div>
-                <div id="pairing-active" class="hidden flex w-full lg:w-auto items-center justify-center flex-wrap gap-x-3 gap-y-1
-                            px-4 py-2 rounded-full panel border border-gray-800">
-                    <span id="pairing-code" class="text-xl font-mono font-bold text-white tracking-[0.25em]">——————</span>
-                    <span id="pairing-countdown" class="text-[11px] text-gray-500">—</span>
-                    <button onclick="generatePairingCode()"
-                        class="text-[11px] text-gray-500 hover:text-gray-300 transition">Rigenera</button>
-                </div>
-                <div id="pairing-done" class="hidden flex w-full lg:w-auto items-center justify-center gap-2
-                            px-4 py-2.5 rounded-full text-sm font-semibold bg-emerald-900/30 text-emerald-400">
-                    Dispositivo accoppiato
+            <div class="nav-group">Persone</div>
+            <a href="#/profiles" data-nav="profiles"><svg class="i"><use href="#i-users"/></svg>Profili</a>
+            <a href="#/devices" data-nav="devices"><svg class="i"><use href="#i-device"/></svg>Dispositivi</a>
+            <a href="#/apps" data-nav="apps"><svg class="i"><use href="#i-phone"/></svg>App Pileus</a>
+
+            <div class="nav-group">Server</div>
+            <a href="#/network" data-nav="network"><svg class="i"><use href="#i-globe"/></svg>Rete</a>
+            <a href="#/system" data-nav="system"><svg class="i"><use href="#i-server"/></svg>Sistema<span class="nav-dot" id="nav-dot-update" hidden title="Aggiornamento disponibile"></span></a>
+            <a href="#/logs" data-nav="logs"><svg class="i"><use href="#i-terminal"/></svg>Log</a>
+        </nav>
+
+        <div class="nav-foot">
+            <div class="lang-row">
+                <span>Lingua</span>
+                <div class="segmented" role="group" aria-label="Lingua">
+                    <button data-lang="en">EN</button>
+                    <button data-lang="it">IT</button>
                 </div>
             </div>
+            <button class="nav-btn" data-action="tour"><svg class="i"><use href="#i-help"/></svg>Guida</button>
+            <button class="nav-btn" data-action="logout"><svg class="i"><use href="#i-logout"/></svg>Esci</button>
         </div>
+    </aside>
+    <div class="backdrop" data-nav-close></div>
 
-        <!-- Paired Pileus devices -->
-        <div class="card border rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-3">
-                <span class="text-sm font-semibold text-white">Dispositivi Pileus</span>
-                <button onclick="loadPileusDevices()" class="text-[11px] text-gray-500 hover:text-gray-300 transition ml-auto">Aggiorna</button>
-            </div>
-            <p class="text-[11px] text-gray-600 mb-2">Revocare un dispositivo invalida subito i suoi token (il player dovrà ri-abbinarsi). I profili restano.</p>
-            <div id="pileus-devices" class="text-xs text-gray-400">—</div>
-        </div>
-    </div>
+    <!-- ── Main ── -->
+    <div class="main">
+        <header class="topbar only-mobile">
+            <button class="icon-btn" data-nav-open aria-label="Apri menu"><svg class="i"><use href="#i-menu"/></svg></button>
+            <img src="/static/logo.svg" alt="" width="24" height="24">
+            <span class="topbar-title" id="topbar-title" data-dyn>Mycelium</span>
+        </header>
 
-    <!-- ════════════════ TAB: USERS ════════════════ -->
-    <div id="tab-users" class="hidden">
-        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Utenti</h2>
+        <main class="content" id="content">
 
-        <div class="card border rounded-xl p-4 mb-4">
-            <span class="text-sm font-semibold text-white">Nuovo profilo</span>
-            <p class="text-[11px] text-gray-600 mt-1 mb-3">Condiviso tra tutti i dispositivi accoppiati — non serve crearlo da ogni dispositivo separatamente.</p>
-            <div class="flex items-center gap-3 flex-wrap">
-                <input id="new-profile-name" type="text" placeholder="Nome"
-                    class="flex-1 min-w-[160px] bg-[#0d1017] border border-gray-800 rounded-lg px-3 py-2 text-sm text-white
-                           focus:outline-none focus:border-[#7c6af7]">
-                <button onclick="createPileusProfile()"
-                    class="bg-sky-600 hover:bg-sky-500 text-white text-sm px-4 py-2 rounded-lg font-semibold transition">
-                    Crea
-                </button>
-            </div>
-        </div>
+            <!-- ═══ Panoramica ═══ -->
+            <section class="page" data-page="overview" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>Panoramica</h1>
+                        <p class="lead">Lo stato del server a colpo d'occhio.</p>
+                    </div>
+                </div>
+                <div id="ov-attention" data-dyn></div>
+                <div class="grid grid-3">
+                    <div class="card stat">
+                        <div class="stat-label"><svg class="i"><use href="#i-cpu"/></svg>CPU</div>
+                        <div class="stat-value" id="ov-cpu" data-dyn>—</div>
+                        <svg class="spark" id="ov-cpu-spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg>
+                    </div>
+                    <div class="card stat">
+                        <div class="stat-label"><svg class="i"><use href="#i-server"/></svg>Memoria</div>
+                        <div class="stat-value" id="ov-mem" data-dyn>—</div>
+                        <svg class="spark" id="ov-mem-spark" viewBox="0 0 120 32" preserveAspectRatio="none"></svg>
+                    </div>
+                    <div class="card stat">
+                        <div class="stat-label"><svg class="i"><use href="#i-clock"/></svg>Attivo da</div>
+                        <div class="stat-value" id="ov-uptime" data-dyn>—</div>
+                        <div class="stat-foot" id="ov-version" data-dyn>—</div>
+                    </div>
+                </div>
+                <div class="grid grid-2">
+                    <a class="card card-link" href="#/plugins">
+                        <div class="card-h"><h2>Plugin</h2><svg class="i muted"><use href="#i-chevron"/></svg></div>
+                        <div id="ov-plugins" data-dyn class="ov-body">—</div>
+                    </a>
+                    <a class="card card-link" href="#/devices">
+                        <div class="card-h"><h2>Dispositivi</h2><svg class="i muted"><use href="#i-chevron"/></svg></div>
+                        <div id="ov-devices" data-dyn class="ov-body">—</div>
+                    </a>
+                    <a class="card card-link" href="#/downloads">
+                        <div class="card-h"><h2>Download offline</h2><svg class="i muted"><use href="#i-chevron"/></svg></div>
+                        <div id="ov-downloads" data-dyn class="ov-body">—</div>
+                    </a>
+                    <a class="card card-link" href="#/system">
+                        <div class="card-h"><h2>Estrazione anticipata</h2><svg class="i muted"><use href="#i-chevron"/></svg></div>
+                        <div id="ov-warm" data-dyn class="ov-body">—</div>
+                    </a>
+                </div>
+            </section>
 
-        <div class="card border rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-3">
-                <span class="text-sm font-semibold text-white">Profili</span>
-                <button onclick="loadPileusProfiles()" class="text-[11px] text-gray-500 hover:text-gray-300 transition ml-auto">Aggiorna</button>
-            </div>
-            <div id="pileus-profiles" class="text-xs text-gray-400">—</div>
-        </div>
-    </div>
+            <!-- ═══ Plugin: elenco ═══ -->
+            <section class="page" data-page="plugins" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>Plugin</h1>
+                        <p class="lead">Le sorgenti dei contenuti. Apri un plugin per configurarlo, vederne il log o cambiarne l'uscita di rete.</p>
+                    </div>
+                    <button class="btn btn-primary" data-action="plugin-install"><svg class="i"><use href="#i-upload"/></svg>Installa plugin</button>
+                </div>
+                <div id="plugin-list" data-dyn class="plugin-groups"><div class="skeleton"></div><div class="skeleton"></div></div>
+                <p class="hint center" data-i18n-html>Puoi anche trascinare uno o più file <code>.zip</code> in questa pagina per installarli o aggiornarli.</p>
+            </section>
 
-    <!-- ════════════════ TAB: OFFLINE DOWNLOADS ════════════════ -->
-    <div id="tab-offline" class="hidden">
-        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Download offline</h2>
+            <!-- ═══ Plugin: dettaglio ═══ -->
+            <section class="page" data-page="plugin" hidden>
+                <a class="back" href="#/plugins"><svg class="i"><use href="#i-back"/></svg>Plugin</a>
+                <div id="plugin-head" data-dyn></div>
+                <div id="plugin-callouts" data-dyn></div>
+                <div class="tabs" id="plugin-tabs" data-dyn role="tablist">
+                    <a data-tab="settings">Impostazioni</a>
+                    <a data-tab="network">Rete</a>
+                    <a data-tab="tasks">Attività</a>
+                    <a data-tab="source">Aggiornamenti</a>
+                    <a data-tab="log">Log</a>
+                </div>
+                <div id="plugin-panel" data-dyn></div>
+            </section>
 
-        <div class="card border rounded-xl p-4 mb-4">
-            <span class="text-sm font-semibold text-white">Spazio</span>
-            <p class="text-[11px] text-gray-600 mt-1 mb-3">I download vengono preparati qui sul server e poi scaricati dai dispositivi. Pensato anche per memorie piccole (eMMC): un download parte solo se ci sta nella quota <em>e</em> lascia libero il margine indicato sul disco, e si ferma da solo se lo supera.</p>
-            <div id="dl-usage" class="text-xs text-gray-400 mb-3">—</div>
-            <div class="grid grid-cols-2 gap-3 text-xs">
-                <label class="flex flex-col gap-1 text-gray-500">Quota massima (GB)
-                    <input id="dl-quota" type="number" min="1" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
-                </label>
-                <label class="flex flex-col gap-1 text-gray-500">Spazio libero minimo sul disco (GB)
-                    <input id="dl-minfree" type="number" min="0" step="0.5" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
-                </label>
-                <label class="flex flex-col gap-1 text-gray-500">Elimina i file pronti dopo (giorni, 0 = mai)
-                    <input id="dl-retention" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
-                </label>
-                <label class="flex items-center gap-2 text-gray-400 mt-5">
-                    <input id="dl-enabled" type="checkbox" class="accent-sky-600" onchange="saveDownloadSettings()"> Download attivi
-                </label>
-            </div>
-        </div>
-
-        <div class="card border rounded-xl p-4 mb-4">
-            <span class="text-sm font-semibold text-white">Comportamento</span>
-            <div class="mt-3 space-y-3 text-xs">
-                <label class="flex items-start gap-2 text-gray-400">
-                    <input id="dl-pause" type="checkbox" class="accent-sky-600 mt-0.5" onchange="saveDownloadSettings()">
-                    <span>Metti in pausa i download mentre qualcuno sta guardando<span class="block text-[11px] text-gray-600">Ripartono da soli, dal punto raggiunto, quando nessuno guarda più: così non tolgono banda a chi è davanti alla TV.</span></span>
-                </label>
-                <label class="flex items-start gap-2 text-gray-400">
-                    <input id="dl-delete-fetched" type="checkbox" class="accent-sky-600 mt-0.5" onchange="saveDownloadSettings()">
-                    <span>Elimina dal server appena il dispositivo ha scaricato il file<span class="block text-[11px] text-gray-600">Risparmia spazio. Se lo stesso file serve anche a un altro profilo resta finché serve. Da una TV che guarda dal server non viene mai cancellato così.</span></span>
-                </label>
-                <label class="flex flex-col gap-1 text-gray-500 max-w-[220px]">Velocità massima di download (Mbit/s, 0 = nessun limite)
-                    <input id="dl-maxmbps" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveDownloadSettings()">
-                </label>
-                <label class="flex flex-col gap-1 text-gray-500 max-w-[320px]">Ritmo massimo rispetto alla riproduzione (volte, 0 = nessun limite)
-                    <input id="dl-pace" type="number" min="0" step="0.5" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200 max-w-[220px]" onchange="saveDownloadSettings()">
-                    <span class="text-[11px] text-gray-600">Il download procede come un player che riproduce a quella velocità: con 2 (consigliato) un episodio di 45 minuti si scarica in poco più di 22, video e audio insieme. Valori alti o 0 scaricano tutto il più in fretta possibile e possono superare i limiti di richieste delle sorgenti.</span>
-                </label>
-            </div>
-        </div>
-
-        <div class="card border rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-3">
-                <span class="text-sm font-semibold text-white">Download</span>
-                <button onclick="loadDownloadsAdmin()" class="text-[11px] text-gray-500 hover:text-gray-300 transition ml-auto">Aggiorna</button>
-            </div>
-            <div id="dl-list" class="text-xs text-gray-400">—</div>
-        </div>
-    </div>
-
-    <!-- ════════════════ TAB: SETTINGS ════════════════ -->
-    <div id="tab-settings" class="hidden">
-        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Impostazioni</h2>
-        <div class="space-y-4 max-w-2xl">
-
-            <!-- Security -->
-            <div class="card border rounded-xl p-4">
-                <span class="text-sm font-semibold text-white">Sicurezza</span>
-                <p class="text-[11px] text-gray-600 mt-1 mb-3">Cambia la password dell'account admin. Richiede la password attuale.</p>
-                <form onsubmit="changeAdminPassword(event)" class="space-y-2 max-w-sm">
-                    <input id="pw-current" type="password" placeholder="Password attuale" required autocomplete="current-password"
-                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
-                    <input id="pw-new" type="password" placeholder="Nuova password (min. 8 caratteri)" required minlength="8" autocomplete="new-password"
-                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
-                    <button type="submit"
-                        class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cambia password</button>
-                </form>
-            </div>
-
-            <!-- Warm resolve -->
-            <div class="card border rounded-xl p-4">
-                <span class="text-sm font-semibold text-white">Estrazione anticipata</span>
-                <p class="text-[11px] text-gray-600 mt-1 mb-3">Quando un dispositivo apre il dettaglio di un film o di un episodio, il server estrae lo stream in anticipo: al Play resta solo il buffering. Un'estrazione alla volta, mai mentre qualcuno sta avviando un video, mai due volte lo stesso titolo in 30 minuti. Per plugin si spegne dalle sue impostazioni.</p>
-                <div class="space-y-3 text-xs">
-                    <label class="flex items-start gap-2 text-gray-400">
-                        <input id="warm-enabled" type="checkbox" class="accent-sky-600 mt-0.5" onchange="saveWarmSettings()">
-                        <span>Attiva l'estrazione anticipata</span>
+            <!-- ═══ Download offline ═══ -->
+            <section class="page" data-page="downloads" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>Download offline</h1>
+                        <p class="lead">Il server prepara i file, poi i dispositivi li scaricano per guardarli senza rete.</p>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-h"><h2>Spazio</h2></div>
+                    <div id="dl-usage" data-dyn>—</div>
+                </div>
+                <div class="card">
+                    <div class="card-h"><h2>In corso e pronti</h2></div>
+                    <div id="dl-list" data-dyn class="list">—</div>
+                </div>
+                <form class="card" id="dl-settings" data-form="downloads">
+                    <div class="card-h"><h2>Impostazioni</h2></div>
+                    <label class="row-switch">
+                        <span><b>Download attivi</b><small>Spento, i dispositivi non possono chiedere nuovi download.</small></span>
+                        <input type="checkbox" class="switch" name="download_enabled">
                     </label>
-                    <label class="flex flex-col gap-1 text-gray-500 max-w-[220px]">Estrazioni anticipate all'ora, per plugin
-                        <input id="warm-per-hour" type="number" min="0" step="1" class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-gray-200" onchange="saveWarmSettings()">
+                    <div class="fields fields-2">
+                        <label class="field"><span>Quota massima</span><div class="input-unit"><input class="input" type="number" min="1" step="1" name="download_quota_gb"><em>GB</em></div><small>Spazio totale che i download possono occupare.</small></label>
+                        <label class="field"><span>Spazio libero da lasciare</span><div class="input-unit"><input class="input" type="number" min="0" step="0.5" name="download_min_free_gb"><em>GB</em></div><small>Un download parte solo se lascia almeno questo spazio libero sul disco, e si ferma se lo supera.</small></label>
+                        <label class="field"><span>Elimina i file pronti dopo</span><div class="input-unit"><input class="input" type="number" min="0" step="1" name="download_retention_days"><em>giorni</em></div><small>0 = non eliminarli mai.</small></label>
+                        <label class="field"><span>Velocità massima</span><div class="input-unit"><input class="input" type="number" min="0" step="1" name="download_max_mbps"><em>Mbit/s</em></div><small>0 = nessun limite.</small></label>
+                        <label class="field"><span>Ritmo rispetto alla riproduzione</span><div class="input-unit"><input class="input" type="number" min="0" step="0.5" name="download_pace"><em>×</em></div><small>Con 2 (consigliato) un episodio di 45 minuti si scarica in circa 22. 0 = il più in fretta possibile, ma rischia i limiti delle sorgenti.</small></label>
+                    </div>
+                    <label class="row-switch">
+                        <span><b>Pausa mentre qualcuno guarda</b><small>I download si fermano durante lo streaming e ripartono da dove erano.</small></span>
+                        <input type="checkbox" class="switch" name="download_pause_while_streaming">
+                    </label>
+                    <label class="row-switch">
+                        <span><b>Elimina dal server dopo lo scaricamento</b><small>Il file resta finché serve a un altro profilo; non vale per le TV che guardano dal server.</small></span>
+                        <input type="checkbox" class="switch" name="download_delete_after_fetch">
+                    </label>
+                    <div class="form-actions"><button type="button" class="btn btn-ghost" data-form-reset>Annulla</button><button type="submit" class="btn btn-primary">Salva</button></div>
+                </form>
+            </section>
+
+            <!-- ═══ Profili ═══ -->
+            <section class="page" data-page="profiles" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>Profili</h1>
+                        <p class="lead">Gli utenti di Pileus. Sono condivisi da tutti i dispositivi abbinati: ognuno ha la sua cronologia e le sue preferenze.</p>
+                    </div>
+                    <button class="btn btn-primary" data-action="profile-create"><svg class="i"><use href="#i-plus"/></svg>Nuovo profilo</button>
+                </div>
+                <div id="profile-list" data-dyn class="profile-grid">—</div>
+            </section>
+
+            <!-- ═══ Dispositivi ═══ -->
+            <section class="page" data-page="devices" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>Dispositivi</h1>
+                        <p class="lead">Le TV, i telefoni e i browser abbinati a questo server.</p>
+                    </div>
+                    <button class="btn btn-primary" data-action="pair"><svg class="i"><use href="#i-wifi"/></svg>Abbina un dispositivo</button>
+                </div>
+                <div class="card">
+                    <div id="device-list" data-dyn class="list">—</div>
+                </div>
+                <p class="hint">Revocare un dispositivo invalida subito il suo accesso: dovrà abbinarsi di nuovo. I profili non vengono toccati.</p>
+            </section>
+
+            <!-- ═══ App Pileus ═══ -->
+            <section class="page" data-page="apps" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>App Pileus</h1>
+                        <p class="lead">Come installare il player sui dispositivi Apple e tenere aggiornata la versione web.</p>
+                    </div>
+                </div>
+                <div class="grid grid-2">
+                    <div class="card">
+                        <div class="card-h"><h2>iPhone, iPad e Mac</h2></div>
+                        <ol class="steps">
+                            <li><span data-i18n-html>Apri <a id="apps-link" href="/app/">/app/</a> in <b>Safari</b>.</span></li>
+                            <li><span data-i18n-html>Tocca <b>Condividi</b> (il quadrato con la freccia).</span></li>
+                            <li><span data-i18n-html>Scegli <b>Aggiungi a schermata Home</b> (sul Mac: <b>Aggiungi al Dock</b>).</span></li>
+                            <li><span data-i18n-html>Conferma con <b>Aggiungi</b>: l'app parte a schermo intero.</span></li>
+                        </ol>
+                    </div>
+                    <form class="card" data-form="webapp">
+                        <div class="card-h"><h2>Versione web</h2><span class="pill" id="webapp-version" data-dyn>—</span></div>
+                        <p class="muted" data-i18n-html>Scarica l'ultima versione web di Pileus dalle release GitHub del repository indicato e la pubblica su <code>/app</code>. La versione precedente resta come copia di sicurezza.</p>
+                        <label class="field"><span>Repository GitHub</span><input class="input" name="pileus_web_repo" placeholder="proprietario/repo" autocomplete="off"><small>proprietario/repo oppure l'indirizzo del repository su GitHub.</small></label>
+                        <label class="row-switch">
+                            <span><b>Aggiorna automaticamente</b><small>Ogni 6 ore controlla se c'è una nuova release e la installa.</small></span>
+                            <input type="checkbox" class="switch" id="webapp-auto">
+                        </label>
+                        <p class="muted small" id="webapp-status" data-dyn></p>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-secondary">Salva repository</button>
+                            <button type="button" class="btn btn-primary" data-action="webapp-update" id="webapp-update-btn" disabled><svg class="i"><use href="#i-refresh"/></svg>Aggiorna adesso</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- ═══ Rete ═══ -->
+            <section class="page" data-page="network" hidden>
+                <div class="page-head">
+                    <div>
+                        <h1>Rete</h1>
+                        <p class="lead">Da dove escono le connessioni del server verso le sorgenti.</p>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-h">
+                        <div><h2>Uscite di rete</h2><p class="muted" data-i18n-html>Ogni plugin sceglie la sua uscita nella scheda <b>Rete</b> del plugin. <b>Diretta</b> usa l'IP del server.</p></div>
+                    </div>
+                    <div id="egress-list" data-dyn class="list">—</div>
+                    <div class="form-actions start">
+                        <button class="btn btn-secondary" data-action="egress-add-proxy"><svg class="i"><use href="#i-plus"/></svg>Proxy SOCKS5 / HTTP</button>
+                        <button class="btn btn-secondary" data-action="egress-add-wg"><svg class="i"><use href="#i-shield"/></svg>Configurazione WireGuard</button>
+                    </div>
+                </div>
+                <form class="card" data-form="browser">
+                    <div class="card-h">
+                        <div><h2>Servizio browser</h2><p class="muted">Il servizio esterno che alcuni plugin usano per aprire pagine web. Qui prevale sulle variabili d'ambiente; si applica subito.</p></div>
+                        <span class="pill" id="bs-status" data-dyn>—</span>
+                    </div>
+                    <div class="fields fields-2">
+                        <label class="field"><span>Indirizzo</span><input class="input" name="browser_service_url" placeholder="http://host:porta" autocomplete="off"><small id="bs-env" data-dyn></small></label>
+                        <label class="field"><span>Chiave API</span><input class="input" name="browser_service_api_key" type="password" placeholder="lascia vuoto per non cambiarla" autocomplete="new-password"><small id="bs-key-state" data-dyn></small></label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-ghost danger-text" data-action="bs-clear-key" id="bs-clear-key" hidden>Rimuovi chiave salvata</button>
+                        <button type="button" class="btn btn-secondary" data-action="bs-test">Verifica</button>
+                        <button type="submit" class="btn btn-primary">Salva</button>
+                    </div>
+                </form>
+                <div class="card">
+                    <label class="row-switch">
+                        <span><b>Preferisci IPv6 in uscita</b><small>Prova prima IPv6, poi IPv4. Utile solo se il server ha un IPv6 pubblico funzionante e l'IPv4 è condiviso o bloccato da qualche CDN.</small></span>
+                        <input type="checkbox" class="switch" id="egress-ipv6">
                     </label>
                 </div>
-                <div class="flex items-center justify-between mt-3">
-                    <span class="text-[10px] uppercase tracking-wide text-gray-500">Dall'avvio del server</span>
-                    <button onclick="loadWarmStats()" class="text-[10px] text-gray-600 hover:text-gray-400 transition">Aggiorna</button>
-                </div>
-                <div id="warm-stats" class="grid grid-cols-2 gap-2 mt-2 text-[11px] text-gray-500">—</div>
-            </div>
+            </section>
 
-            <!-- Maintenance -->
-            <div class="card border rounded-xl p-4">
-                <span class="text-sm font-semibold text-white">Manutenzione</span>
-                <p class="text-[11px] text-gray-600 mt-1 mb-2">Svuota la cache in memoria di playlist e segmenti video già scaricati. Si ripopola alla riproduzione successiva.</p>
-                <button onclick="clearCache()"
-                    class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Svuota cache</button>
-            </div>
-
-            <!-- Danger zone -->
-            <div class="card border border-red-500/40 rounded-xl p-4">
-                <span class="text-sm font-semibold text-red-400">Zona pericolosa</span>
-                <p class="text-[11px] text-gray-600 mt-1 mb-3">Azioni distruttive e irreversibili. Ognuna richiede di reinserire la password admin.</p>
-
-                <div class="space-y-3">
+            <!-- ═══ Sistema ═══ -->
+            <section class="page" data-page="system" hidden>
+                <div class="page-head">
                     <div>
-                        <button onclick="wipeProfiles()"
-                            class="bg-red-900/60 hover:bg-red-800 text-red-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cancella dati profili</button>
-                        <p class="text-[11px] text-gray-600 mt-1">Elimina tutti i profili, la cronologia di visione e i secret per-profilo dei plugin. I dispositivi accoppiati restano.</p>
+                        <h1>Sistema</h1>
+                        <p class="lead">Aggiornamenti, sicurezza, prestazioni e manutenzione.</p>
                     </div>
+                </div>
+                <div class="card">
+                    <div class="card-h"><h2>Versione</h2></div>
+                    <div id="sys-version" data-dyn>—</div>
+                </div>
+                <form class="card" data-form="warm">
+                    <div class="card-h"><div><h2>Estrazione anticipata</h2><p class="muted">Quando un dispositivo apre un film o un episodio, il server prepara lo stream in anticipo: al Play resta solo il buffering. Una alla volta, mai mentre qualcuno avvia un video. Si spegne anche per singolo plugin dalle sue impostazioni.</p></div></div>
+                    <label class="row-switch">
+                        <span><b>Attiva</b></span>
+                        <input type="checkbox" class="switch" name="warm_resolve_enabled">
+                    </label>
+                    <div class="fields fields-2">
+                        <label class="field"><span>Estrazioni all'ora per plugin</span><input class="input" type="number" min="0" step="1" name="warm_resolve_per_hour"></label>
+                    </div>
+                    <div class="form-actions"><button type="button" class="btn btn-ghost" data-form-reset>Annulla</button><button type="submit" class="btn btn-primary">Salva</button></div>
+                    <details class="disclosure">
+                        <summary>Statistiche dall'avvio</summary>
+                        <dl class="kv" id="warm-stats" data-dyn>—</dl>
+                    </details>
+                </form>
+                <form class="card" data-form="password">
+                    <div class="card-h"><h2>Password amministratore</h2></div>
+                    <div class="fields fields-2">
+                        <label class="field"><span>Password attuale</span><input class="input" type="password" name="current_password" required autocomplete="current-password"></label>
+                        <label class="field"><span>Nuova password</span><input class="input" type="password" name="new_password" required minlength="8" autocomplete="new-password"><small>Almeno 8 caratteri.</small></label>
+                    </div>
+                    <div class="form-actions"><button type="submit" class="btn btn-primary">Cambia password</button></div>
+                </form>
+                <div class="card">
+                    <div class="card-h"><h2>Manutenzione</h2></div>
+                    <div class="action-row">
+                        <span><b>Svuota la cache video</b><small>Playlist e segmenti già scaricati in memoria. Si riempie di nuovo alla prossima riproduzione.</small></span>
+                        <button class="btn btn-secondary" data-action="cache-clear">Svuota</button>
+                    </div>
+                    <div class="action-row">
+                        <span><b>Riavvia il servizio</b><small>Interrompe per qualche secondo tutte le connessioni, streaming compreso. Riparte da solo.</small></span>
+                        <button class="btn btn-secondary" data-action="restart">Riavvia</button>
+                    </div>
+                    <div class="action-row">
+                        <span><b>Memoria dei plugin</b><small>Stima la RAM occupata da ogni plugin. Blocca i plugin per qualche istante.</small></span>
+                        <button class="btn btn-secondary" data-action="mem-profile">Misura</button>
+                    </div>
+                    <div id="mem-profile" data-dyn></div>
+                </div>
+                <div class="card danger-zone">
+                    <div class="card-h"><div><h2>Zona pericolosa</h2><p class="muted">Azioni irreversibili. Ognuna chiede la password amministratore.</p></div></div>
+                    <div class="action-row">
+                        <span><b>Cancella i dati dei profili</b><small>Profili, cronologia e dati privati dei plugin. I dispositivi restano abbinati.</small></span>
+                        <button class="btn btn-danger-soft" data-action="wipe-profiles">Cancella</button>
+                    </div>
+                    <div class="action-row">
+                        <span><b>Cancella i dati dei plugin</b><small>Svuota Redis, la cache immagini e le cache su disco. I plugin restano installati e configurati.</small></span>
+                        <button class="btn btn-danger-soft" data-action="wipe-plugins">Cancella</button>
+                    </div>
+                    <div class="action-row">
+                        <span><b>Reset di fabbrica</b><small>Cancella tutto, plugin e password compresi. Si torna alla configurazione iniziale.</small></span>
+                        <button class="btn btn-danger" data-action="factory-reset">Reset</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ Log ═══ -->
+            <section class="page page-wide" data-page="logs" hidden>
+                <div class="page-head">
                     <div>
-                        <button onclick="wipePluginData()"
-                            class="bg-red-900/60 hover:bg-red-800 text-red-200 text-sm px-4 py-2.5 rounded-lg font-semibold transition">Cancella dati plugin</button>
-                        <p class="text-[11px] text-gray-600 mt-1">FLUSHDB su Redis, svuota la cache immagini WebP e i file cache su disco dei plugin. I plugin restano installati e configurati; ricostruiscono le cache alla sincronizzazione successiva.</p>
-                    </div>
-                    <div class="pt-3 border-t border-red-500/20">
-                        <button onclick="factoryReset()"
-                            class="bg-red-700 hover:bg-red-600 text-white text-sm px-4 py-2.5 rounded-lg font-semibold transition">Reset di fabbrica</button>
-                        <p class="text-[11px] text-gray-600 mt-1">Cancella <b>tutto</b>: profili, dispositivi accoppiati, dati/cache dei plugin, i plugin stessi e la password admin. Come alla primissima installazione — si torna alla pagina di setup. Irreversibile.</p>
+                        <h1>Log</h1>
+                        <p class="lead">Quello che il server sta facendo, in tempo reale.</p>
                     </div>
                 </div>
-            </div>
+                <div id="syslog" data-dyn></div>
+            </section>
 
-        </div>
-    </div>
-
-    <!-- ════════════════ TAB: VPN ════════════════ -->
-    <div id="tab-vpn" class="hidden">
-        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">Rete</h2>
-        <div class="space-y-4 max-w-2xl">
-
-            <!-- Browser service (MYCELIUM_BROWSER_URL / _API_KEY override) -->
-            <div class="card border rounded-xl p-4">
-                <div class="flex items-center gap-2 mb-1 flex-wrap">
-                    <span class="text-sm font-semibold text-white">Servizio browser esterno</span>
-                    <span id="bs-status" class="text-[11px] text-gray-500"></span>
-                    <button type="button" onclick="testBrowserService()" class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Prova</button>
-                </div>
-                <p class="text-[11px] text-gray-600 mb-3">Indirizzo e chiave del servizio browser opzionale (vedi README, «Browser service»). Qui prevalgono sulle variabili d'ambiente <code>MYCELIUM_BROWSER_URL</code> / <code>MYCELIUM_BROWSER_API_KEY</code>; lascia vuoto l'indirizzo per usare quelle. Si applica subito, senza riavvio.</p>
-                <form onsubmit="saveBrowserService(event)" class="space-y-2">
-                    <input id="bs-url" placeholder="http://host:porta" autocomplete="off"
-                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
-                    <p id="bs-env" class="text-[11px] text-gray-600 hidden"></p>
-                    <div class="flex flex-wrap gap-2">
-                        <input id="bs-key" type="password" placeholder="API key (vuoto = invariata)" autocomplete="new-password"
-                            class="flex-1 min-w-[10rem] bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
-                        <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Salva</button>
-                    </div>
-                    <p class="text-[11px] text-gray-600"><span id="bs-key-state"></span> <a href="#" id="bs-key-clear" onclick="clearBrowserServiceKey(event)" class="text-gray-500 hover:text-gray-300 underline hidden">Rimuovi la chiave salvata</a></p>
-                </form>
-            </div>
-
-            <!-- IPv6 preference -->
-            <div class="card border rounded-xl p-4">
-                <label class="flex items-start gap-3 cursor-pointer">
-                    <input type="checkbox" id="egress-ipv6" onchange="saveEgressIPv6(this)" class="mt-0.5 accent-sky-600">
-                    <span>
-                        <span class="text-sm font-semibold text-white">Preferisci IPv6 in uscita</span>
-                        <span class="block text-[11px] text-gray-600 mt-1">Le connessioni che mycelium apre direttamente verso i siti provano prima IPv6, poi IPv4. Utile solo se il server ha un IPv6 pubblico funzionante e l'IPv4 è condiviso (CGNAT) o bloccato da qualche CDN. Se il server non ha IPv6 lascialo spento. Non riguarda il traffico inoltrato al servizio browser.</span>
-                    </span>
-                </label>
-            </div>
-
-            <!-- Service restart -->
-            <div class="card border rounded-xl p-4">
-                <div class="flex items-start justify-between gap-3">
-                    <span>
-                        <span class="text-sm font-semibold text-white">Riavvia il servizio</span>
-                        <span class="block text-[11px] text-gray-600 mt-1">Riavvia mycelium in modo pulito. Interrompe per qualche secondo tutte le connessioni attive (incluso lo streaming in corso); riparte da solo subito dopo.</span>
-                    </span>
-                    <button onclick="restartService()" class="shrink-0 text-xs font-semibold text-amber-400 hover:text-amber-300 border border-amber-900/60 hover:border-amber-700 px-3 py-1.5 rounded-lg transition">Riavvia</button>
-                </div>
-            </div>
-
-            <!-- Network exits (egress registry) -->
-            <div class="card border rounded-xl p-4">
-                <div class="flex items-center gap-2 mb-2 flex-wrap">
-                    <span class="text-sm font-semibold text-white">Uscite di rete</span>
-                    <button onclick="loadEgress()" class="ml-auto text-[11px] text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-600 px-2 py-1 rounded-lg transition">Aggiorna</button>
-                </div>
-                <p class="text-[11px] text-gray-600 mb-3">Ogni plugin sceglie da quale uscita passa il suo flusso video (scheda <b>Plugin</b>). <b>Diretta</b> = IP del server. Puoi aggiungere proxy SOCKS5/HTTP o configurazioni WireGuard e attivarli/disattivarli senza toccare i plugin.</p>
-                <div id="egress-list" class="space-y-2 text-xs text-gray-500">Caricamento…</div>
-                <form onsubmit="addEgress(event)" class="mt-3 flex flex-wrap gap-2">
-                    <input id="egress-name" placeholder="nome (es. hetzner)" required
-                        class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 w-32">
-                    <input id="egress-url" placeholder="socks5://host:porta" required
-                        class="flex-1 min-w-[10rem] bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
-                    <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Aggiungi</button>
-                </form>
-
-                <!-- WireGuard drag-and-drop -->
-                <div class="mt-3 pt-3 border-t border-gray-800/70">
-                    <p class="text-[11px] text-gray-600 mb-2">Oppure trascina una <b>configurazione WireGuard</b> (<code>.conf</code> di Mullvad, Proton, un peer tuo…): mycelium la salva e avvia un processo <code>wireproxy</code> dedicato. Puoi caricarne quante ne vuoi — dai un nome diverso a ognuna.</p>
-                    <div class="flex flex-wrap gap-2 items-center">
-                        <input id="wg-name" placeholder="nome (es. mullvad)" value="wg"
-                            class="bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 w-32">
-                        <input type="file" id="wg-file" accept=".conf,text/plain" class="hidden" onchange="submitWgFile(this.files[0])">
-                        <button type="button" onclick="document.getElementById('wg-file').click()"
-                            class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Scegli .conf</button>
-                    </div>
-                    <div id="wg-drop"
-                        class="mt-2 border border-dashed border-gray-700 rounded-lg px-3 py-4 text-center text-[11px] text-gray-600 transition"
-                        ondragover="event.preventDefault();this.classList.add('border-sky-500','text-sky-400')"
-                        ondragleave="this.classList.remove('border-sky-500','text-sky-400')"
-                        ondrop="wgDrop(event)">
-                        Trascina qui il file <code>.conf</code>
-                    </div>
-                </div>
-            </div>
-
-
-        </div>
-    </div>
-
-    <!-- ════════════════ TAB: DOWNLOAD iOS ════════════════ -->
-    <div id="tab-download" class="hidden">
-        <h2 class="hidden lg:block text-lg font-bold text-white mb-4">iOS / macOS</h2>
-        <div class="max-w-md space-y-5">
-
-            <div class="card border rounded-2xl p-5">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
-                         style="background:linear-gradient(135deg,#7c6af7,#5a4fd4)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>
-                    </div>
-                    <div>
-                        <div class="text-white font-semibold">Pileus per iPhone / iPad</div>
-                        <div class="text-xs text-gray-500">Installazione senza App Store</div>
-                    </div>
-                </div>
-                <ol class="space-y-3 text-sm text-gray-400">
-                    <li class="flex gap-3"><span class="text-purple-400 font-bold">1.</span> Apri <a id="dl-app-link" href="/app/" class="text-purple-400 underline break-all">/app/</a> in <b class="text-gray-200">Safari</b>.</li>
-                    <li class="flex gap-3"><span class="text-purple-400 font-bold">2.</span> Tocca <b class="text-gray-200">Condividi</b> (il quadrato con la freccia in su).</li>
-                    <li class="flex gap-3"><span class="text-purple-400 font-bold">3.</span> Scorri e tocca <b class="text-gray-200">"Aggiungi a schermata Home"</b>.</li>
-                    <li class="flex gap-3"><span class="text-purple-400 font-bold">4.</span> Tocca <b class="text-gray-200">"Aggiungi"</b>. L'icona compare sulla Home.</li>
-                </ol>
-            </div>
-            <a href="/install" target="_blank"
-               class="block text-center bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold px-4 py-3 rounded-xl transition">
-                Apri la guida a schermo intero
-            </a>
-            <p class="text-[11px] text-gray-600 text-center">Una volta installata, l'app parte a schermo intero come un'app nativa. La stessa procedura vale per Mac (Safari → Condividi → Aggiungi al Dock).</p>
-
-            <!-- Pileus web app -->
-            <div class="card border rounded-xl p-4 text-left">
-                <span class="text-sm font-semibold text-white">Pileus web app</span>
-                <p class="text-[11px] text-gray-600 mt-1 mb-3">Scarica l'ultimo build web di Pileus dalle GitHub Release del repo configurato e lo installa in <code>data/pileus-web/</code> (servito su <code>/app</code>). La versione precedente resta in <code>data/pileus-web.bak/</code>.</p>
-                <form onsubmit="savePileusWebRepo(event)" class="flex flex-wrap gap-2 mb-3">
-                    <input id="pileus-web-repo" placeholder="owner/repo (es. Lotho33/pileus)"
-                        class="flex-1 min-w-[12rem] bg-gray-900 border border-gray-800 rounded-lg px-2.5 py-1.5 text-xs text-gray-200">
-                    <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs px-3 py-1.5 rounded-lg font-semibold transition">Salva repo</button>
-                </form>
-                <button type="button" onclick="updatePileusWebApp()" id="pileus-web-update-btn" disabled
-                    class="bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed
-                           text-white text-sm px-4 py-2.5 rounded-lg font-semibold transition">Aggiorna app web Pileus</button>
-                <p class="text-[11px] text-gray-500 mt-3">Versione installata: <span id="pileus-web-version" class="text-gray-300 font-semibold">—</span></p>
-                <p id="pileus-web-status" class="text-[11px] text-gray-600 mt-2">Configura il repo Pileus qui sopra per abilitare l'aggiornamento.</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- ════════════════ TAB: SYSTEM LOG ════════════════ -->
-    <div id="tab-logs" class="hidden">
-        <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-2">
-                <span class="text-sm font-semibold text-white">Log di Sistema</span>
-                <span id="log-live-dot" class="inline-block w-2 h-2 rounded-full bg-gray-700"></span>
-            </div>
-            <button onclick="reconnectLogSSE()"
-                class="text-xs text-gray-500 hover:text-white border border-gray-800 hover:border-gray-600 px-3 py-1.5 rounded-lg transition">
-                Riconnetti
-            </button>
-        </div>
-        <div class="card border rounded-xl overflow-hidden">
-            <pre id="log-output"
-                class="panel p-4 text-xs font-mono h-[60vh] lg:h-[520px] overflow-auto whitespace-pre-wrap leading-relaxed text-gray-500">Caricamento log…</pre>
-        </div>
-        <p class="text-xs text-gray-700 mt-2">Ultime 300 righe · Live via SSE</p>
-    </div>
-
-</main>
-
-<!-- ════════════════ EDITOR MODAL ════════════════ -->
-<div id="editor-modal" class="hidden fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm">
-    <div class="w-full max-w-4xl card border rounded-2xl shadow-2xl flex flex-col" style="max-height:92vh">
-        <!-- Modal header -->
-        <div class="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-gray-800 gap-2">
-            <div class="flex items-center gap-2 sm:gap-3 min-w-0">
-                <span class="text-sm font-bold text-white truncate" id="editor-plugin-name">—</span>
-                <span class="text-xs text-gray-500 font-mono hidden sm:inline" id="editor-plugin-id">—</span>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-                <select id="editor-file-select"
-                    onchange="loadEditorFile()"
-                    class="bg-gray-900 border border-gray-700 text-gray-300 text-xs font-mono px-2 py-1.5 rounded-lg focus:outline-none focus:border-blue-500 max-w-[38vw] sm:max-w-none">
-                </select>
-                <button onclick="saveEditorFile()" id="editor-save-btn"
-                    class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 sm:px-4 py-1.5 rounded-lg font-semibold transition">
-                    Salva
-                </button>
-                <button onclick="closeEditor()"
-                    class="text-gray-500 hover:text-white text-xs px-2 transition">Chiudi</button>
-            </div>
-        </div>
-        <!-- Editor info bar -->
-        <div id="editor-info-bar" class="px-5 py-1.5 border-b border-gray-800/60 text-xs text-gray-600 font-mono hidden">
-            <span id="editor-save-status"></span>
-            <span class="ml-3 text-gray-700">Hot-reload automatico al salvataggio</span>
-        </div>
-        <!-- Textarea -->
-        <div class="flex-1 overflow-auto p-3 sm:p-4">
-            <textarea id="editor-textarea" class="code-editor" spellcheck="false"
-                placeholder="Caricamento…"></textarea>
-        </div>
+        </main>
     </div>
 </div>
 
+<div class="toasts" id="toasts" data-dyn aria-live="polite"></div>
+<dialog class="dialog" id="dialog" data-dyn></dialog>
+<div class="dropzone-overlay" id="drop-overlay" hidden><div><svg class="i"><use href="#i-upload"/></svg><p data-i18n-html>Rilascia i file <code>.zip</code> per installare i plugin</p></div></div>
+<input type="file" id="plugin-file" accept=".zip" multiple hidden>
+<input type="file" id="profile-photo" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+
+<!-- Code editor -->
+<dialog class="editor" id="editor">
+    <div class="editor-head">
+        <div class="editor-title"><b id="editor-name" data-dyn>—</b><span id="editor-state" data-dyn class="muted"></span></div>
+        <button class="btn btn-primary btn-sm" data-editor="save">Salva</button>
+        <button class="icon-btn" data-editor="close" aria-label="Chiudi"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="editor-body">
+        <ul class="editor-files" id="editor-files" data-dyn></ul>
+        <textarea id="editor-text" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+    </div>
+    <div class="editor-foot muted">Ctrl/⌘ + S salva · al salvataggio il plugin si ricarica da solo</div>
+</dialog>
+
+<script src="/static/i18n.js"></script>
 <script src="/static/admin.js"></script>
 </body>
 </html>

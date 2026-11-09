@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"mycelium/internal/core"
 )
 
 func writeManifest(t *testing.T, body string) string {
@@ -105,5 +107,30 @@ func TestReadLuaManifest_AcceptsLegitimateID(t *testing.T) {
 		if mf.ID != id {
 			t.Errorf("id %q: mf.ID = %q, want unchanged", id, mf.ID)
 		}
+	}
+}
+
+func TestCheckMinCore(t *testing.T) {
+	saved := core.Version
+	t.Cleanup(func() { core.Version = saved })
+
+	core.Version = "1.9.1"
+	for _, c := range []struct {
+		min   string
+		allow bool
+	}{
+		{"", true}, {"1.9.0", true}, {"1.9.1", true}, {"v1.9.1", true},
+		{"1.9.2", false}, {"2.0", false}, {"latest", false},
+	} {
+		err := CheckMinCore(LuaManifest{ID: "p", MinCore: c.min})
+		if (err == nil) != c.allow {
+			t.Errorf("min_core %q con core 1.9.1: err=%v, atteso allow=%v", c.min, err, c.allow)
+		}
+	}
+
+	// A development build never refuses a plugin.
+	core.Version = "dev"
+	if err := CheckMinCore(LuaManifest{ID: "p", MinCore: "99.0.0"}); err != nil {
+		t.Fatalf("build di sviluppo: %v", err)
 	}
 }

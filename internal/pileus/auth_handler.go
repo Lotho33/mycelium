@@ -13,12 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
+	"mycelium/internal/core"
 	"mycelium/internal/downloads"
 	"mycelium/internal/managers"
 
@@ -703,9 +705,14 @@ func deleteProfile(profileID string) error {
 	if err != nil {
 		return err
 	}
-	// PIN trusts/sessions, downloads and plugin secrets go with it.
+	// PIN trusts/sessions, downloads, "La mia lista", plugin secrets and the
+	// picture set from the dashboard (api/profile_avatar.go) go with it.
 	forgetProfileAccess(profileID)
+	_ = os.Remove(core.AppPath("data", "avatars", profileID+".jpg"))
 	downloads.M.DeleteOwner(profileID)
+	if err := managers.DB.DeleteMyListForOwner(profileID); err != nil {
+		return err
+	}
 	return managers.DB.DeletePluginSecretsForProfile(profileID)
 }
 

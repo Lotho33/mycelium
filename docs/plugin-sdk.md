@@ -34,6 +34,8 @@ version: 1.0.0
 author: you
 description: One line about what this plugin provides
 icon: icon.svg                # path relative to the plugin dir
+min_core: 1.9.0               # optional: oldest mycelium this plugin runs on;
+                              # an older server refuses it with a clear error
 
 pool_size: 2                  # concurrent Lua VMs for this plugin (default 2)
 
@@ -58,6 +60,12 @@ segments:
       magic: "MAGIC"            # bytes right before the payload
       length: u32be             # "" | u32be | u32le: length field after magic
       codec: gzip               # "" | gzip | zlib
+
+# --- encrypted segment URIs in media playlists (optional, see "Sealed playlists") ---
+playlist:
+  sealed_uris:
+    cipher: aes-128-ctr         # aes-128-ctr | aes-256-ctr
+    counter: media_sequence     # IV = the segment's media sequence number
 
 # --- offline downloads (optional, off when absent) ---
 download:
@@ -405,6 +413,12 @@ local infos = mycelium.image.analyze_logos(urls)   -- up to 32, 3 at a time; inf
 local cover = mycelium.image.versus_url(home_badge_url, away_badge_url)  -- or nil
 ```
 
+Logos need no analysis in the plugin: return the plain image URL as
+`logo_url` and the core measures it (once, in the background) and sends
+clients `logo_meta` with what they need to keep it readable (halo, aspect
+ratio). `analyze_logo(s)` stays for existing plugins; the old
+`url|w|h|dark` encoding of `logo_url` still works but is no longer needed.
+
 `versus_url` returns a 16:9 cover the server draws from two badges (home on
 the left, each half tinted with its badge's colour), for events without
 artwork of their own: use it as `poster_url`. The URL is relative to the
@@ -473,6 +487,25 @@ invalid ones are dropped at load (logged). Sizes declared by the source are
 bounded before decoding (canvas, row width, payload <= 32 MiB). The rules
 reach the proxy through its own signed URLs, so they apply to playback,
 pre-buffer, read-ahead and downloads alike, and only to this plugin.
+
+## Sealed playlists
+
+Some sources encrypt the segment URIs of their HLS media playlists and
+decrypt them in the page's JavaScript. `playlist.sealed_uris` tells the proxy
+how to do the same; the key changes per stream, so `resolve_stream` appends it
+to the playlist URL as a fragment:
+
+```lua
+return { url = playlist_url .. "#mpk=" .. key_base64url, headers = {...} }
+```
+
+A fragment never goes upstream, and it follows the URL through re-resolves,
+variant playlists and the pre-buffer, so a new key comes with every new
+token. Each segment line is base64url ciphertext; with `media_sequence` the
+16-byte initial counter is zero except for the segment's sequence number
+(big-endian, last 8 bytes): `#EXT-X-MEDIA-SEQUENCE` for the first segment
+line, +1 for each following one. A line that doesn't decrypt to an http(s)
+URL or a path is left as it is, so a playlist served in clear still works.
 
 ## Network egress
 

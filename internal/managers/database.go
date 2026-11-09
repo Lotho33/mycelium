@@ -14,7 +14,8 @@ import (
 	"mycelium/internal/core"
 )
 
-var dbFile = core.AppPath("data", "mycelium.db")
+// dbPath is derived at use, never frozen at package init (see configFile).
+func dbPath() string { return core.AppPath("data", "mycelium.db") }
 
 type DBManager struct {
 	db *sql.DB
@@ -42,6 +43,7 @@ func openSQLite(path string) (*sql.DB, error) {
 func InitDB() error {
 	os.MkdirAll(core.AppPath("data"), 0755)
 
+	dbFile := dbPath()
 	db, err := openSQLite(dbFile)
 	if err != nil {
 		return err
@@ -130,6 +132,12 @@ func InitDB() error {
 	)`); err != nil {
 		return err
 	}
+	// "La mia lista" (see my_list.go).
+	if _, err := db.Exec(MyListSchema); err != nil {
+		return err
+	}
+	// extra_json: card metadata, added after the table first shipped.
+	runMigration(db, `ALTER TABLE my_list ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'`)
 	// season_number/episode_number: 0 for non-episodic items.
 	runMigration(db, `ALTER TABLE watch_history ADD COLUMN season_number INTEGER NOT NULL DEFAULT 0`)
 	runMigration(db, `ALTER TABLE watch_history ADD COLUMN episode_number INTEGER NOT NULL DEFAULT 0`)

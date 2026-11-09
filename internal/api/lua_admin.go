@@ -3,6 +3,7 @@
 // lua_admin_settings.go (settings), lua_admin_upload.go (ZIP
 // install/uninstall), lua_admin_logs.go (logs, SSE),
 // lua_admin_files.go (file editor), lua_admin_memory.go (memory profile),
+// lua_admin_sources.go (install from an address, automatic updates),
 // lua_admin_helpers.go (helpers).
 package api
 
@@ -26,4 +27,11 @@ func RegisterLuaAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/lua-plugins/files/{plugin_id}", auth(listLuaPluginFiles))
 	mux.HandleFunc("GET /admin/lua-plugins/file/{plugin_id}", auth(getLuaPluginFile))
 	mux.HandleFunc("PUT /admin/lua-plugins/file/{plugin_id}", auth(putLuaPluginFile))
+	// Installs from an address and updates from it (lua_admin_sources.go).
+	mux.HandleFunc("POST /admin/lua-plugins/install-url", auth(installPluginFromURL))
+	mux.HandleFunc("GET /admin/lua-plugins/sources", auth(listPluginSources))
+	mux.HandleFunc("POST /admin/lua-plugins/sources/{plugin_id}", auth(setPluginSource))
+	mux.HandleFunc("DELETE /admin/lua-plugins/sources/{plugin_id}", auth(deletePluginSource))
+	mux.HandleFunc("POST /admin/lua-plugins/sources/{plugin_id}/check", auth(checkPluginSourceNow))
+	startPluginAutoUpdate()
 }

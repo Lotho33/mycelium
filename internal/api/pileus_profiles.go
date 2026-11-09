@@ -24,6 +24,9 @@ func RegisterPileusProfileRoutes(mux *http.ServeMux) {
 	// device's persistent trust.
 	mux.HandleFunc("POST /admin/pileus/profiles/{id}/pin", auth(setPileusProfilePin))
 	mux.HandleFunc("DELETE /admin/pileus/profiles/{id}/trust/{device}", auth(untrustPileusProfileDevice))
+	// Profile picture (profile_avatar.go).
+	mux.HandleFunc("POST /admin/pileus/profiles/{id}/avatar", auth(uploadProfileAvatar))
+	mux.HandleFunc("DELETE /admin/pileus/profiles/{id}/avatar", auth(deleteProfileAvatar))
 }
 
 func setPileusProfilePin(w http.ResponseWriter, r *http.Request) {
