@@ -754,8 +754,7 @@ function renderPluginList() {
     const entries = Object.entries(state.plugins).sort((a, b) => pluginName(...a).localeCompare(pluginName(...b)));
     if (!entries.length) {
         mount(host, html`<div class="card empty">${icon('plug')}
-            <b>${t('Nessun plugin installato')}</b><span>${tr('I plugin aggiungono cataloghi e sorgenti. Installa il primo da un file <code>.zip</code>.')}</span>
-            <button class="btn btn-primary" data-action="plugin-install">${icon('upload')}${t('Installa plugin')}</button></div>`);
+            <b>${t('Nessun plugin installato')}</b><span>${tr('I plugin aggiungono cataloghi e sorgenti. Installa il primo da un file <code>.zip</code>.')}</span></div>`);
         return;
     }
     mount(host, pluginGroups.map(g => {

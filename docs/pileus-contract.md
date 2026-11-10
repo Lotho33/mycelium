@@ -230,6 +230,17 @@ itself is passed through unchanged.
 - TMDB logos are measured on their 300 px PNG, SVG ones included; other
   SVG logos are not measured.
 
+## La mia lista (`GetMyList` / `SetMyListItem`)
+
+Titles a profile saved to watch later, per profile (the device for a client
+with no profile), newest first, capped at 500 (oldest dropped). The client
+sends the card it already has (`MyListItem`, with `extra` holding the same keys
+as `CatalogItem.extra`); the plugin is never asked. `in_list=true` adds or
+refreshes and keeps the original `added_at`; a blank field never overwrites a
+stored one. `in_list=false` removes; only `plugin_id`/`media_id` matter. Both
+are idempotent. A client on a server without the RPCs gets `UNIMPLEMENTED` and
+hides the feature.
+
 ## Plugin result conventions the server relies on
 
 - `get_streams`: an explicit list — even empty — is returned as-is (empty =
