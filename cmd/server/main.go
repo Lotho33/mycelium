@@ -17,11 +17,13 @@ import (
 	"time"
 
 	"mycelium/internal/api"
+	"mycelium/internal/backup"
 	"mycelium/internal/core"
 	"mycelium/internal/downloads"
 	"mycelium/internal/engine"
 	"mycelium/internal/managers"
 	"mycelium/internal/pileus"
+	"mycelium/internal/remote"
 )
 
 // defaultMemLimitBytes is the soft heap cap used when GOMEMLIMIT is unset,
@@ -61,7 +63,12 @@ func init() {
 		Resolver:  cfResolver,
 	}
 	http.DefaultTransport = &http.Transport{
-		DialContext:           cfDialer.DialContext,
+		DialContext: cfDialer.DialContext,
+		// Non-nil: code that clones DefaultTransport and edits its TLS
+		// config (tailscale's control client) would dereference nil. An
+		// empty config is Go's default; HTTP/2 stays off as before (custom
+		// DialContext, no ForceAttemptHTTP2).
+		TLSClientConfig:       &tls.Config{},
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       90 * time.Second,
@@ -117,6 +124,8 @@ func maxRequestBody(p string) int64 {
 	switch {
 	case p == "/admin/lua-plugins/upload":
 		return 64 << 20
+	case p == "/admin/backup/inspect", p == "/setup/restore/inspect":
+		return api.MaxBackupUpload
 	case strings.HasPrefix(p, "/admin/pileus/profiles/") && strings.HasSuffix(p, "/avatar"):
 		return 11 << 20
 	case strings.HasPrefix(p, "/admin/lua-plugins/file/"):
@@ -154,13 +163,16 @@ func main() {
 	if err := managers.Settings.LoadError(); err != nil {
 		log.Fatalf("[server] %v", err)
 	}
+	if err := managers.InitDB(); err != nil {
+		log.Fatalf("[server] DB init failed: %v", err)
+	}
+	// A restore scheduled from the dashboard is applied now, before anything
+	// reads the settings, keys, VPN exits or plugins it may replace.
+	backup.ApplyPending()
+
 	// The dashboard setting wins over MYCELIUM_EGRESS_IPV6 once saved.
 	if v := managers.Settings.GetString("egress_ipv6", ""); v != "" {
 		core.SetEgressPreferIPv6(core.ParseBoolish(v))
-	}
-
-	if err := managers.InitDB(); err != nil {
-		log.Fatalf("[server] DB init failed: %v", err)
 	}
 
 	// An explicit REDIS_ADDR means the deployment ships a Redis (the compose
@@ -317,13 +329,19 @@ func main() {
 	}
 
 	port := managers.Settings.GetString("server_port", "8000")
-	srv := &http.Server{
-		Addr:              ":" + port,
-		Handler:           securityHeadersMiddleware(corsMiddleware(api.SameOriginMiddleware(bodyLimitMiddleware(mux)))),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    64 << 10,
+	handler := securityHeadersMiddleware(corsMiddleware(api.SameOriginMiddleware(bodyLimitMiddleware(mux))))
+	// newHTTPServer is shared with the tailnet listeners (internal/remote), so
+	// both serve the same handler with the same limits.
+	newHTTPServer := func(h http.Handler) *http.Server {
+		return &http.Server{
+			Handler:           h,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    64 << 10,
+		}
 	}
+	srv := newHTTPServer(handler)
+	srv.Addr = ":" + port
 
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
@@ -336,6 +354,17 @@ func main() {
 			log.Fatalf("[server] fatal: %v", err)
 		}
 	}()
+
+	// Access from outside home (off by default): joins the tailnet in the
+	// background, after the LAN is served, so a slow control server never
+	// delays it.
+	api.InitRemoteAccess(remote.Config{
+		Handler:   handler,
+		NewServer: newHTTPServer,
+		GRPC:      pileusSrv,
+		HTTPPort:  port,
+		GRPCPort:  grpcAddr,
+	})
 
 	log.Println("🏁 Mycelium pronto.")
 
@@ -352,6 +381,8 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("[server] shutdown error: %v", err)
 	}
+	// Before the gRPC server stops: the tailnet listeners serve it too.
+	api.StopRemoteAccess()
 
 	// GracefulStop sends HTTP/2 GOAWAY instead of cutting connections; bounded
 	// so a long-lived RPC can't hang shutdown.

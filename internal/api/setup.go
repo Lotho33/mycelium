@@ -39,6 +39,8 @@ func InternalRoutes(mux *http.ServeMux) {
 func SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /setup", setupUI)
 	mux.HandleFunc("POST /setup/save", saveSetup)
+	// Restore from a backup instead of starting empty (setup_restore.go).
+	registerSetupRestoreRoutes(mux)
 	// Public: lets a client confirm this is mycelium and read the gRPC TLS
 	// fingerprint.
 	mux.HandleFunc("GET /pileus/info", pileusInfo)

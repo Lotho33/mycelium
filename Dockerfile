@@ -1,5 +1,5 @@
 # Pinned by digest: bump tag and digest together (govulncheck runs in CI).
-FROM golang:1.26.10@sha256:672c944cfd07599b5f1bb179869270cdc94c6254e41db4d431259693cb286b82 AS builder
+FROM golang:1.27.4@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c AS builder
 WORKDIR /build
 
 # Download Go modules (layer cache). The SDK is vendored at
@@ -21,6 +21,10 @@ RUN CGO_ENABLED=0 go build \
 # wireproxy — userspace WireGuard → SOCKS5, run by mycelium as a subprocess
 # for WireGuard egress profiles (internal/managers/wireproxy.go). Pinned.
 RUN CGO_ENABLED=0 go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.3
+
+# Licence texts of the Go toolchain and of every module linked into the two
+# binaries above (read from the binaries, so exactly what ships).
+RUN sh scripts/third-party-notices.sh /build/THIRD_PARTY_NOTICES /build/server /go/bin/wireproxy
 
 # ── ffmpeg for offline downloads (internal/downloads) ────────────────────────
 # Minimal static build that only muxes local files
@@ -48,6 +52,12 @@ COPY scripts/build-ffmpeg-min.sh ./
 RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
     && if [ "$arch" = "arm64" ] && [ "$(dpkg --print-architecture)" = "arm64" ]; then arch=amd64-native; fi \
     && ./build-ffmpeg-min.sh "$arch" "/ffmpeg/ffmpeg-${FFMPEG_VERSION}" /ffmpeg/ffmpeg-bin
+# FFmpeg is LGPL 2.1+ as built (no --enable-gpl): its licence and where the
+# unmodified source comes from travel with the binary.
+RUN mkdir -p /ffmpeg/licenses \
+    && cp "ffmpeg-${FFMPEG_VERSION}/LICENSE.md" "ffmpeg-${FFMPEG_VERSION}/COPYING.LGPLv2.1" /ffmpeg/licenses/ \
+    && printf 'FFmpeg %s, unmodified, configured by scripts/build-ffmpeg-min.sh (LGPL 2.1+, no --enable-gpl).\nSource: https://ffmpeg.org/releases/ffmpeg-%s.tar.xz\n' \
+       "${FFMPEG_VERSION}" "${FFMPEG_VERSION}" > /ffmpeg/licenses/SOURCE
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -61,6 +71,9 @@ COPY --from=builder /build/server ./server
 COPY --from=builder /go/bin/wireproxy /usr/local/bin/wireproxy
 # ffmpeg for offline downloads: muxes the fetched HLS segments into one MKV.
 COPY --from=ffmpeg /ffmpeg/ffmpeg-bin /usr/local/bin/ffmpeg
+# Third-party licences: Go modules (server, wireproxy) and FFmpeg.
+COPY --from=builder /build/THIRD_PARTY_NOTICES ./THIRD_PARTY_NOTICES
+COPY --from=ffmpeg /ffmpeg/licenses/ ./licenses/ffmpeg/
 COPY web/ ./web/
 COPY entrypoint.sh ./entrypoint.sh
 # The image ships no plugins: the operator installs them from the dashboard

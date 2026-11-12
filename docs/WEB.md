@@ -51,6 +51,11 @@ the browser can reach.
 
 ## Operator checklist for the web path
 
+Using *Access from outside home* (Tailscale, [remote-access.md](remote-access.md))?
+None of the steps below apply to the tailnet address: it has its own trusted
+certificate and the proxy URLs follow it, `server_host` included. Install the
+iPhone PWA from `https://<name>.<tailnet>.ts.net/app/` only.
+
 - [ ] Terminate **TLS** in front of `/grpc`, `/proxy` and `/img` (reverse proxy
       or mycelium's own TLS), and have the reverse proxy send
       `X-Forwarded-Proto: https` and `X-Forwarded-Host`.

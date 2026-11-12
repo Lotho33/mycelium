@@ -67,4 +67,10 @@ func AdminRoutes(mux *http.ServeMux) {
 
 	// Offline downloads — signed file endpoint + dashboard list/delete
 	RegisterDownloadRoutes(mux)
+
+	// Backup / restore of the whole configuration (internal/backup)
+	RegisterBackupRoutes(mux)
+
+	// Access from outside home through the operator's tailnet (internal/remote)
+	RegisterRemoteRoutes(mux)
 }

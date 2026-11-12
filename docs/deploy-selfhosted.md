@@ -77,6 +77,12 @@ for the video proxy URLs — no `MYCELIUM_SERVER_HOST` to set by hand. On a
 bridged setup you must set `MYCELIUM_SERVER_HOST` (env or dashboard) to a
 LAN-reachable address.
 
+Access from outside home (dashboard → Network, off by default) runs Tailscale
+inside the mycelium process: no compose change, no extra container, no port
+forwarding. Its state lives in `data/tailscale/` (already in the data volume)
+and is left out of backups, so a restored machine logs in again as a new
+node. See [remote-access.md](remote-access.md).
+
 ### Public demo instance
 
 Devices pair with a short-lived code generated from the dashboard. An
@@ -105,6 +111,29 @@ echo 'MYCELIUM_TAG=1.3.2' >> .env
 comment out the `com.centurylinklabs.watchtower.enable=true` label on the
 `mycelium` service, then `docker compose -f docker-compose.prod.yml up -d
 mycelium`. Reverse both to resume auto-update.
+
+## Moving to another machine
+
+Dashboard → System → "Backup and restore". **Export** downloads one
+`.mycelium` file with the whole configuration: settings, plugins (without
+their `*_cache.json` / `*_index.json`), their settings and saved logins,
+profiles with history and "My list", paired devices, VPN exits with their
+WireGuard files, and the server keys (token secret, gRPC TLS certificate,
+admin password hash). Caches, logs, offline downloads and the web app build
+are left out. Give it a passphrase: the file is then sealed (AES-256-GCM,
+scrypt); without one it holds every secret in clear.
+
+On the new machine, choose **Restore from a backup** on the `/setup` page
+(or finish `/setup` with any password and use **Import** in the same
+dashboard card): the file's contents are listed item by item, marked new /
+replaces / same, and you untick what you don't want. On the setup page the
+admin password comes from the backup when it's ticked; untick it to choose a
+new one there. Applying it saves a copy of the
+current configuration (`data/backups/pre-import-*.mycelium`, last 3 kept,
+downloadable from the same card) and restarts the server; the restore runs at
+boot, before plugins, VPN exits and keys load. Import the server keys too if
+paired devices should keep working without pairing again; import the admin
+password and you sign in with the old one afterwards.
 
 ## VPN / egress
 

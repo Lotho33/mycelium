@@ -328,6 +328,12 @@ func restartService(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 	log.Println("[admin] riavvio del servizio richiesto dalla dashboard")
+	selfRestartSoon()
+}
+
+// selfRestartSoon sends this process SIGTERM shortly after the current
+// response went out; the container restart policy starts it again.
+func selfRestartSoon() {
 	go func() {
 		// Let the response reach the browser before shutting down.
 		time.Sleep(300 * time.Millisecond)

@@ -150,7 +150,7 @@
                         <div id="ov-downloads" data-dyn class="ov-body">—</div>
                     </a>
                     <a class="card card-link" href="#/system">
-                        <div class="card-h"><h2>Estrazione anticipata</h2><svg class="i muted"><use href="#i-chevron"/></svg></div>
+                        <div class="card-h"><h2>Preparazione anticipata</h2><svg class="i muted"><use href="#i-chevron"/></svg></div>
                         <div id="ov-warm" data-dyn class="ov-body">—</div>
                     </a>
                 </div>
@@ -263,7 +263,9 @@
                 <div class="grid grid-2">
                     <div class="card">
                         <div class="card-h"><h2>iPhone, iPad e Mac</h2></div>
+                        <div id="apps-remote" data-dyn></div>
                         <ol class="steps">
+                            <li id="apps-ts-step" hidden><span data-i18n-html>Installa l'app <b>Tailscale</b> e accedi con lo stesso account del server. Lasciala attiva.</span></li>
                             <li><span data-i18n-html>Apri <a id="apps-link" href="/app/">/app/</a> in <b>Safari</b>.</span></li>
                             <li><span data-i18n-html>Tocca <b>Condividi</b> (il quadrato con la freccia).</span></li>
                             <li><span data-i18n-html>Scegli <b>Aggiungi a schermata Home</b> (sul Mac: <b>Aggiungi al Dock</b>).</span></li>
@@ -320,6 +322,13 @@
                         <button type="submit" class="btn btn-primary">Salva</button>
                     </div>
                 </form>
+                <div class="card" id="remote-card">
+                    <div class="card-h">
+                        <div><h2>Accesso da fuori casa</h2><p class="muted">Usa Pileus anche lontano dalla rete di casa, tramite il tuo account Tailscale. Niente porte aperte su Internet.</p></div>
+                        <span class="pill" id="remote-pill" data-dyn>—</span>
+                    </div>
+                    <div id="remote-body" data-dyn>—</div>
+                </div>
                 <div class="card">
                     <label class="row-switch">
                         <span><b>Preferisci IPv6 in uscita</b><small>Prova prima IPv6, poi IPv4. Utile solo se il server ha un IPv6 pubblico funzionante e l'IPv4 è condiviso o bloccato da qualche CDN.</small></span>
@@ -341,13 +350,13 @@
                     <div id="sys-version" data-dyn>—</div>
                 </div>
                 <form class="card" data-form="warm">
-                    <div class="card-h"><div><h2>Estrazione anticipata</h2><p class="muted">Quando un dispositivo apre un film o un episodio, il server prepara lo stream in anticipo: al Play resta solo il buffering. Una alla volta, mai mentre qualcuno avvia un video. Si spegne anche per singolo plugin dalle sue impostazioni.</p></div></div>
+                    <div class="card-h"><div><h2>Preparazione anticipata</h2><p class="muted">Quando un dispositivo apre un film o un episodio, il server prepara lo stream in anticipo: al Play resta solo il buffering. Una alla volta, mai mentre qualcuno avvia un video. Si spegne anche per singolo plugin dalle sue impostazioni.</p></div></div>
                     <label class="row-switch">
                         <span><b>Attiva</b></span>
                         <input type="checkbox" class="switch" name="warm_resolve_enabled">
                     </label>
                     <div class="fields fields-2">
-                        <label class="field"><span>Estrazioni all'ora per plugin</span><input class="input" type="number" min="0" step="1" name="warm_resolve_per_hour"></label>
+                        <label class="field"><span>Preparazioni all'ora per plugin</span><input class="input" type="number" min="0" step="1" name="warm_resolve_per_hour"></label>
                     </div>
                     <div class="form-actions"><button type="button" class="btn btn-ghost" data-form-reset>Annulla</button><button type="submit" class="btn btn-primary">Salva</button></div>
                     <details class="disclosure">
@@ -378,6 +387,18 @@
                         <button class="btn btn-secondary" data-action="mem-profile">Misura</button>
                     </div>
                     <div id="mem-profile" data-dyn></div>
+                </div>
+                <div class="card">
+                    <div class="card-h"><div><h2>Backup e ripristino</h2><p class="muted">Tutta la configurazione in un unico file compresso: plugin con impostazioni e accessi, profili con cronologia, dispositivi abbinati, uscite VPN e chiavi del server. Le cache restano fuori. Serve per spostare il server su un'altra macchina o per tornare indietro.</p></div></div>
+                    <div class="action-row">
+                        <span><b>Esporta la configurazione</b><small data-i18n-html>Scarica un file <code>.mycelium</code>. Contiene password e chiavi: proteggilo con una passphrase.</small></span>
+                        <button class="btn btn-secondary" data-action="backup-export"><svg class="i"><use href="#i-download"/></svg>Esporta</button>
+                    </div>
+                    <div class="action-row">
+                        <span><b>Importa da un backup</b><small data-i18n-html>Carica un file <code>.mycelium</code>: vedi cosa contiene e scegli cosa importare. Il server si riavvia per applicarlo.</small></span>
+                        <button class="btn btn-secondary" data-action="backup-import"><svg class="i"><use href="#i-upload"/></svg>Importa</button>
+                    </div>
+                    <div id="backup-status" data-dyn></div>
                 </div>
                 <div class="card danger-zone">
                     <div class="card-h"><div><h2>Zona pericolosa</h2><p class="muted">Azioni irreversibili. Ognuna chiede la password amministratore.</p></div></div>
@@ -415,6 +436,7 @@
 <dialog class="dialog" id="dialog" data-dyn></dialog>
 <div class="dropzone-overlay" id="drop-overlay" hidden><div><svg class="i"><use href="#i-upload"/></svg><p data-i18n-html>Rilascia i file <code>.zip</code> per installare i plugin</p></div></div>
 <input type="file" id="plugin-file" accept=".zip" multiple hidden>
+<input type="file" id="backup-file" accept=".mycelium" hidden>
 <input type="file" id="profile-photo" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
 
 <!-- Code editor -->

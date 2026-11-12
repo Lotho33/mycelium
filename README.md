@@ -63,7 +63,7 @@ down the core or another plugin. Editing a plugin's files hot-reloads it.
 
 ### Requirements
 
-- Go 1.26+
+- Go 1.27.4+
 - (optional) Redis, for response caching — the core runs without it
 - (optional) a browser service, if a plugin needs a real browser
   (see [Browser service](#browser-service))
@@ -134,6 +134,9 @@ environment variable:
 | `MYCELIUM_HTTP_PROFILE` | —                       | `standard` forces direct upstream fetches even with a browser service configured |
 | `MYCELIUM_DEBUG`        | —                       | `1` enables verbose logging |
 | `MYCELIUM_PUID` / `MYCELIUM_PGID` | `10001`       | Docker: user/group the server drops to |
+| `MYCELIUM_REMOTE_HOSTNAME` | `mycelium`           | Machine name requested on the tailnet (see [Access from outside home](#access-from-outside-home)) |
+| `MYCELIUM_REMOTE_CONTROL_URL` | Tailscale         | Headscale URL for remote access; empty = Tailscale |
+| `MYCELIUM_REMOTE_AUTHKEY` / `TS_AUTHKEY` | —      | Pre-auth key: remote access joins the tailnet without an interactive login |
 
 ---
 
@@ -281,6 +284,22 @@ selection are managed from the dashboard.
 
 ---
 
+## Access from outside home
+
+mycelium is LAN-only by default. Dashboard → Network → *Access from outside
+home* lets it join your own [Tailscale](https://tailscale.com) tailnet (or a
+Headscale one) **in-process**: no `tailscaled` on the host, no TUN device, no
+compose changes, no port forwarding, nothing exposed to the public Internet
+(Funnel is never used). The server gets a stable
+`https://<name>.<tailnet>.ts.net` address with a trusted certificate, which the
+iPhone web app can be installed from and which works at home and away; the
+devices that use it need the Tailscale app. Off by default; the node state
+lives in `data/tailscale/` and is not part of backups. Design and details:
+[docs/remote-access.md](docs/remote-access.md). Building with
+`-tags noremote` leaves the feature (and ~18 MB of binary) out.
+
+---
+
 ## API surface
 
 - **gRPC API** (`:50051`, or gRPC-web under `/grpc/`) — used by the client app;
@@ -315,7 +334,8 @@ mycelium-core/
 │   ├── downloads/     # offline downloads (HLS → MKV via ffmpeg)
 │   ├── engine/        # Lua plugin engine (manifest, VM pool, SDK, scheduler)
 │   ├── managers/      # settings, SQLite stores, cache, egress
-│   └── pileus/        # gRPC server for the client app
+│   ├── pileus/        # gRPC server for the client app
+│   └── remote/        # optional access from outside home (Tailscale, tsnet)
 ├── pkg/models/        # shared item types
 ├── third_party/       # vendored gRPC contract (proto + generated Go)
 ├── plugins/           # installed plugins (gitignored, one directory each)

@@ -33,6 +33,16 @@
         .checks li { display: flex; gap: 12px; align-items: flex-start; }
         .checks .i { color: var(--ok); margin-top: 2px; }
         .checks small { display: block; color: var(--faint); font-size: 12.5px; }
+        .setup.wide { max-width: 600px; }
+        .alt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 4px;
+               border-top: 1px solid var(--border); text-align: center; }
+        .alt small { color: var(--faint); font-size: 12.5px; }
+        .bk-meta { color: var(--muted); font-size: 13px; text-align: center; }
+        .bk-summary { max-height: min(46vh, 460px); }
+        .spinner { width: 40px; height: 40px; border-radius: 50%; border: 3px solid var(--surface-3);
+                   border-top-color: var(--accent); animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        input[type=file].input { padding: 9px 10px; height: auto; }
     </style>
 </head>
 <body>
@@ -72,7 +82,72 @@
 
         <div class="error-box" id="error" role="alert"></div>
         <button type="submit" class="btn btn-primary btn-block" id="submit">Create password</button>
+        <div class="alt">
+            <small>Moving from another Mycelium server?</small>
+            <button type="button" class="btn btn-ghost" id="go-restore">Restore from a backup</button>
+        </div>
     </form>
+
+    <!-- Restore, 1: pick the backup -->
+    <form class="card" id="step-restore" novalidate hidden>
+        <div class="setup-head">
+            <img src="/static/logo.svg" alt="" width="56" height="56">
+            <span class="step">Restore from a backup</span>
+            <h1>Bring your server back</h1>
+            <p>Pick the <b>.mycelium</b> file exported from the old server's dashboard (System → Backup and restore).</p>
+        </div>
+        <label class="field"><span>Backup file</span>
+            <input class="input" type="file" id="bk-file" accept=".mycelium" required>
+        </label>
+        <label class="field"><span>Passphrase</span>
+            <div class="pw-wrap">
+                <input class="input" type="password" id="bk-pass" autocomplete="off" placeholder="Only if the backup is encrypted">
+                <button type="button" class="icon-btn pw-toggle" data-toggle="bk-pass" aria-label="Show password"><svg class="i"><use href="#i-eye"/></svg></button>
+            </div>
+        </label>
+        <div class="error-box" id="bk-error" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block" id="bk-read">Read the backup</button>
+        <button type="button" class="btn btn-ghost" data-back>Back: start from scratch</button>
+    </form>
+
+    <!-- Restore, 2: choose what to import -->
+    <form class="card" id="step-review" novalidate hidden>
+        <div class="setup-head">
+            <span class="step">Restore from a backup</span>
+            <h1>Choose what to restore</h1>
+            <p class="bk-meta" id="bk-meta"></p>
+        </div>
+        <div id="bk-warnings"></div>
+        <div class="bk-summary" id="bk-summary"></div>
+        <div id="bk-newpw" hidden>
+            <p class="muted" id="bk-newpw-why">The admin password isn't being restored: choose the one for this server.</p>
+            <label class="field"><span>New admin password</span>
+                <div class="pw-wrap">
+                    <input class="input" type="password" id="bk-pw" autocomplete="new-password" minlength="8">
+                    <button type="button" class="icon-btn pw-toggle" data-toggle="bk-pw" aria-label="Show password"><svg class="i"><use href="#i-eye"/></svg></button>
+                </div>
+            </label>
+            <label class="field"><span>Confirm password</span>
+                <div class="pw-wrap">
+                    <input class="input" type="password" id="bk-pw2" autocomplete="new-password">
+                    <button type="button" class="icon-btn pw-toggle" data-toggle="bk-pw2" aria-label="Show password"><svg class="i"><use href="#i-eye"/></svg></button>
+                </div>
+            </label>
+        </div>
+        <div class="error-box" id="bk-error2" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block" id="bk-apply">Restore and restart</button>
+        <button type="button" class="btn btn-ghost" data-back>Back: start from scratch</button>
+    </form>
+
+    <!-- Restore, 3: restarting -->
+    <section class="card" id="step-restoring" hidden>
+        <div class="setup-head">
+            <div class="spinner" aria-hidden="true"></div>
+            <span class="step">Restore from a backup</span>
+            <h1>Restoring…</h1>
+            <p id="bk-wait">The server restarts and applies the backup. This page moves on by itself.</p>
+        </div>
+    </section>
 
     <!-- Step 2: confirmation -->
     <section class="card" id="step-done" hidden>
@@ -87,6 +162,7 @@
             <li><svg class="i"><use href="#i-check"/></svg><span>Signed in on this browser<small>Other browsers will ask for the password.</small></span></li>
             <li><svg class="i"><use href="#i-check"/></svg><span>Ready for your devices<small>Pileus finds this server by itself on the local network.</small></span></li>
         </ul>
+        <p class="muted"><b>Mycelium is reachable only from your home network.</b> To use it away from home too, open <b>Network → Access from outside home</b> in the dashboard.</p>
         <p class="muted">Next, a short tour shows you around the dashboard. You can also choose your language there.</p>
         <a class="btn btn-primary btn-block" href="/admin/dashboard?tour=1">Open the dashboard</a>
     </section>
@@ -152,6 +228,183 @@ $('#step-password').addEventListener('submit', async e => {
     $('#step-done').hidden = false;
     $('#step-done a').focus();
 });
+
+// ─── Restore from a backup ───────────────────────────────────────────────────
+// The same file the dashboard exports (System → Backup and restore): the
+// server reads it, lists what it holds, and applies the chosen items at the
+// next start, like the dashboard's import, without an account first.
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const show = id => {
+    for (const el of document.querySelectorAll('main.setup > .card')) el.hidden = el.id !== id;
+    $('main.setup').classList.toggle('wide', id === 'step-review');
+};
+$('#go-restore').addEventListener('click', () => { show('step-restore'); $('#bk-file').focus(); });
+document.querySelectorAll('[data-back]').forEach(b => b.addEventListener('click', async () => {
+    // Drop whatever was read, so a later dashboard visit doesn't offer it.
+    fetch('/setup/restore', { method: 'DELETE' }).catch(() => {});
+    show('step-password');
+    pw.focus();
+}));
+
+const sectionText = {
+    plugins: ['Plugins', 'Each plugin with its files, settings and saved logins.'],
+    profiles: ['Profiles', 'With picture, PIN, preferences, watch history and My list.'],
+    devices: ['Paired devices', 'They keep working without pairing again only if the server keys are restored too.'],
+    vpn: ['VPN exits', 'The exit list and its WireGuard configurations.'],
+    settings: ['Server settings', 'One entry per setting.'],
+    identity: ['Server identity', ''],
+};
+const fmtSize = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? Math.round(b / 1e6) + ' MB' : Math.max(1, Math.round((b || 0) / 1e3)) + ' KB';
+function itemText(sec, it) {
+    const p = [];
+    switch (sec) {
+    case 'plugins':
+        if (it.version) p.push('v' + it.version);
+        p.push((it.files || 0) + ' files', fmtSize(it.bytes || 0));
+        if (it.settings) p.push(it.settings + ' settings');
+        if (it.secrets) p.push(it.secrets + ' saved logins');
+        return [it.label, p.join(' · ')];
+    case 'profiles':
+        p.push((it.history || 0) + ' in history', (it.list || 0) + ' in My list');
+        if (it.pin) p.push('PIN');
+        if (it.avatar) p.push('picture');
+        return [it.label, p.join(' · ')];
+    case 'devices': return [(it.count || 0) + ' devices', ''];
+    case 'vpn': return [(it.names || []).join(', ') || 'VPN exits', it.files ? it.files + ' WireGuard configurations' : ''];
+    case 'identity':
+        return it.id === 'admin_password'
+            ? ['Admin password', 'Sign in with the old server\'s password. Untick it to choose a new one here.']
+            : ['Server keys', 'Token secret and TLS certificate: paired devices stay valid.'];
+    default: return [it.label, ''];
+    }
+}
+
+let staged = null;
+$('#step-restore').addEventListener('submit', async e => {
+    e.preventDefault();
+    const errBox = $('#bk-error'), btn = $('#bk-read');
+    const file = $('#bk-file').files[0];
+    if (!file) { errBox.textContent = 'Choose the backup file.'; return; }
+    errBox.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Reading…';
+    // The passphrase must come before the file (the server reads it first).
+    const fd = new FormData();
+    fd.append('passphrase', $('#bk-pass').value);
+    fd.append('file', file);
+    let res;
+    try { res = await fetch('/setup/restore/inspect', { method: 'POST', body: fd }); }
+    catch { errBox.textContent = 'Cannot reach the server. Check the connection and try again.'; }
+    btn.disabled = false;
+    btn.textContent = 'Read the backup';
+    if (!res) return;
+    if (!res.ok) {
+        const msg = (await res.text()).trim();
+        errBox.textContent = res.status === 422 ? (msg || 'Wrong or missing passphrase.') : (msg || 'The file could not be read (error ' + res.status + ').');
+        if (res.status === 422) $('#bk-pass').focus();
+        return;
+    }
+    staged = await res.json();
+    renderReview();
+    show('step-review');
+});
+
+function renderReview() {
+    const m = staged.manifest || {};
+    const when = m.created_at ? new Date(m.created_at * 1000).toLocaleString() : '—';
+    $('#bk-meta').textContent = `Backup of ${when} from ${m.hostname || '—'} · Mycelium ${m.core_version || '?'} · ${fmtSize(staged.bytes || 0)}${staged.encrypted ? ' · encrypted' : ''}`;
+    $('#bk-warnings').innerHTML = (staged.warnings || []).map(w => `<p class="error-box">${esc(w)}</p>`).join('');
+    $('#bk-summary').innerHTML = staged.sections.map(sec => {
+        const [title, note] = sectionText[sec.key] || [sec.key, ''];
+        return `<details class="bk-sec" ${sec.key === 'settings' ? '' : 'open'}>
+            <summary><input type="checkbox" checked data-bk-all="${esc(sec.key)}" aria-label="All">
+                <b>${esc(title)}</b><span class="faint small" data-bk-count="${esc(sec.key)}">${sec.items.length}/${sec.items.length}</span></summary>
+            ${note ? `<small class="faint">${esc(note)}</small>` : ''}
+            ${sec.items.map(it => {
+                const [label, detail] = itemText(sec.key, it);
+                return `<label class="bk-item">
+                    <input type="checkbox" checked data-bk-sec="${esc(sec.key)}" data-bk-item="${esc(it.id)}">
+                    <span><b>${esc(label)}</b>${detail ? `<small>${esc(detail)}</small>` : ''}${it.warning ? `<small class="danger-text">${esc(it.warning)}</small>` : ''}</span>
+                </label>`;
+            }).join('')}
+        </details>`;
+    }).join('');
+    syncPasswordBlock();
+}
+
+const adminPicked = () => !!document.querySelector('[data-bk-sec="identity"][data-bk-item="admin_password"]:checked');
+function syncPasswordBlock() {
+    const has = !!document.querySelector('[data-bk-sec="identity"][data-bk-item="admin_password"]');
+    $('#bk-newpw').hidden = adminPicked();
+    $('#bk-newpw-why').textContent = has
+        ? 'The admin password isn\'t being restored: choose the one for this server.'
+        : 'This backup holds no admin password: choose the one for this server.';
+}
+$('#bk-summary').addEventListener('change', e => {
+    const all = e.target.closest('[data-bk-all]');
+    if (all) document.querySelectorAll(`[data-bk-sec="${all.dataset.bkAll}"]`).forEach(i => { i.checked = all.checked; });
+    const key = all?.dataset.bkAll || e.target.dataset.bkSec;
+    if (key) {
+        const items = [...document.querySelectorAll(`[data-bk-sec="${key}"]`)];
+        const on = items.filter(i => i.checked).length;
+        const box = document.querySelector(`[data-bk-all="${key}"]`);
+        box.checked = on === items.length;
+        box.indeterminate = on > 0 && on < items.length;
+        document.querySelector(`[data-bk-count="${key}"]`).textContent = `${on}/${items.length}`;
+    }
+    syncPasswordBlock();
+    $('#bk-error2').textContent = '';
+});
+// A click on a section's checkbox must not also fold the section.
+$('#bk-summary').addEventListener('click', e => { if (e.target.closest('[data-bk-all]')) e.stopPropagation(); }, true);
+
+$('#step-review').addEventListener('submit', async e => {
+    e.preventDefault();
+    const errBox = $('#bk-error2'), btn = $('#bk-apply');
+    const selection = {};
+    document.querySelectorAll('[data-bk-item]:checked').forEach(i => (selection[i.dataset.bkSec] ||= []).push(i.dataset.bkItem));
+    if (!Object.keys(selection).length) { errBox.textContent = 'Nothing is selected.'; return; }
+    const body = { selection };
+    if (!adminPicked()) {
+        const p1 = $('#bk-pw').value, p2 = $('#bk-pw2').value;
+        if (p1.length < 8) { errBox.textContent = 'The password must be at least 8 characters long.'; $('#bk-pw').focus(); return; }
+        if (p1 !== p2) { errBox.textContent = 'The two passwords do not match.'; $('#bk-pw2').focus(); return; }
+        body.password = p1;
+        body.password_confirm = p2;
+    }
+    errBox.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Restoring…';
+    let res;
+    try {
+        res = await fetch('/setup/restore/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch {
+        errBox.textContent = 'Cannot reach the server. Check the connection and try again.';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Restore and restart';
+    if (!res) return;
+    if (!res.ok) { errBox.textContent = (await res.text()).trim() || 'Restore failed (error ' + res.status + ').'; return; }
+    const out = await res.json();
+    show('step-restoring');
+    if (out.password_from_backup) $('#bk-wait').textContent = 'The server restarts and applies the backup. Then sign in with the old server\'s admin password.';
+    waitForServer();
+});
+
+// The server goes down within a second and comes back once the restore is
+// applied (the container restarts it). Wait for it to go away first, so the
+// still-running old process isn't mistaken for the new one.
+async function waitForServer() {
+    const up = async () => { try { return (await fetch('/health', { cache: 'no-store' })).ok; } catch { return false; } };
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const start = Date.now();
+    while (Date.now() - start < 8000 && await up()) await sleep(500);
+    while (Date.now() - start < 300000) {
+        await sleep(1500);
+        if (await up()) { location.href = '/admin/dashboard'; return; }
+    }
+    $('#bk-wait').textContent = 'The server hasn\'t come back yet. If it doesn\'t restart by itself, start it again, then open the dashboard.';
+}
 </script>
 </body>
 </html>

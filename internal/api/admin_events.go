@@ -30,6 +30,7 @@ var adminTopics = map[string]http.HandlerFunc{
 	"devices":   listPileusDevices,
 	"profiles":  listPileusProfiles,
 	"downloads": listDownloadsAdmin,
+	"remote":    getRemoteStatus,
 }
 
 // adminEventsTick is the watcher period. A var for tests.

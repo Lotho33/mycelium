@@ -32,6 +32,7 @@ const (
 	AuthService_UnlockProfile_FullMethodName         = "/mycelium.AuthService/UnlockProfile"
 	AuthService_LockProfile_FullMethodName           = "/mycelium.AuthService/LockProfile"
 	AuthService_SetProfilePin_FullMethodName         = "/mycelium.AuthService/SetProfilePin"
+	AuthService_GetServerInfo_FullMethodName         = "/mycelium.AuthService/GetServerInfo"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -51,6 +52,7 @@ type AuthServiceClient interface {
 	UnlockProfile(ctx context.Context, in *UnlockProfileRequest, opts ...grpc.CallOption) (*UnlockProfileResponse, error)
 	LockProfile(ctx context.Context, in *LockProfileRequest, opts ...grpc.CallOption) (*LockProfileResponse, error)
 	SetProfilePin(ctx context.Context, in *SetProfilePinRequest, opts ...grpc.CallOption) (*SetProfilePinResponse, error)
+	GetServerInfo(ctx context.Context, in *GetServerInfoRequest, opts ...grpc.CallOption) (*ServerInfoResponse, error)
 }
 
 type authServiceClient struct {
@@ -191,6 +193,16 @@ func (c *authServiceClient) SetProfilePin(ctx context.Context, in *SetProfilePin
 	return out, nil
 }
 
+func (c *authServiceClient) GetServerInfo(ctx context.Context, in *GetServerInfoRequest, opts ...grpc.CallOption) (*ServerInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServerInfoResponse)
+	err := c.cc.Invoke(ctx, AuthService_GetServerInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServiceServer is the server API for AuthService service.
 // All implementations must embed UnimplementedAuthServiceServer
 // for forward compatibility.
@@ -208,6 +220,7 @@ type AuthServiceServer interface {
 	UnlockProfile(context.Context, *UnlockProfileRequest) (*UnlockProfileResponse, error)
 	LockProfile(context.Context, *LockProfileRequest) (*LockProfileResponse, error)
 	SetProfilePin(context.Context, *SetProfilePinRequest) (*SetProfilePinResponse, error)
+	GetServerInfo(context.Context, *GetServerInfoRequest) (*ServerInfoResponse, error)
 	mustEmbedUnimplementedAuthServiceServer()
 }
 
@@ -256,6 +269,9 @@ func (UnimplementedAuthServiceServer) LockProfile(context.Context, *LockProfileR
 }
 func (UnimplementedAuthServiceServer) SetProfilePin(context.Context, *SetProfilePinRequest) (*SetProfilePinResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetProfilePin not implemented")
+}
+func (UnimplementedAuthServiceServer) GetServerInfo(context.Context, *GetServerInfoRequest) (*ServerInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetServerInfo not implemented")
 }
 func (UnimplementedAuthServiceServer) mustEmbedUnimplementedAuthServiceServer() {}
 func (UnimplementedAuthServiceServer) testEmbeddedByValue()                     {}
@@ -512,6 +528,24 @@ func _AuthService_SetProfilePin_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_GetServerInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetServerInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).GetServerInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_GetServerInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).GetServerInfo(ctx, req.(*GetServerInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AuthService_ServiceDesc is the grpc.ServiceDesc for AuthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -570,6 +604,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetProfilePin",
 			Handler:    _AuthService_SetProfilePin_Handler,
+		},
+		{
+			MethodName: "GetServerInfo",
+			Handler:    _AuthService_GetServerInfo_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

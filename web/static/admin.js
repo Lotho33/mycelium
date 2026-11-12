@@ -82,10 +82,36 @@ function hue(s) {
 // Icons that answered 404 once: not asked for again on every refresh.
 const missingIcons = new Set();
 const initial = name => (String(name || '?').trim()[0] || '?').toUpperCase();
-// A person: their picture, or the initial on a colour of their own.
-function avatar(name, { cls = '', src = '' } = {}) {
+// Pileus's built-in avatars (avatar://<n>, lib/shared/widgets/default_avatars.dart
+// in pileus-player): same colour and Material "rounded" glyph, so a profile
+// looks the same here as on the TV. Keep the order in sync with kDefaultAvatars.
+const PILEUS_AVATARS = [
+    ['#7C6AF7', 'M10.27 12.98C10.27 13.69 9.7 14.25 9 14.25C8.3 14.25 7.73 13.69 7.73 12.98C7.73 12.33 8.3 11.77 9 11.77C9.7 11.77 10.27 12.33 10.27 12.98ZM15 11.77C14.3 11.77 13.73 12.33 13.73 12.98C13.73 13.69 14.3 14.25 15 14.25C15.7 14.25 16.27 13.69 16.27 12.98C16.27 12.33 15.7 11.77 15 11.77ZM21.98 12C21.98 17.53 17.53 21.98 12 21.98C6.47 21.98 2.02 17.53 2.02 12C2.02 6.47 6.47 2.02 12 2.02C17.53 2.02 21.98 6.47 21.98 12ZM20.02 12C20.02 11.2 19.88 10.45 19.69 9.75C18.98 9.89 18.23 9.98 17.48 9.98C14.39 9.98 11.58 8.58 9.75 6.33C8.67 8.86 6.61 10.88 3.98 11.86C4.03 11.91 3.98 11.95 3.98 12C3.98 16.41 7.59 20.02 12 20.02C16.41 20.02 20.02 16.41 20.02 12Z'],
+    ['#f97316', 'M2.02 9.52C2.02 8.11 3.14 6.98 4.5 6.98C5.86 6.98 6.98 8.11 6.98 9.52C6.98 10.88 5.86 12 4.5 12C3.14 12 2.02 10.88 2.02 9.52ZM6.52 5.48C6.52 4.12 7.64 3 9 3C10.36 3 11.48 4.12 11.48 5.48C11.48 6.89 10.36 8.02 9 8.02C7.64 8.02 6.52 6.89 6.52 5.48ZM12.52 5.48C12.52 4.12 13.64 3 15 3C16.36 3 17.48 4.12 17.48 5.48C17.48 6.89 16.36 8.02 15 8.02C13.64 8.02 12.52 6.89 12.52 5.48ZM17.02 9.52C17.02 8.11 18.14 6.98 19.5 6.98C20.86 6.98 21.98 8.11 21.98 9.52C21.98 10.88 20.86 12 19.5 12C18.14 12 17.02 10.88 17.02 9.52ZM17.34 14.86C16.45 13.83 15.75 12.98 14.86 11.95C14.39 11.39 13.83 10.88 13.12 10.64C12.98 10.59 12.89 10.55 12.8 10.55C12.52 10.5 12.28 10.5 12 10.5C11.72 10.5 11.48 10.5 11.2 10.55C11.11 10.55 10.97 10.59 10.88 10.64C10.17 10.88 9.61 11.44 9.14 11.95C8.25 12.98 7.55 13.83 6.66 14.86C5.34 16.17 3.75 17.62 4.03 19.64C4.31 20.67 5.06 21.7 6.38 21.98C7.08 22.12 9.42 21.56 11.91 21.56H12.09C14.58 21.56 16.88 22.12 17.62 21.98C18.94 21.7 19.64 20.67 19.97 19.64C20.25 17.62 18.66 16.17 17.34 14.86Z'],
+    ['#38bdf8', 'M9.19 6.33C7.17 8.62 5.77 11.95 5.62 12.23L3.38 11.25C2.72 10.97 2.53 10.12 3.05 9.66L6.05 6.61C6.52 6.14 7.22 5.95 7.88 6.09L9.19 6.33ZM10.69 16.5C10.97 16.83 11.44 16.88 11.81 16.69C12.94 16.17 15.47 14.91 17.06 13.31C21.66 8.72 21.7 4.97 21.42 3.38C21.33 2.95 21.05 2.62 20.62 2.58C19.03 2.3 15.28 2.34 10.69 6.94C9.09 8.53 7.83 11.02 7.27 12.19C7.08 12.56 7.17 13.03 7.5 13.31L10.69 16.5ZM17.67 14.81C15.38 16.83 12.05 18.23 11.77 18.38L12.75 20.62C13.03 21.28 13.88 21.47 14.34 20.95L17.39 17.95C17.86 17.48 18.05 16.78 17.91 16.12L17.67 14.81ZM8.95 17.39C9.14 18.47 8.81 19.45 8.11 20.11C7.36 20.91 4.97 21.47 3.42 21.75C2.72 21.89 2.11 21.28 2.25 20.58C2.53 19.03 3.09 16.64 3.89 15.89C4.55 15.19 5.53 14.86 6.61 15.05C7.78 15.28 8.72 16.22 8.95 17.39ZM12.98 9C12.98 7.92 13.92 6.98 15 6.98C16.08 6.98 17.02 7.92 17.02 9C17.02 10.08 16.08 11.02 15 11.02C13.92 11.02 12.98 10.08 12.98 9Z'],
+    ['#ef4444', 'M18 3.98 19.83 7.64C19.92 7.78 19.78 8.02 19.59 8.02H17.62C17.25 8.02 16.88 7.78 16.73 7.45L15 3.98H12.98L14.81 7.64C14.91 7.78 14.77 8.02 14.58 8.02H12.61C12.23 8.02 11.91 7.78 11.72 7.45L9.98 3.98H8.02L9.8 7.64C9.89 7.78 9.8 8.02 9.61 8.02H7.64C7.22 8.02 6.89 7.78 6.7 7.45L5.02 3.98H3.98C2.91 3.98 2.02 4.92 2.02 6V18C2.02 19.08 2.91 20.02 3.98 20.02H20.02C21.09 20.02 21.98 19.08 21.98 18V5.02C21.98 4.45 21.56 3.98 21 3.98H18Z'],
+    ['#22c55e', 'M21.56 16.08 20.48 8.44C20.2 6.47 18.52 5.02 16.55 5.02H7.45C5.48 5.02 3.8 6.47 3.52 8.44L2.44 16.08C2.2 17.62 3.38 18.98 4.92 18.98C5.62 18.98 6.28 18.75 6.75 18.23L9 15.98H15L17.25 18.23C17.72 18.75 18.38 18.98 19.03 18.98C20.62 18.98 21.8 17.62 21.56 16.08ZM11.02 11.02H9V12.98H8.02V11.02H6V9.98H8.02V8.02H9V9.98H11.02V11.02ZM15 9.98C14.44 9.98 14.02 9.56 14.02 9C14.02 8.44 14.44 8.02 15 8.02C15.56 8.02 15.98 8.44 15.98 9C15.98 9.56 15.56 9.98 15 9.98ZM17.02 12.98C16.45 12.98 15.98 12.56 15.98 12C15.98 11.44 16.45 11.02 17.02 11.02C17.53 11.02 18 11.44 18 12C18 12.56 17.53 12.98 17.02 12.98Z'],
+    ['#f59e0b', 'M12 17.25 16.17 19.78C16.92 20.25 17.86 19.55 17.62 18.7L16.55 13.97L20.2 10.78C20.86 10.22 20.53 9.14 19.64 9.05L14.81 8.62L12.94 4.17C12.56 3.38 11.44 3.38 11.06 4.17L9.19 8.62L4.36 9.05C3.47 9.09 3.14 10.22 3.8 10.78L7.45 13.97L6.38 18.7C6.14 19.55 7.08 20.25 7.83 19.78L12 17.25Z'],
+    ['#dc2626', 'M12 12.89 9.98 14.91C9.52 15.38 9.14 15.94 9.05 16.55C8.72 18.42 10.17 20.02 12 20.02C13.83 20.02 15.28 18.42 14.95 16.59C14.86 15.94 14.48 15.38 14.02 14.91L12 12.89ZM15.56 6.56C14.39 8.02 12 7.17 12 5.3V3.75C12 2.95 11.11 2.48 10.45 2.95C8.11 4.5 3.98 7.97 3.98 12.98C3.98 15.94 5.58 18.47 7.88 19.88C7.17 18.84 6.84 17.53 7.08 16.17C7.27 15.14 7.83 14.2 8.58 13.45L11.3 10.78C11.67 10.41 12.33 10.41 12.7 10.78L15.42 13.5C16.17 14.2 16.73 15.14 16.92 16.17C17.16 17.53 16.83 18.8 16.12 19.83C18.05 18.66 19.45 16.78 19.83 14.53C20.44 11.25 19.03 8.16 16.64 6.42C16.31 6.19 15.84 6.23 15.56 6.56Z'],
+    ['#a855f7', 'M18.98 5.02H17.02V3.98C17.02 3.47 16.55 3 15.98 3H8.02C7.45 3 6.98 3.47 6.98 3.98V5.02H5.02C3.89 5.02 3 5.91 3 6.98V8.02C3 10.55 4.92 12.61 7.41 12.94C8.02 14.44 9.38 15.56 11.02 15.89V18.98H8.02C7.45 18.98 6.98 19.45 6.98 20.02C6.98 20.53 7.45 21 8.02 21H15.98C16.55 21 17.02 20.53 17.02 20.02C17.02 19.45 16.55 18.98 15.98 18.98H12.98V15.89C14.62 15.56 15.98 14.44 16.59 12.94C19.08 12.61 21 10.55 21 8.02V6.98C21 5.91 20.11 5.02 18.98 5.02ZM5.02 8.02V6.98H6.98V10.83C5.86 10.41 5.02 9.28 5.02 8.02ZM18.98 8.02C18.98 9.28 18.14 10.41 17.02 10.83V6.98H18.98V8.02Z'],
+    ['#ec4899', 'M12 5.02V13.55C11.06 13.03 9.89 12.8 8.67 13.22C7.31 13.69 6.28 14.91 6.05 16.31C5.58 19.03 7.92 21.38 10.64 20.95C12.61 20.62 14.02 18.84 14.02 16.83V6.98H15.98C17.11 6.98 18 6.09 18 5.02C18 3.89 17.11 3 15.98 3H14.02C12.89 3 12 3.89 12 5.02Z'],
+    ['#14b8a6', 'M6.05 8.06C3.33 10.78 3.33 15.19 6.05 17.95C7.5 14.53 10.12 11.67 13.41 9.98C10.64 12.33 8.67 15.61 8.02 19.31C10.59 20.53 13.78 20.11 15.94 17.95C18.94 14.95 19.78 6.8 19.97 4.55C19.97 4.27 19.73 4.03 19.45 4.03C17.2 4.22 9.05 5.06 6.05 8.06Z'],
+];
+// A person: their picture, a Pileus avatar, or the initial on a colour of their own.
+function avatar(name, { cls = '', src = '', builtin = -1 } = {}) {
+    const b = PILEUS_AVATARS[builtin];
+    if (b) {
+        return html`<span class="avatar ${cls}" style="background:linear-gradient(135deg, ${b[0]}d9, ${b[0]}59)">${raw(
+            `<svg viewBox="0 0 24 24" width="55%" height="55%" fill="#fff" aria-hidden="true"><path d="${b[1]}"/></svg>`)}</span>`;
+    }
     return html`<span class="avatar ${cls}" style="background:hsl(${hue(name)} 42% 30%)">${src
         ? html`<img src="${src}" alt="" loading="lazy">` : initial(name)}</span>`;
+}
+// Index of a Pileus built-in avatar, or -1. Clamped like the client does, so a
+// newer client's extra avatars never show up as an initial here.
+function builtinAvatar(p) {
+    const m = /^avatar:\/\/(\d+)$/.exec(p.avatar_url || '');
+    return m ? Math.min(Number(m[1]), PILEUS_AVATARS.length - 1) : -1;
 }
 // The picture a profile shows: one set here (mycelium:/…) or an image URL a
 // client set; built-in client avatars have no image here.
@@ -463,7 +489,7 @@ document.addEventListener('click', e => {
 // just that. "*" (sent on connect) means everything.
 let liveES = null;
 const liveTimers = {};
-const liveTopics = ['plugins', 'egress', 'devices', 'profiles', 'downloads'];
+const liveTopics = ['plugins', 'egress', 'devices', 'profiles', 'downloads', 'remote'];
 function onLive(topic) {
     clearTimeout(liveTimers[topic]);
     liveTimers[topic] = setTimeout(async () => {
@@ -642,6 +668,21 @@ function renderOverview() {
         notes.push(html`<div class="callout warn">${icon('alert')}<div><b>${attention.length === 1 ? t('Un plugin ha bisogno di attenzione') : t('{n} plugin hanno bisogno di attenzione', { n: attention.length })}</b>
             <span>${attention.map(([pid, d], i) => html`${i ? ', ' : ''}<a href="#/plugins/${encodeURIComponent(pid)}">${pluginName(pid, d)}</a>`)}</span></div></div>`);
     }
+    // Access from outside home turned on but not working (the node key
+    // expired, the login was never completed…), or about to expire: it
+    // stops silently otherwise, and the phone just shows a connection error.
+    const rs = remoteState;
+    if (rs?.available && rs.enabled) {
+        const days = rs.state === 'running' && rs.key_expiry ? Math.floor((new Date(rs.key_expiry) - Date.now()) / 86400000) : null;
+        const off = { needs_login: t('serve un nuovo accesso'), needs_approval: t('il dispositivo è da approvare'), error: t('collegamento non riuscito') }[rs.state];
+        // host_tailscale is left out on purpose: the separate Tailscale still
+        // reaches the server, nothing is broken while the node waits.
+        if (off) {
+            notes.push(html`<div class="callout warn">${icon('globe')}<div><b>${t('L\'accesso da fuori casa non è attivo')}</b><span>${t('Tailscale: {why}. Fuori casa i dispositivi non raggiungono il server.', { why: off })}</span></div><a class="btn btn-secondary btn-sm" href="#/network">${t('Apri')}</a></div>`);
+        } else if (days !== null && days <= 14) {
+            notes.push(html`<div class="callout warn">${icon('clock')}<div><b>${days < 0 ? t('La chiave del server è scaduta') : t('La chiave del server scade tra {n} giorni', { n: days })}</b><span>${t('Allo scadere l\'accesso da fuori casa smette di funzionare.')}</span></div><a class="btn btn-secondary btn-sm" href="#/network">${t('Apri')}</a></div>`);
+        }
+    }
     if (state.downloads?.enabled && state.downloads.ffmpeg === false) {
         notes.push(html`<div class="callout err">${icon('alert')}<div><b>${t('ffmpeg non trovato')}</b><span>${t('I download offline non possono partire.')}</span></div></div>`);
     }
@@ -695,7 +736,7 @@ function renderOverview() {
         const hits = w.warm_hit || 0;
         mount('#ov-warm', on
             ? html`<span class="ov-big">${t('{n} Play più rapidi', { n: hits })}</span>
-                <span>${ok ? t('{n} estrazioni completate, {pct}% usate dall\'avvio', { n: ok, pct: Math.round(100 * hits / ok) }) : t('Nessuna estrazione completata dall\'avvio')}</span>`
+                <span>${ok ? t('{n} preparazioni completate, {pct}% usate dall\'avvio', { n: ok, pct: Math.round(100 * hits / ok) }) : t('Nessuna preparazione completata dall\'avvio')}</span>`
             : html`<span class="ov-big">${t('Spenta')}</span><span>${t('Si attiva dalla pagina Sistema.')}</span>`);
     }
 }
@@ -705,12 +746,13 @@ pages.overview = {
         renderOverview();
         clearTimeout(resTimer);
         pollResources();
-        await Promise.all([loadInfo(), loadPlugins(), loadDevices(), loadDownloads(), loadWarm()]);
+        await Promise.all([loadInfo(), loadPlugins(), loadDevices(), loadDownloads(), loadWarm(), loadRemote()]);
         if (current?.name === 'overview') renderOverview();
     },
     leave() { clearTimeout(resTimer); },
     topics: {
         plugins: renderOverview,
+        remote: async () => { await loadRemote(); renderOverview(); },
         devices: async () => { await loadDevices(); renderOverview(); },
         downloads: async () => { await loadDownloads(); renderOverview(); },
     },
@@ -1428,7 +1470,7 @@ function renderProfiles() {
     }
     mount('#profile-list', list.map(p => html`<div class="card profile-card">
         <div class="top">
-            <span class="avatar-wrap">${avatar(p.name, { src: profilePicture(p) })}${(p.avatar_url || '').startsWith('mycelium:/')
+            <span class="avatar-wrap">${avatar(p.name, { src: profilePicture(p), builtin: builtinAvatar(p) })}${(p.avatar_url || '').startsWith('mycelium:/')
                 ? html`<button class="avatar-x" data-pf="unphoto" data-id="${p.profile_id}" title="${t('Togli foto')}" aria-label="${t('Togli foto')}">${icon('x')}</button>` : ''}</span>
             <span class="name">${p.name}</span>
             ${p.pin_protected ? html`<span class="pill accent plain">${icon('lock')}PIN</span>` : ''}
@@ -1699,9 +1741,31 @@ async function pairDevice() {
 // ─── App Pileus ──────────────────────────────────────────────────────────────
 function renderApps() {
     const i = state.info || {};
-    const link = location.origin + '/app/';
+    // With access from outside home working, the Apple devices install the
+    // web app from the tailnet address: one install that works at home and
+    // away (a PWA is bound to its address, so the LAN one would be a
+    // separate install that stops outside home).
+    const rs = remoteState;
+    const tailnet = rs?.app_url && (rs.state === 'external' || (rs.enabled && rs.state === 'running')) ? rs.app_url : '';
+    const link = tailnet || location.origin + '/app/';
     const a = $('#apps-link');
     if (a) { a.href = link; a.textContent = link; }
+    $('#apps-ts-step').hidden = !tailnet;
+    let note = '';
+    if (tailnet) {
+        note = html`<div class="rm-qr">${remoteQR('app', tailnet)}<div>
+            <b>${t('Accesso da fuori casa attivo')}</b>
+            <span class="muted">${t('Usa questo indirizzo su iPhone, iPad e Mac, anche in casa: funziona ovunque finché l\'app Tailscale è attiva. Un\'installazione fatta con l\'indirizzo di casa resta separata e fuori casa non funziona.')}</span>
+            ${i.pileus_web_version ? '' : html`<span class="danger-text">${t('Prima installa la versione web qui accanto.')}</span>`}
+        </div></div>`;
+    } else if (rs?.available && rs.enabled && rs.state !== 'external') {
+        note = html`<div class="callout info">${icon('globe')}<div><b>${t('Accesso da fuori casa non ancora pronto')}</b>
+            <span>${t('Quando è collegato e ha il certificato HTTPS, qui compare l\'indirizzo da usare. Per ora l\'app funziona solo in casa.')}</span></div>
+            <a class="btn btn-secondary btn-sm" href="#/network">${t('Apri')}</a></div>`;
+    } else if (rs?.available) {
+        note = html`<p class="muted small">${tr('Così l\'app funziona solo in casa. Per usarla anche fuori, attiva <a href="#/network">Accesso da fuori casa</a> prima di installarla.')}</p>`;
+    }
+    mount('#apps-remote', note);
     const form = $('form[data-form=webapp]');
     if (canRefill(form)) fillForm(form, { pileus_web_repo: i.pileus_web_repo || '' });
     const ver = $('#webapp-version');
@@ -1715,7 +1779,10 @@ function renderApps() {
     if (!st.dataset.busy) st.textContent = i.pileus_web_repo ? '' : t('Indica il repository per poter aggiornare.');
 }
 pages.apps = {
-    async enter() { renderApps(); await loadInfo(); renderApps(); },
+    async enter() { renderApps(); await Promise.all([loadInfo(), loadRemote()]); renderApps(); },
+    topics: {
+        remote: async () => { await loadRemote(); renderApps(); },
+    },
 };
 $('form[data-form=webapp]').addEventListener('submit', async e => {
     e.preventDefault();
@@ -1823,15 +1890,217 @@ pages.network = {
     async enter() {
         renderEgress();
         renderBrowserService();
-        await Promise.all([loadEgress(), loadInfo(), state.plugins ? null : loadPlugins()]);
+        renderRemote();
+        await Promise.all([loadEgress(), loadInfo(), loadRemote(), state.plugins ? null : loadPlugins()]);
         renderEgress();
         renderBrowserService();
+        renderRemote();
     },
     topics: {
         egress: async () => { await loadEgress(); renderEgress(); },
         plugins: renderEgress,
+        remote: async () => { await loadRemote(); renderRemote(); },
     },
 };
+
+// ─── Accesso da fuori casa (Tailscale) ──────────────────────────────────────
+// The card shows one state at a time (docs/remote-access.md). The server
+// pushes a "remote" live topic on every change, so the card leaves "accedi"
+// on its own once the login completes on the phone.
+let remoteState = undefined;
+async function loadRemote() {
+    const r = await api('/admin/remote/status');
+    remoteState = r.ok ? r.data : null;
+}
+// The QR image is re-fetched only when its text changes (a short hash in
+// the query: the link itself never goes in a URL).
+function remoteQR(kind, text) {
+    let h = 0;
+    for (const c of text) h = (h * 31 + c.charCodeAt(0)) | 0;
+    return html`<img src="/admin/remote/qr.svg?for=${kind}&v=${(h >>> 0).toString(36)}" alt="${t('Codice QR')}">`;
+}
+function renderRemote() {
+    const box = $('#remote-body'), pill = $('#remote-pill');
+    if (!box) return;
+    const d = remoteState;
+    const setPill = (text, cls = '') => { pill.textContent = text; pill.className = `pill ${cls}`; };
+    if (d === undefined) { setPill('—'); mount(box, '—'); return; }
+    if (!d) { setPill(t('Sconosciuto')); mount(box, html`<p class="muted remote-p">${t('Stato non disponibile.')}</p>`); return; }
+    if (!d.available) {
+        setPill(t('Non disponibile'));
+        mount(box, html`<p class="muted remote-p">${t('Questa build di mycelium non include l\'accesso remoto.')}</p>`);
+        return;
+    }
+    const tsName = d.control_url ? t('il tuo server Headscale') : 'Tailscale';
+    const off = html`<button class="btn btn-ghost" data-action="remote-disable">${t('Disattiva')}</button>`;
+    const settingsBtn = html`<button class="btn btn-ghost" data-action="remote-settings">${icon('edit')}${t('Nome e server')}</button>`;
+    const err = d.error ? html`<div class="callout err">${icon('alert')}<div><b>${t('Errore')}</b><span>${d.error}</span></div></div>` : '';
+    switch (d.state) {
+    case 'disabled':
+        setPill(t('Disattivato'));
+        mount(box, html`
+            <p class="remote-p">${tr('Il server entra nella tua rete Tailscale (la <i>tailnet</i>) e riceve un indirizzo fisso <code>https://…ts.net</code> con un certificato valido, che funziona in casa e fuori. Serve un account Tailscale gratuito e l\'app Tailscale su ogni telefono o TV che deve funzionare fuori casa.')}</p>
+            <p class="muted remote-p">${t('Il server non diventa raggiungibile da Internet: solo dai dispositivi del tuo account. Login e abbinamento dei dispositivi restano obbligatori come in casa.')}</p>
+            ${d.authkey_env ? html`<p class="muted remote-p">${t('È impostata una chiave di accesso nelle variabili d\'ambiente: il collegamento avviene senza login.')}</p>` : ''}
+            <div class="form-actions start">
+                <button class="btn btn-primary" data-action="remote-enable">${icon('globe')}${t('Attiva')}</button>
+                ${settingsBtn}
+            </div>`);
+        return;
+    case 'starting':
+        setPill(t('Connessione…'), 'info pulse');
+        mount(box, html`<p class="remote-p">${t('Connessione a {name}…', { name: tsName })}</p>${err}<div class="form-actions start">${off}</div>`);
+        return;
+    case 'needs_login':
+        setPill(t('Accesso richiesto'), 'warn');
+        mount(box, html`
+            ${d.auth_url ? html`<div class="rm-qr">${remoteQR('login', d.auth_url)}<div>
+                <b>${t('Accedi con il tuo account {name} per collegare questo server.', { name: tsName })}</b>
+                <span class="muted">${t('Apri il link qui, oppure inquadra il codice con il telefono. La pagina si aggiorna da sola quando l\'accesso è completato.')}</span>
+                <div class="form-actions start">
+                    <a class="btn btn-primary" href="${d.auth_url}" target="_blank" rel="noopener noreferrer">${icon('link')}${t('Accedi')}</a>
+                    <button class="btn btn-ghost" data-action="remote-relogin">${icon('refresh')}${t('Nuovo link')}</button>
+                </div></div></div>`
+            : html`<p class="remote-p">${t('In attesa del link di accesso…')}</p>`}
+            ${err}
+            <div class="form-actions start">${settingsBtn}${off}</div>`);
+        return;
+    case 'external': {
+        // The Tailscale already on the machine (a container of the compose,
+        // or the system's own) is used: no node of mycelium's own.
+        setPill(t('Attivo'), 'ok');
+        const ifc = d.external?.interface || 'tailscale0';
+        mount(box, html`
+            <p class="remote-p">${tr('Questo server è già nella tailnet tramite il Tailscale presente sulla macchina (interfaccia <code>{ifc}</code>): mycelium usa quello, senza un nodo in più.', { ifc: esc(ifc) })}</p>
+            ${d.app_url ? html`<div class="rm-qr">${remoteQR('app', d.app_url)}<div>
+                <b>${t('Indirizzo dell\'app da fuori casa')}</b>
+                <div class="rm-url"><code>${d.app_url}</code><button class="btn btn-ghost btn-sm" data-action="remote-copy">${t('Copia')}</button></div>
+                <span class="muted">${t('Le app native lo trovano da sole. Su iPhone, iPad e Mac installa l\'app web da questo indirizzo (pagina App Pileus), con l\'app Tailscale attiva.')}</span>
+                ${d.fqdn ? '' : html`<span class="muted">${t('Nome MagicDNS non disponibile: si usa l\'indirizzo IP, che resta lo stesso finché il nodo esiste.')}</span>`}
+            </div></div>` : ''}
+            <dl class="kv">
+                ${d.fqdn ? html`<dt>${t('Nome sulla tailnet')}</dt><dd>${d.fqdn}</dd>` : ''}
+                <dt>${t('Indirizzo IP')}</dt><dd>${d.ipv4 || '—'}</dd>
+                <dt>${t('Certificato HTTPS')}</dt><dd>${t('Non disponibile con questo nodo')}</dd>
+            </dl>
+            <p class="muted remote-p">${t('Senza HTTPS l\'app web funziona come in casa, e il traffico resta cifrato da Tailscale. Il certificato si ottiene solo con il nodo interno di mycelium: per passarci spegni il Tailscale separato e attiva qui l\'accesso; mycelium ne riprende il nodo, con stesso nome e indirizzo.')}</p>
+            <div class="form-actions start">
+                ${d.enabled ? html`<span class="muted small">${t('Nodo interno attivato: parte appena il Tailscale separato viene spento.')}</span>${off}`
+                    : html`<button class="btn btn-secondary" data-action="remote-enable">${t('Usa il nodo interno quando possibile')}</button>`}
+                ${settingsBtn}
+            </div>`);
+        return;
+    }
+    case 'host_tailscale':
+        // Another Tailscale (a container of the compose, or the host's own)
+        // is up: the node waits for it to stop (internal/remote).
+        setPill(t('In attesa'), 'warn');
+        mount(box, html`
+            <p class="remote-p">${tr('Su questa macchina è già attivo un altro Tailscale (interfaccia <code>{ifc}</code>): un container separato nel compose o quello del sistema. Il nodo di mycelium parte da solo appena lo spegni.', { ifc: esc(d.error || 'tailscale0') })}</p>
+            <p class="muted remote-p">${tr('Se quel Tailscale teneva lo stato in <code>data/tailscale</code> (come nei pacchetti per minipc), mycelium riprende lo stesso nodo: stesso nome, stesso indirizzo, nessun nuovo accesso. Per spegnerlo, sulla macchina: <code>docker compose stop tailscale onboarding</code>, poi toglili dal compose.')}</p>
+            <div class="form-actions start">${settingsBtn}${off}</div>`);
+        return;
+    case 'needs_approval':
+        setPill(t('Da approvare'), 'warn');
+        mount(box, html`
+            <p class="remote-p">${d.control_url
+                ? tr('Il server Headscale richiede l\'approvazione dei nuovi nodi: approvalo con <code>headscale nodes register</code> (o dalla sua interfaccia), il nome è <b>{name}</b>.', { name: esc(d.hostname) })
+                : tr('La tua tailnet richiede l\'approvazione dei nuovi dispositivi: approva la macchina <b>{name}</b> nella console di amministrazione.', { name: esc(d.hostname) })}</p>
+            <div class="form-actions start">
+                ${d.console_url ? html`<a class="btn btn-primary" href="${d.console_url}" target="_blank" rel="noopener noreferrer">${icon('link')}${t('Apri la console')}</a>` : ''}
+                ${off}
+            </div>`);
+        return;
+    case 'running': {
+        const expiry = d.key_expiry ? new Date(d.key_expiry) : null;
+        const daysLeft = expiry ? Math.floor((expiry - Date.now()) / 86400000) : null;
+        const kv = html`<dl class="kv">
+            <dt>${t('Nome sulla tailnet')}</dt><dd>${d.fqdn || '—'}</dd>
+            <dt>${t('Indirizzo IP')}</dt><dd>${d.ipv4 || '—'}</dd>
+            ${d.tailnet ? html`<dt>${t('Tailnet')}</dt><dd>${d.tailnet}</dd>` : ''}
+            <dt>${t('Certificato HTTPS')}</dt><dd>${d.https_ready ? t('Pronto') : d.cert_domains?.length ? t('In preparazione') : t('Non abilitato')}</dd>
+            <dt>${t('Scadenza chiave')}</dt><dd>${expiry ? expiry.toLocaleDateString(locale(), { dateStyle: 'medium' }) : t('Nessuna')}</dd>
+        </dl>`;
+        let main;
+        if (d.https_ready && d.app_url) {
+            setPill(t('Attivo'), 'ok');
+            main = html`<div class="rm-qr">${remoteQR('app', d.app_url)}<div>
+                <b>${t('Indirizzo dell\'app da fuori casa')}</b>
+                <div class="rm-url"><code>${d.app_url}</code><button class="btn btn-ghost btn-sm" data-action="remote-copy">${t('Copia')}</button></div>
+                ${d.webapp_installed ? '' : html`<span class="danger-text">${tr('L\'app web non è ancora installata: installala da <a href="#/apps">App Pileus</a>.')}</span>`}
+                <ol class="rm-steps">
+                    <li>${t('Installa l\'app Tailscale sul telefono e accedi con lo stesso account.')}</li>
+                    <li>${t('Lascia Tailscale attivo: in casa la connessione resta diretta, non passa da Internet.')}</li>
+                    <li>${t('Inquadra il codice, apri il link in Safari → Condividi → Aggiungi alla schermata Home.')}</li>
+                    <li>${t('Abbina il dispositivo con un codice (Dispositivi → Abbina), come in casa.')}</li>
+                </ol>
+                <span class="muted">${t('Sull\'iPhone usa solo questo indirizzo, anche in casa: è un\'installazione diversa da quella con l\'IP di casa. iOS consente una sola VPN attiva alla volta.')}</span>
+            </div></div>`;
+        } else if (!d.cert_domains?.length) {
+            setPill(t('Attivo, senza HTTPS'), 'warn');
+            main = html`<div class="callout warn">${icon('alert')}<div>
+                <b>${t('Manca il certificato HTTPS')}</b>
+                <span>${d.control_url
+                    ? t('Il server Headscale non rilascia certificati: le app native funzionano, la web app su iPhone no.')
+                    : (d.magic_dns ? tr('Abilita <b>HTTPS Certificates</b> nella console di Tailscale (pagina DNS).') : tr('Abilita <b>MagicDNS</b> e poi <b>HTTPS Certificates</b> nella console di Tailscale (pagina DNS).'))}</span>
+                <span class="muted">${t('Il nome del server comparirà nei registri pubblici dei certificati (Certificate Transparency): rivela il nome, non rende il server raggiungibile.')}</span>
+            </div>${d.dns_console_url ? html`<a class="btn btn-secondary btn-sm" href="${d.dns_console_url}" target="_blank" rel="noopener noreferrer">${t('Apri DNS')}</a>` : ''}</div>`;
+        } else {
+            setPill(t('Certificato in arrivo'), 'info pulse');
+            main = html`<p class="remote-p">${t('Collegato. Il certificato HTTPS per {name} è in preparazione: il codice compare appena è pronto.', { name: d.fqdn })}</p>
+                ${d.cert_error ? html`<p class="muted remote-p">${t('Ultimo tentativo: {err}', { err: d.cert_error })}</p>` : ''}`;
+        }
+        mount(box, html`${main}
+            ${daysLeft !== null && daysLeft <= 14 ? html`<div class="callout warn">${icon('clock')}<div><b>${daysLeft < 0 ? t('La chiave del server è scaduta') : t('La chiave del server scade tra {n} giorni', { n: daysLeft })}</b>
+                <span>${d.control_url
+                    ? t('Allo scadere l\'accesso da fuori casa smette di funzionare. Su Headscale rinnova la chiave del nodo o registralo con una chiave senza scadenza.')
+                    : t('Allo scadere l\'accesso da fuori casa smette di funzionare. Nella console disattiva la scadenza per questa macchina (Disable key expiry).')}</span></div>
+                ${d.console_url ? html`<a class="btn btn-secondary btn-sm" href="${d.console_url}" target="_blank" rel="noopener noreferrer">${t('Console')}</a>` : ''}</div>` : ''}
+            ${err}
+            ${kv}
+            <div class="form-actions start">
+                ${settingsBtn}
+                <button class="btn btn-ghost danger-text" data-action="remote-logout">${t('Scollega account')}</button>
+                ${off}
+            </div>`);
+        return;
+    }
+    default:
+        setPill(t('Errore'), 'err');
+        mount(box, html`${err || html`<p class="remote-p">${t('Collegamento non riuscito.')}</p>`}
+            <div class="form-actions start">
+                <button class="btn btn-primary" data-action="remote-enable">${icon('refresh')}${t('Riprova')}</button>
+                ${settingsBtn}${off}
+            </div>`);
+    }
+}
+async function remoteAction(path, okMsg) {
+    const r = await post(path);
+    if (!r.ok) toast(r.error || t('Operazione non riuscita.'), 'err');
+    else if (okMsg) toast(okMsg, 'ok');
+    await loadRemote();
+    renderRemote();
+}
+async function remoteSettings() {
+    const d = remoteState || {};
+    await dialog({
+        title: t('Nome e server'),
+        fields: [
+            { name: 'hostname', label: t('Nome della macchina'), value: d.hostname || 'mycelium', mono: true, maxlength: 63,
+                hint: d.hostname_env ? t('Impostato da MYCELIUM_REMOTE_HOSTNAME: qui non ha effetto.') : t('Diventa <nome>.<tailnet>.ts.net. Se è già preso, Tailscale aggiunge un numero.') },
+            { name: 'control_url', label: t('Server di controllo (Headscale)'), value: d.control_url || '', mono: true, placeholder: t('vuoto = Tailscale'),
+                hint: d.control_url_env ? t('Impostato da MYCELIUM_REMOTE_CONTROL_URL: qui non ha effetto.') : t('Solo se usi un tuo server Headscale. Deve essere raggiungibile con un DNS pubblico.') },
+        ],
+        confirm: t('Salva'),
+        onSubmit: async v => {
+            const r = await api('/admin/remote/settings', { method: 'PUT', json: { hostname: v.hostname.trim(), control_url: v.control_url.trim() } });
+            if (!r.ok) return r.error;
+            toast(t('Impostazioni salvate.'), 'ok');
+        },
+    });
+    await loadRemote();
+    renderRemote();
+}
 $('#egress-list').addEventListener('click', async e => {
     const b = e.target.closest('[data-eg]');
     if (!b || b.dataset.eg === 'toggle') return;
@@ -1964,7 +2233,7 @@ function renderSystem() {
             ['Durata media', dur(w.warm_duration)],
             ['Play serviti in anticipo', `${w.warm_hit || 0}${ok ? ` (${Math.round(100 * (w.warm_hit || 0) / ok)}%)` : ''}, ${t('{n} mentre era in corso', { n: w.warm_hit_inflight || 0 })}`],
             ['Saltate', skipped],
-            ['Play con estrazione propria', `${dur(fresh)}${fresh.count ? ', ' + t('{n} dalla cache', { n: fresh.cache_hits || 0 }) : ''}`],
+            ['Play preparati al momento', `${dur(fresh)}${fresh.count ? ', ' + t('{n} dalla cache', { n: fresh.cache_hits || 0 }) : ''}`],
             ['Play uniti a una in corso', dur(w.resolve_duration_joined)],
         ];
         mount('#warm-stats', rows.map(([k, v]) => html`<dt>${t(k)}</dt><dd>${v}</dd>`));
@@ -1973,6 +2242,7 @@ function renderSystem() {
 pages.system = {
     async enter() {
         renderSystem();
+        loadBackupStatus();
         await Promise.all([loadInfo(), loadWarm()]);
         renderSystem();
     },
@@ -1986,7 +2256,7 @@ $('form[data-form=warm]').addEventListener('submit', async e => {
         warm_resolve_per_hour: String(isNaN(n) || n < 0 ? 20 : Math.floor(n)),
     });
     if (!r.ok) { toast(r.error || t('Salvataggio non riuscito.'), 'err'); return; }
-    toast(t('Estrazione anticipata salvata.'), 'ok');
+    toast(t('Preparazione anticipata salvata.'), 'ok');
     markClean(e.target);
     await loadInfo();
 });
@@ -2065,6 +2335,221 @@ async function memoryProfile(btn) {
         }) : html`<p class="muted small">${t('Nessun plugin caricato.')}</p>`}`);
 }
 
+// ─── Backup and restore ──────────────────────────────────────────────────────
+// Export: admin password + optional passphrase → the .mycelium file.
+// Import: upload (asking the passphrase when the file is sealed) → summary
+// with one checkbox per item → apply, which restarts the server; the restore
+// happens at boot and its outcome shows here afterwards.
+const BACKUP_MAGIC = 'MYCBK\x01';
+
+async function exportBackup() {
+    await dialog({
+        title: t('Esporta la configurazione'),
+        body: html`<span>${t('Il file contiene la password amministratore, le chiavi del server, gli accessi dei plugin e le configurazioni VPN. Con una passphrase è cifrato: senza, chiunque lo abbia può leggerli.')}</span>`,
+        fields: [
+            { name: 'password', label: t('Password amministratore'), type: 'password', required: true, autocomplete: 'current-password' },
+            { name: 'passphrase', label: t('Passphrase del backup (consigliata)'), type: 'password', autocomplete: 'new-password', hint: t('Serve per importarlo: non si può recuperare.') },
+            { name: 'passphrase2', label: t('Ripeti la passphrase'), type: 'password', autocomplete: 'new-password' },
+        ],
+        confirm: t('Esporta'),
+        onSubmit: async v => {
+            if (v.passphrase !== v.passphrase2) return t('Le due passphrase non coincidono.');
+            if (v.passphrase && v.passphrase.length < 8) return t('La passphrase deve avere almeno 8 caratteri.');
+            let res;
+            try {
+                res = await fetch('/admin/backup/export', {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: v.password, passphrase: v.passphrase }),
+                });
+            } catch { return t('Server non raggiungibile.'); }
+            if (res.status === 401) { location.href = '/admin/login'; return; }
+            if (!res.ok) return (await res.text().catch(() => '')).trim() || t('Errore {status}', { status: res.status });
+            const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || 'mycelium.mycelium';
+            const url = URL.createObjectURL(await res.blob());
+            const a = Object.assign(document.createElement('a'), { href: url, download: name });
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+            toast(v.passphrase ? t('Backup cifrato scaricato.') : t('Backup scaricato. Conservalo in un posto sicuro.'), 'ok');
+        },
+    });
+}
+
+async function uploadBackup(file, passphrase) {
+    const fd = new FormData();
+    fd.append('passphrase', passphrase || ''); // before the file: the server reads it first
+    fd.append('file', file);
+    return api('/admin/backup/inspect', { method: 'POST', body: fd });
+}
+
+async function importBackup(file) {
+    if (!file) return;
+    const head = new TextDecoder('latin1').decode(await file.slice(0, BACKUP_MAGIC.length).arrayBuffer());
+    let summary = null;
+    if (head === BACKUP_MAGIC) {
+        await dialog({
+            title: t('Backup cifrato'),
+            body: html`<span>${t('{name} è protetto da una passphrase.', { name: file.name })}</span>`,
+            fields: [{ name: 'passphrase', label: t('Passphrase'), type: 'password', required: true, autocomplete: 'off' }],
+            confirm: t('Apri'),
+            onSubmit: async v => {
+                const r = await uploadBackup(file, v.passphrase);
+                if (!r.ok) return r.error;
+                summary = r.data;
+            },
+        });
+    } else {
+        toast(t('Caricamento del backup…'), 'info');
+        const r = await uploadBackup(file, '');
+        if (!r.ok) { toast(r.error, 'err'); return; }
+        summary = r.data;
+    }
+    if (summary) await reviewBackup(summary);
+    loadBackupStatus();
+}
+
+const backupSections = {
+    plugins: ['Plugin', 'Ogni plugin con i suoi file, le impostazioni e gli accessi salvati. Sostituisce la copia installata.'],
+    profiles: ['Profili', 'Con foto, PIN, preferenze, cronologia e La mia lista.'],
+    devices: ['Dispositivi abbinati', 'Continuano a funzionare senza riabbinarli solo se importi anche le chiavi del server.'],
+    vpn: ['Uscite VPN', 'Il registro delle uscite e le configurazioni WireGuard: sostituisce quello attuale.'],
+    settings: ['Impostazioni del server', 'Una voce per impostazione.'],
+    identity: ['Identità del server', ''],
+};
+const backupStatus = {
+    new: ['Nuovo', 'info'],
+    replace: ['Sostituisce', 'warn'],
+    same: ['Uguale', 'plain'],
+};
+
+function backupItemText(sec, it) {
+    const parts = [];
+    switch (sec) {
+        case 'plugins':
+            if (it.version) parts.push(it.installed_version && it.installed_version !== it.version
+                ? t('v{v} (installata v{old})', { v: it.version, old: it.installed_version }) : `v${it.version}`);
+            parts.push(t('{n} file', { n: it.files || 0 }), fmtBytes(it.bytes || 0));
+            if (it.settings) parts.push(t('{n} impostazioni', { n: it.settings }));
+            if (it.secrets) parts.push(t('{n} accessi salvati', { n: it.secrets }));
+            return [it.label, parts.join(' · ')];
+        case 'profiles':
+            parts.push(t('{n} in cronologia', { n: it.history || 0 }), t('{n} nella lista', { n: it.list || 0 }));
+            if (it.pin) parts.push('PIN');
+            if (it.avatar) parts.push(t('foto'));
+            return [it.label, parts.join(' · ')];
+        case 'devices':
+            return [t('{n} dispositivi', { n: it.count || 0 }), ''];
+        case 'vpn':
+            return [(it.names || []).join(', ') || t('Uscite VPN'), it.files ? t('{n} configurazioni WireGuard', { n: it.files }) : ''];
+        case 'identity':
+            return it.id === 'admin_password'
+                ? [t('Password amministratore'), t('Dopo il riavvio si accede con la password del server di origine.')]
+                : [t('Chiavi del server'), t('Segreto dei token e certificato TLS: i dispositivi abbinati restano validi.')];
+        default:
+            return [it.label, ''];
+    }
+}
+
+async function reviewBackup(s) {
+    const m = s.manifest || {};
+    const total = s.sections.reduce((n, sec) => n + sec.items.length, 0);
+    const body = html`
+        <span>${t('Backup del {date} da {host} · mycelium {v} · {size}', {
+            date: fmtDateTime(m.created_at), host: m.hostname || '—', v: m.core_version || '?', size: fmtBytes(s.bytes || 0),
+        })}${s.encrypted ? ' · ' + t('cifrato') : ''}</span>
+        ${(s.warnings || []).map(w => html`<span class="danger-text">${w}</span>`)}
+        <span>${t('Scegli cosa importare. Il resto di questo server non cambia; prima di applicare ne viene salvata una copia.')}</span>
+        <div class="bk-summary">
+            ${s.sections.map(sec => {
+                const [title, note] = backupSections[sec.key] || [sec.key, ''];
+                return html`<details class="bk-sec" ${raw(sec.key === 'settings' ? '' : 'open')}>
+                    <summary><input type="checkbox" checked data-bk-all="${sec.key}" aria-label="${t('Tutto')}">
+                        <b>${t(title)}</b><span class="faint small" data-bk-count="${sec.key}">${sec.items.length}/${sec.items.length}</span></summary>
+                    ${note ? html`<small class="faint">${t(note)}</small>` : ''}
+                    ${sec.items.map(it => {
+                        const [label, detail] = backupItemText(sec.key, it);
+                        const [stText, stCls] = backupStatus[it.status] || [it.status, 'plain'];
+                        return html`<label class="bk-item">
+                            <input type="checkbox" checked data-bk-sec="${sec.key}" data-bk-item="${it.id}">
+                            <span><b>${label}</b>${detail ? html`<small>${detail}</small>` : ''}${it.warning ? html`<small class="danger-text">${it.warning}</small>` : ''}</span>
+                            <span class="pill ${stCls}">${t(stText)}</span>
+                        </label>`;
+                    })}
+                </details>`;
+            })}
+        </div>`;
+
+    const sync = (dlg, key) => {
+        const items = $$(`[data-bk-sec="${key}"]`, dlg);
+        const on = items.filter(i => i.checked).length;
+        const all = $(`[data-bk-all="${key}"]`, dlg);
+        all.checked = on === items.length;
+        all.indeterminate = on > 0 && on < items.length;
+        $(`[data-bk-count="${key}"]`, dlg).textContent = `${on}/${items.length}`;
+    };
+    let applied = null;
+    await dialog({
+        title: t('Importa il backup'),
+        body,
+        fields: [{ name: 'password', label: t('Password amministratore'), type: 'password', required: true, autocomplete: 'current-password' }],
+        confirm: t('Importa e riavvia'),
+        danger: true,
+        onOpen: dlg => {
+            dlg.classList.add('dialog-wide');
+            dlg.addEventListener('change', e => {
+                const all = e.target.closest('[data-bk-all]');
+                if (all) $$(`[data-bk-sec="${all.dataset.bkAll}"]`, dlg).forEach(i => { i.checked = all.checked; });
+                const key = all?.dataset.bkAll || e.target.dataset.bkSec;
+                if (key) sync(dlg, key);
+            });
+            // A click on the section checkbox must not also fold the section.
+            $$('[data-bk-all]', dlg).forEach(i => i.addEventListener('click', e => e.stopPropagation()));
+        },
+        onClose: dlg => dlg.classList.remove('dialog-wide'),
+        onSubmit: async (v, dlg) => {
+            const selection = {};
+            $$('[data-bk-item]:checked', dlg).forEach(i => (selection[i.dataset.bkSec] ||= []).push(i.dataset.bkItem));
+            if (!Object.keys(selection).length) return t('Non hai scelto niente da importare.');
+            const r = await post('/admin/backup/apply', { password: v.password, selection });
+            if (!r.ok) return r.error;
+            applied = r.data || {};
+        },
+    });
+    if (applied) {
+        toast(t('Ripristino programmato: il server si riavvia e lo applica. La pagina si ricarica da sola.'), 'info');
+        waitForRestart();
+    } else if (total) {
+        await post('/admin/backup/discard');
+    }
+}
+
+async function loadBackupStatus() {
+    const box = $('#backup-status');
+    const r = await api('/admin/backup/status');
+    if (!r.ok || !r.data) { mount(box, ''); return; }
+    const { last, staged, pending } = r.data;
+    const sections = { plugins: 'plugin', profiles: 'profili', devices: 'dispositivi', vpn: 'VPN', settings: 'impostazioni', identity: 'identità' };
+    mount(box, html`
+        ${pending ? html`<div class="action-row"><span><b>${t('Ripristino in attesa')}</b><small>${t('Viene applicato al prossimo avvio del server.')}</small></span>
+            <button class="btn btn-ghost" data-action="backup-discard">${t('Annulla')}</button></div>` : ''}
+        ${staged && !pending ? html`<div class="action-row"><span><b>${t('Backup caricato, non ancora importato')}</b><small>${t('Del {date} da {host}.', { date: fmtDateTime(staged.manifest?.created_at), host: staged.manifest?.hostname || '—' })}</small></span>
+            <button class="btn btn-secondary" data-action="backup-review">${t('Rivedi')}</button></div>` : ''}
+        ${last ? html`<div class="action-row"><span><b>${t('Ultimo ripristino: {date}', { date: fmtDateTime(last.applied_at) })}</b>
+            <small>${t('Dal backup del {date} di {host}.', { date: fmtDateTime(last.source?.created_at), host: last.source?.hostname || '—' })}
+                ${Object.entries(last.imported || {}).filter(([, n]) => n > 0).map(([k, n]) => `${t(sections[k] || k)} ${k === 'devices' || k === 'vpn' ? '✓' : n}`).join(' · ')}</small>
+            ${(last.errors || []).map(e => html`<small class="danger-text">${e}</small>`)}</span>
+            ${last.safety_copy ? html`<a class="btn btn-ghost" href="/admin/backup/safety/${encodeURIComponent(last.safety_copy)}" download>${icon('download')}${t('Copia precedente')}</a>` : ''}</div>` : ''}`);
+    box._staged = staged || null;
+}
+
+$('#backup-file').addEventListener('change', e => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    importBackup(f);
+});
+
 // ─── Logs ────────────────────────────────────────────────────────────────────
 let sysLog = null;
 pages.logs = {
@@ -2084,7 +2569,7 @@ const tourSteps = [
     { page: 'overview', target: 'section[data-page=overview] .grid-3', title: 'Panoramica',
       body: 'Qui vedi come sta il server: processore, memoria e da quanto è acceso. Sopra compaiono solo gli avvisi che chiedono la tua attenzione.' },
     { page: 'overview', target: 'section[data-page=overview] .grid-2', title: 'Riepiloghi',
-      body: 'Plugin, dispositivi, download ed estrazione anticipata in breve. Tocca una scheda per aprire la sua pagina.' },
+      body: 'Plugin, dispositivi, download e preparazione anticipata in breve. Tocca una scheda per aprire la sua pagina.' },
     { page: 'plugins', target: 'section[data-page=plugins] .page-head [data-action=plugin-install]', title: 'Installa i plugin',
       body: 'I plugin sono le sorgenti dei contenuti. Installali da qui, anche più file .zip insieme, oppure trascinandoli nella pagina.' },
     { page: 'plugins', target: '#plugin-list', title: 'I tuoi plugin',
@@ -2265,6 +2750,18 @@ document.addEventListener('click', async e => {
         case 'egress-add-proxy': addProxy(); break;
         case 'egress-add-wg': addWireGuard(); break;
         case 'bs-test': testBrowserService(); break;
+        case 'remote-enable': remoteAction('/admin/remote/enable'); break;
+        case 'remote-disable': remoteAction('/admin/remote/disable', t('Accesso da fuori casa disattivato.')); break;
+        case 'remote-relogin': remoteAction('/admin/remote/relogin'); break;
+        case 'remote-settings': remoteSettings(); break;
+        case 'remote-copy':
+            try { await navigator.clipboard.writeText(remoteState?.app_url || ''); toast(t('Indirizzo copiato.'), 'ok'); }
+            catch { toast(t('Copia non riuscita: selezionalo a mano.'), 'err'); }
+            break;
+        case 'remote-logout':
+            if (!(await confirmDialog(t('Scollegare il server dal tuo account?'), t('Il server esce dalla tailnet e dimentica il collegamento. Per riattivarlo servirà un nuovo accesso; la vecchia macchina si può rimuovere dalla console.'), { confirm: t('Scollega'), danger: true }))) return;
+            remoteAction('/admin/remote/logout', t('Server scollegato.'));
+            break;
         case 'bs-clear-key': {
             const r = await saveSettings({ browser_service_api_key: '' });
             toast(r.ok ? t('Chiave rimossa.') : (r.error || t('Operazione non riuscita.')), r.ok ? 'ok' : 'err');
@@ -2287,6 +2784,10 @@ document.addEventListener('click', async e => {
             break;
         }
         case 'mem-profile': memoryProfile(b); break;
+        case 'backup-export': exportBackup(); break;
+        case 'backup-import': $('#backup-file').click(); break;
+        case 'backup-review': { const s = $('#backup-status')._staged; if (s) await reviewBackup(s); loadBackupStatus(); break; }
+        case 'backup-discard': await post('/admin/backup/discard'); toast(t('Ripristino annullato.'), 'ok'); loadBackupStatus(); break;
         case 'wipe-profiles':
             dangerAction({
                 title: t('Cancellare i dati di tutti i profili?'),

@@ -241,6 +241,27 @@ stored one. `in_list=false` removes; only `plugin_id`/`media_id` matter. Both
 are idempotent. A client on a server without the RPCs gets `UNIMPLEMENTED` and
 hides the feature.
 
+## Away from home (`GetServerInfo`)
+
+With *Accesso da fuori casa* on, or a Tailscale already on the machine
+([remote-access.md](remote-access.md)), the server also answers on its tailnet. `AuthService.GetServerInfo` (device JWT
+required, never on `/pileus/info`) returns `remote_host` (the Tailscale IPv4,
+so it works with MagicDNS off), `remote_grpc_port`, `remote_http_port` and
+`remote_fqdn`: from mycelium's own node or, when there is none, from a
+Tailscale already running on the machine (see remote-access.md); all
+empty/zero when there is neither.
+The tailnet serves the same gRPC port with the same pinned TLS certificate
+and the same HTTP port, so the fingerprint and `/pileus/info` checks pass
+unchanged, and `/proxy` URLs come back on the address the client dialed.
+
+Pileus (native builds) calls it at every start and after pairing and stores
+`remote_host` as `DeviceSession.vpnHost`, the candidate `resolveGrpcHost`
+already races: at home UDP discovery or the saved LAN IP win, away from home
+with the Tailscale app on the tailnet address does. An empty answer clears
+it; `UNIMPLEMENTED` (older server) or any error leaves it alone. The web build
+doesn't call it: it is installed from `https://<fqdn>/app/` and always talks
+to its own origin.
+
 ## Plugin result conventions the server relies on
 
 - `get_streams`: an explicit list — even empty — is returned as-is (empty =
@@ -275,7 +296,7 @@ All optional, all with sane defaults. Settable via the admin settings store
 
 Warm resolve: `warm_resolve_enabled` (default on) and `warm_resolve_per_hour`
 (per-plugin budget, default 20; 0 = none), both in the dashboard
-(Sistema → Estrazione anticipata), with the counters.
+(Sistema → Preparazione anticipata), with the counters.
 
 Cancellation: the pre-buffer inherits the RPC's `context.Context`. If the user
 backs out of the player mid-resolve, it stops promptly and the RPC returns the

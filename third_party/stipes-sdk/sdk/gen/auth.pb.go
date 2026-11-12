@@ -1283,6 +1283,122 @@ func (x *SetProfilePinResponse) GetPinProtected() bool {
 	return false
 }
 
+// GetServerInfo tells a paired device how else it can reach this server.
+// Paired devices only (it carries the server's tailnet address, which isn't
+// handed to anyone on the LAN who asks /pileus/info). Call it on every
+// start: the address appears when remote access is turned on and changes if
+// the node is re-created.
+type GetServerInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServerInfoRequest) Reset() {
+	*x = GetServerInfoRequest{}
+	mi := &file_auth_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerInfoRequest) ProtoMessage() {}
+
+func (x *GetServerInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetServerInfoRequest) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{24}
+}
+
+type ServerInfoResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Address on the operator's tailnet (the Tailscale IPv4: it works with
+	// MagicDNS off too): mycelium's own node, or a Tailscale already running on
+	// the machine; "" when there is neither. The device reaches it only while
+	// its own Tailscale app is on; it serves the same gRPC port, HTTP port and
+	// pinned TLS certificate as the LAN.
+	RemoteHost     string `protobuf:"bytes,1,opt,name=remote_host,json=remoteHost,proto3" json:"remote_host,omitempty"`
+	RemoteGrpcPort int32  `protobuf:"varint,2,opt,name=remote_grpc_port,json=remoteGrpcPort,proto3" json:"remote_grpc_port,omitempty"`
+	RemoteHttpPort int32  `protobuf:"varint,3,opt,name=remote_http_port,json=remoteHttpPort,proto3" json:"remote_http_port,omitempty"`
+	// The node's MagicDNS name, e.g. "mycelium.tail1234.ts.net" ("" as above).
+	// Informational: native clients dial remote_host.
+	RemoteFqdn    string `protobuf:"bytes,4,opt,name=remote_fqdn,json=remoteFqdn,proto3" json:"remote_fqdn,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServerInfoResponse) Reset() {
+	*x = ServerInfoResponse{}
+	mi := &file_auth_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServerInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServerInfoResponse) ProtoMessage() {}
+
+func (x *ServerInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServerInfoResponse.ProtoReflect.Descriptor instead.
+func (*ServerInfoResponse) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ServerInfoResponse) GetRemoteHost() string {
+	if x != nil {
+		return x.RemoteHost
+	}
+	return ""
+}
+
+func (x *ServerInfoResponse) GetRemoteGrpcPort() int32 {
+	if x != nil {
+		return x.RemoteGrpcPort
+	}
+	return 0
+}
+
+func (x *ServerInfoResponse) GetRemoteHttpPort() int32 {
+	if x != nil {
+		return x.RemoteHttpPort
+	}
+	return 0
+}
+
+func (x *ServerInfoResponse) GetRemoteFqdn() string {
+	if x != nil {
+		return x.RemoteFqdn
+	}
+	return ""
+}
+
 var File_auth_proto protoreflect.FileDescriptor
 
 const file_auth_proto_rawDesc = "" +
@@ -1374,7 +1490,15 @@ const file_auth_proto_rawDesc = "" +
 	"\anew_pin\x18\x03 \x01(\tR\x06newPin\"L\n" +
 	"\x15SetProfilePinResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12#\n" +
-	"\rpin_protected\x18\x02 \x01(\bR\fpinProtected2\xa0\b\n" +
+	"\rpin_protected\x18\x02 \x01(\bR\fpinProtected\"\x16\n" +
+	"\x14GetServerInfoRequest\"\xaa\x01\n" +
+	"\x12ServerInfoResponse\x12\x1f\n" +
+	"\vremote_host\x18\x01 \x01(\tR\n" +
+	"remoteHost\x12(\n" +
+	"\x10remote_grpc_port\x18\x02 \x01(\x05R\x0eremoteGrpcPort\x12(\n" +
+	"\x10remote_http_port\x18\x03 \x01(\x05R\x0eremoteHttpPort\x12\x1f\n" +
+	"\vremote_fqdn\x18\x04 \x01(\tR\n" +
+	"remoteFqdn2\xef\b\n" +
 	"\vAuthService\x12V\n" +
 	"\x0fAuthorizeDevice\x12 .mycelium.AuthorizeDeviceRequest\x1a!.mycelium.AuthorizeDeviceResponse\x12J\n" +
 	"\rCreateProfile\x12\x1e.mycelium.CreateProfileRequest\x1a\x19.mycelium.ProfileResponse\x12M\n" +
@@ -1389,7 +1513,8 @@ const file_auth_proto_rawDesc = "" +
 	"\fRenameDevice\x12\x1d.mycelium.RenameDeviceRequest\x1a\x1e.mycelium.RenameDeviceResponse\x12P\n" +
 	"\rUnlockProfile\x12\x1e.mycelium.UnlockProfileRequest\x1a\x1f.mycelium.UnlockProfileResponse\x12J\n" +
 	"\vLockProfile\x12\x1c.mycelium.LockProfileRequest\x1a\x1d.mycelium.LockProfileResponse\x12P\n" +
-	"\rSetProfilePin\x12\x1e.mycelium.SetProfilePinRequest\x1a\x1f.mycelium.SetProfilePinResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
+	"\rSetProfilePin\x12\x1e.mycelium.SetProfilePinRequest\x1a\x1f.mycelium.SetProfilePinResponse\x12M\n" +
+	"\rGetServerInfo\x12\x1e.mycelium.GetServerInfoRequest\x1a\x1c.mycelium.ServerInfoResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
 
 var (
 	file_auth_proto_rawDescOnce sync.Once
@@ -1403,7 +1528,7 @@ func file_auth_proto_rawDescGZIP() []byte {
 	return file_auth_proto_rawDescData
 }
 
-var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_auth_proto_goTypes = []any{
 	(*AuthorizeDeviceRequest)(nil),       // 0: mycelium.AuthorizeDeviceRequest
 	(*AuthorizeDeviceResponse)(nil),      // 1: mycelium.AuthorizeDeviceResponse
@@ -1429,6 +1554,8 @@ var file_auth_proto_goTypes = []any{
 	(*LockProfileResponse)(nil),          // 21: mycelium.LockProfileResponse
 	(*SetProfilePinRequest)(nil),         // 22: mycelium.SetProfilePinRequest
 	(*SetProfilePinResponse)(nil),        // 23: mycelium.SetProfilePinResponse
+	(*GetServerInfoRequest)(nil),         // 24: mycelium.GetServerInfoRequest
+	(*ServerInfoResponse)(nil),           // 25: mycelium.ServerInfoResponse
 }
 var file_auth_proto_depIdxs = []int32{
 	3,  // 0: mycelium.ListProfilesResponse.profiles:type_name -> mycelium.ProfileResponse
@@ -1446,21 +1573,23 @@ var file_auth_proto_depIdxs = []int32{
 	18, // 12: mycelium.AuthService.UnlockProfile:input_type -> mycelium.UnlockProfileRequest
 	20, // 13: mycelium.AuthService.LockProfile:input_type -> mycelium.LockProfileRequest
 	22, // 14: mycelium.AuthService.SetProfilePin:input_type -> mycelium.SetProfilePinRequest
-	1,  // 15: mycelium.AuthService.AuthorizeDevice:output_type -> mycelium.AuthorizeDeviceResponse
-	3,  // 16: mycelium.AuthService.CreateProfile:output_type -> mycelium.ProfileResponse
-	5,  // 17: mycelium.AuthService.ListProfiles:output_type -> mycelium.ListProfilesResponse
-	7,  // 18: mycelium.AuthService.DeleteProfile:output_type -> mycelium.DeleteProfileResponse
-	3,  // 19: mycelium.AuthService.UpdateProfile:output_type -> mycelium.ProfileResponse
-	3,  // 20: mycelium.AuthService.SetProfilePreferences:output_type -> mycelium.ProfileResponse
-	1,  // 21: mycelium.AuthService.RefreshToken:output_type -> mycelium.AuthorizeDeviceResponse
-	17, // 22: mycelium.AuthService.UnpairSelf:output_type -> mycelium.UnpairSelfResponse
-	13, // 23: mycelium.AuthService.ListDevices:output_type -> mycelium.ListDevicesResponse
-	15, // 24: mycelium.AuthService.RenameDevice:output_type -> mycelium.RenameDeviceResponse
-	19, // 25: mycelium.AuthService.UnlockProfile:output_type -> mycelium.UnlockProfileResponse
-	21, // 26: mycelium.AuthService.LockProfile:output_type -> mycelium.LockProfileResponse
-	23, // 27: mycelium.AuthService.SetProfilePin:output_type -> mycelium.SetProfilePinResponse
-	15, // [15:28] is the sub-list for method output_type
-	2,  // [2:15] is the sub-list for method input_type
+	24, // 15: mycelium.AuthService.GetServerInfo:input_type -> mycelium.GetServerInfoRequest
+	1,  // 16: mycelium.AuthService.AuthorizeDevice:output_type -> mycelium.AuthorizeDeviceResponse
+	3,  // 17: mycelium.AuthService.CreateProfile:output_type -> mycelium.ProfileResponse
+	5,  // 18: mycelium.AuthService.ListProfiles:output_type -> mycelium.ListProfilesResponse
+	7,  // 19: mycelium.AuthService.DeleteProfile:output_type -> mycelium.DeleteProfileResponse
+	3,  // 20: mycelium.AuthService.UpdateProfile:output_type -> mycelium.ProfileResponse
+	3,  // 21: mycelium.AuthService.SetProfilePreferences:output_type -> mycelium.ProfileResponse
+	1,  // 22: mycelium.AuthService.RefreshToken:output_type -> mycelium.AuthorizeDeviceResponse
+	17, // 23: mycelium.AuthService.UnpairSelf:output_type -> mycelium.UnpairSelfResponse
+	13, // 24: mycelium.AuthService.ListDevices:output_type -> mycelium.ListDevicesResponse
+	15, // 25: mycelium.AuthService.RenameDevice:output_type -> mycelium.RenameDeviceResponse
+	19, // 26: mycelium.AuthService.UnlockProfile:output_type -> mycelium.UnlockProfileResponse
+	21, // 27: mycelium.AuthService.LockProfile:output_type -> mycelium.LockProfileResponse
+	23, // 28: mycelium.AuthService.SetProfilePin:output_type -> mycelium.SetProfilePinResponse
+	25, // 29: mycelium.AuthService.GetServerInfo:output_type -> mycelium.ServerInfoResponse
+	16, // [16:30] is the sub-list for method output_type
+	2,  // [2:16] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -1477,7 +1606,7 @@ func file_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_proto_rawDesc), len(file_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

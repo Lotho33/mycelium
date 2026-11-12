@@ -27,7 +27,7 @@ if [ "$(id -u)" = "0" ] && [ "${MYCELIUM_RUN_AS_ROOT:-0}" != "1" ]; then
              ./data/mycelium.db ./data/mycelium.db-wal ./data/mycelium.db-shm \
              ./data/logs ./data/imgcache ./data/pileus-web ./data/pileus-web.bak \
              ./data/pileus-web-tv ./data/pileus-web-tv.bak \
-             ./data/wireproxy ./data/downloads ./plugins; do
+             ./data/wireproxy ./data/downloads ./data/tailscale ./plugins; do
         own "$p"
     done
 

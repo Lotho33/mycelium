@@ -445,6 +445,23 @@ dialog { color: var(--text); }
 .dialog .error:empty { display: none; }
 .dialog[open] { animation: pop .16s ease; }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
+.dialog.dialog-wide { width: min(640px, calc(100vw - 28px)); }
+
+/* Backup import summary */
+.bk-summary { max-height: min(52vh, 520px); overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; padding: 4px 12px; }
+.bk-summary input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; flex: none; margin: 0; }
+.bk-sec { padding: 8px 0; border-top: 1px solid var(--border); }
+.bk-sec:first-child { border-top: 0; }
+.bk-sec > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; padding: 4px 0; }
+.bk-sec > summary::-webkit-details-marker { display: none; }
+.bk-sec > summary::after { content: "›"; margin-left: auto; font-size: 17px; color: var(--faint); transition: transform .15s; }
+.bk-sec[open] > summary::after { transform: rotate(90deg); }
+.bk-sec > small { display: block; margin: 0 0 4px 26px; font-size: 12px; }
+.bk-item { display: flex; align-items: center; gap: 10px; padding: 7px 0 7px 26px; cursor: pointer; }
+.bk-item > span:nth-child(2) { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.bk-item b { font-weight: 550; overflow-wrap: anywhere; }
+.bk-item small { color: var(--faint); font-size: 12px; }
+.bk-item .pill { flex: none; }
 
 .pair-code { font: 700 2.6rem/1 var(--mono); letter-spacing: .22em; text-align: center; color: var(--text); padding: 18px 0 6px; }
 .pair-meta { text-align: center; color: var(--faint); font-size: 13px; }
@@ -569,3 +586,12 @@ dialog { color: var(--text); }
 }
 .avatar-x:hover { color: var(--err); }
 .avatar-x .i { width: 12px; height: 12px; }
+
+/* Accesso da fuori casa */
+.rm-qr { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; margin-top: 12px; }
+.rm-qr img { width: 176px; height: 176px; border-radius: 10px; background: #fff; padding: 6px; flex: none; }
+.rm-qr > div { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 8px; }
+.rm-url { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rm-url code { font-size: 14px; word-break: break-all; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); }
+.rm-steps { margin: 4px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.remote-p { margin: 0 0 10px; }

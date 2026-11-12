@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mycelium/internal/core"
@@ -455,6 +456,24 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 
 // clientProxyBase is how the calling client reaches mycelium's HTTP server
 // (scheme, host:port), for /proxy and download URLs.
+// tailnetMatcher tells whether a host or address names this server on its
+// tailnet; unset while remote access is off.
+var tailnetMatcher atomic.Pointer[func(string) bool]
+
+// SetTailnetHostMatcher installs the remote-access check (nil removes it).
+func SetTailnetHostMatcher(f func(string) bool) {
+	if f == nil {
+		tailnetMatcher.Store(nil)
+		return
+	}
+	tailnetMatcher.Store(&f)
+}
+
+func isTailnetHost(host string) bool {
+	f := tailnetMatcher.Load()
+	return f != nil && (*f)(host)
+}
+
 func clientProxyBase(ctx context.Context) (proxyScheme, proxyHost string) {
 	httpPort := managers.Settings.GetString("server_port", "8000")
 	// Precedence, weakest first:
@@ -469,6 +488,10 @@ func clientProxyBase(ctx context.Context) (proxyScheme, proxyHost string) {
 	//     bridge mode; may include a scheme ("https://media.example.com").
 	proxyScheme = "http"
 	proxyHost = "127.0.0.1:" + httpPort
+	// viaTailnet: the client reached this server through its tailnet name or
+	// address (internal/remote). Then the URL it dialed is the right one and
+	// server_host (a LAN or reverse-proxy address) must not replace it.
+	viaTailnet := false
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if vals := md.Get("x-http-scheme"); len(vals) > 0 && (vals[0] == "http" || vals[0] == "https") {
 			proxyScheme = vals[0]
@@ -480,14 +503,31 @@ func clientProxyBase(ctx context.Context) (proxyScheme, proxyHost string) {
 					proxyScheme = scheme
 				}
 			}
+			if hint := strings.TrimSpace(vals[0]); isTailnetHost(hint) {
+				viaTailnet = true
+				// A bare tailnet name is the browser on https://<fqdn>/
+				// (or http:// on :80): the default port of the scheme, not
+				// the LAN HTTP port, which on the tailnet is plain HTTP.
+				if !strings.Contains(hint, "://") {
+					if _, _, err := net.SplitHostPort(hint); err != nil {
+						proxyHost = hint
+					}
+				}
+			}
 		}
 	}
 	if pr, ok := peer.FromContext(ctx); ok && pr.LocalAddr != nil {
 		if host, _, err := net.SplitHostPort(pr.LocalAddr.String()); err == nil {
 			if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
 				proxyHost = net.JoinHostPort(host, httpPort)
+				if isTailnetHost(host) {
+					viaTailnet = true
+				}
 			}
 		}
+	}
+	if viaTailnet {
+		return proxyScheme, proxyHost
 	}
 	serverHost := managers.Settings.GetString("server_host", "")
 	if serverHost == "" {
