@@ -41,6 +41,10 @@ const (
 	// StateExternal: the Tailscale already on the machine is used (see
 	// External); reported by the API while the node isn't running.
 	StateExternal State = "external"
+	// StateExternalOffline: that Tailscale is installed but not logged in
+	// (External.Connected is false). It is still the one to use: the
+	// dashboard explains how to log it in on the machine.
+	StateExternalOffline State = "external_offline"
 )
 
 // Status is a snapshot of the node, cheap to take and safe to hand to the
@@ -261,8 +265,8 @@ func scanInterfaces() (External, bool) {
 			}
 		}
 		// A logged-out tailscaled keeps its tailscale0 up with no tailnet
-		// address: no node to use, so the internal one may run.
-		if v6 != "" || (v4 != "" && strings.HasPrefix(ifc.Name, "tailscale")) {
+		// address: still the machine's Tailscale (see External.Connected).
+		if strings.HasPrefix(ifc.Name, "tailscale") || v6 != "" {
 			return External{Interface: ifc.Name, IPv4: v4, IPv6: v6}, true
 		}
 	}
@@ -288,6 +292,12 @@ func (e External) Matches(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
 	return host != "" && (host == e.IPv4 || host == e.IPv6 || (e.FQDN != "" && host == e.FQDN))
 }
+
+// Connected reports whether the node holds a tailnet address. A
+// tailscaled that is installed but logged out keeps its interface without
+// one: it is still the Tailscale to use (mycelium's own node doesn't start
+// beside it), it just has to be logged in on the machine first.
+func (e External) Connected() bool { return e.IPv4 != "" || e.IPv6 != "" }
 
 // Host is the address to give clients: the MagicDNS name when known, else
 // the IPv4.

@@ -204,4 +204,16 @@ func TestRemoteExternalNode(t *testing.T) {
 	if host, _, ok := tailnetAddress(f); !ok || host != "100.101.102.103" {
 		t.Fatalf("external address %q", host)
 	}
+
+	// Installed but logged out: still the one to use, with no address yet.
+	ext = remote.External{Interface: "tailscale0"}
+	for _, s := range []remote.State{remote.StateDisabled, remote.StateHostTailscale} {
+		f.status = remote.Status{State: s}
+		if _, st := remoteCall(t, getRemoteStatus, "GET", ""); st["state"] != "external_offline" || st["app_url"] != nil {
+			t.Fatalf("logged-out external (%s): %v", s, st)
+		}
+	}
+	if _, _, ok := tailnetAddress(f); ok {
+		t.Fatal("an address for a logged-out node")
+	}
 }

@@ -66,7 +66,11 @@ func InitRemoteAccess(cfg remote.Config) {
 		m.Start(remoteOptions())
 	}
 	if e, ok := detectExternal(); ok {
-		log.Printf("[remote] Tailscale già presente sulla macchina (%s, %s): usato per l'accesso da fuori casa", e.Interface, e.IPv4)
+		if e.Connected() {
+			log.Printf("[remote] Tailscale già presente sulla macchina (%s, %s): usato per l'accesso da fuori casa", e.Interface, e.IPv4)
+		} else {
+			log.Printf("[remote] Tailscale presente sulla macchina (%s) ma non collegato: va collegato lì (tailscale up)", e.Interface)
+		}
 	}
 }
 
@@ -226,6 +230,9 @@ func remoteStatusSnapshot() remoteStatusResponse {
 			ext := e
 			resp.External = &ext
 			resp.State = remote.StateExternal
+			if !e.Connected() {
+				resp.State = remote.StateExternalOffline
+			}
 			resp.FQDN, resp.IPv4, resp.IPv6 = e.FQDN, e.IPv4, e.IPv6
 			resp.Err = ""
 			if h := e.Host(); h != "" {

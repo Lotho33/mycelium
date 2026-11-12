@@ -674,7 +674,7 @@ function renderOverview() {
     const rs = remoteState;
     if (rs?.available && rs.enabled) {
         const days = rs.state === 'running' && rs.key_expiry ? Math.floor((new Date(rs.key_expiry) - Date.now()) / 86400000) : null;
-        const off = { needs_login: t('serve un nuovo accesso'), needs_approval: t('il dispositivo è da approvare'), error: t('collegamento non riuscito') }[rs.state];
+        const off = { needs_login: t('serve un nuovo accesso'), needs_approval: t('il dispositivo è da approvare'), error: t('collegamento non riuscito'), external_offline: t('quello installato sulla macchina non è collegato') }[rs.state];
         // host_tailscale is left out on purpose: the separate Tailscale still
         // reaches the server, nothing is broken while the node waits.
         if (off) {
@@ -1991,6 +1991,16 @@ function renderRemote() {
             </div>`);
         return;
     }
+    case 'external_offline':
+        // The machine's Tailscale is installed but logged out: it is the one
+        // to use, so it has to be logged in there (mycelium has no access to
+        // its daemon); the card turns to "Attivo" on its own afterwards.
+        setPill(t('Non collegato'), 'warn');
+        mount(box, html`
+            <p class="remote-p">${tr('Su questa macchina è installato Tailscale (interfaccia <code>{ifc}</code>), ma non è collegato a nessun account. mycelium usa quello, senza un nodo in più: appena è collegato, l\'accesso da fuori casa funziona da solo.', { ifc: esc(d.external?.interface || 'tailscale0') })}</p>
+            <p class="muted remote-p">${tr('Per collegarlo, sulla macchina esegui <code>sudo tailscale up</code> (se gira in un container del compose: <code>docker compose exec tailscale tailscale up</code>) e apri il link che compare con l\'account Tailscale di chi userà il server.')}</p>
+            ${d.enabled ? html`<div class="form-actions start">${off}</div>` : ''}`);
+        return;
     case 'host_tailscale':
         // Another Tailscale (a container of the compose, or the host's own)
         // is up: the node waits for it to stop (internal/remote).

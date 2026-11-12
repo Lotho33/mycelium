@@ -765,5 +765,9 @@ const I18N_EN = {
     "Non disponibile con questo nodo": "Not available with this node",
     "Senza HTTPS l'app web funziona come in casa, e il traffico resta cifrato da Tailscale. Il certificato si ottiene solo con il nodo interno di mycelium: per passarci spegni il Tailscale separato e attiva qui l'accesso; mycelium ne riprende il nodo, con stesso nome e indirizzo.": "Without HTTPS the web app works as it does at home, and traffic stays encrypted by Tailscale. The certificate comes only with mycelium's own node: to switch, stop the separate Tailscale and turn access on here; mycelium takes over its node, with the same name and address.",
     "Nodo interno attivato: parte appena il Tailscale separato viene spento.": "Own node turned on: it starts as soon as the separate Tailscale is stopped.",
-    "Usa il nodo interno quando possibile": "Use mycelium's own node when possible"
+    "Usa il nodo interno quando possibile": "Use mycelium's own node when possible",
+    "Non collegato": "Not connected",
+    "Su questa macchina è installato Tailscale (interfaccia <code>{ifc}</code>), ma non è collegato a nessun account. mycelium usa quello, senza un nodo in più: appena è collegato, l'accesso da fuori casa funziona da solo.": "Tailscale is installed on this machine (interface <code>{ifc}</code>) but not logged in to any account. mycelium uses it, with no extra node: as soon as it is logged in, access from outside home works on its own.",
+    "Per collegarlo, sulla macchina esegui <code>sudo tailscale up</code> (se gira in un container del compose: <code>docker compose exec tailscale tailscale up</code>) e apri il link che compare con l'account Tailscale di chi userà il server.": "To log it in, run <code>sudo tailscale up</code> on the machine (if it runs in a compose container: <code>docker compose exec tailscale tailscale up</code>) and open the link it prints with the Tailscale account of whoever will use the server.",
+    "quello installato sulla macchina non è collegato": "the one installed on the machine is not logged in"
 };

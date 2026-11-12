@@ -312,7 +312,10 @@ Some installs run Tailscale next to mycelium (a `tailscale/tailscale`
 container with host network, or the host's own `tailscaled`). mycelium
 detects it on its own: an interface named `tailscale*`, or one holding a
 `fd7a:115c:a1e0::/48` address (100.64/10 alone isn't enough, ISPs use it for
-CGNAT). tsnet creates no interface, so mycelium's own node is never mistaken
+CGNAT). A logged-out `tailscaled` keeps `tailscale0` up with no tailnet
+address: it still counts (state `external_offline`, mycelium's own node
+doesn't start beside it), and the dashboard says to log it in on the machine
+(`tailscale up`): mycelium can't, it has no access to that daemon. tsnet creates no interface, so mycelium's own node is never mistaken
 for it. Detection is cached for 15 s.
 
 **While it runs, mycelium uses it**: no node of its own, no extra memory.

@@ -35,7 +35,7 @@ func TestDetectExternal(t *testing.T) {
 			External{Interface: "tailscale0", IPv4: "100.101.102.103", IPv6: "fd7a:115c:a1e0::5"}, true},
 		{"renamed TUN, found by its tailscale IPv6", []ifaceInfo{{Name: "ts9", Up: true, Addrs: []string{"100.101.102.104/32", "fd7a:115c:a1e0::6/128"}}},
 			External{Interface: "ts9", IPv4: "100.101.102.104", IPv6: "fd7a:115c:a1e0::6"}, true},
-		{"logged-out tailscaled: interface without a tailnet address", []ifaceInfo{{Name: "tailscale0", Up: true, Addrs: []string{"fe80::59e4:f3e0:51e7:5535/64"}}}, External{}, false},
+		{"logged-out tailscaled: still the machine's Tailscale, not connected", []ifaceInfo{{Name: "tailscale0", Up: true, Addrs: []string{"fe80::59e4:f3e0:51e7:5535/64"}}}, External{Interface: "tailscale0"}, true},
 		{"down", []ifaceInfo{{Name: "tailscale0", Up: false, Addrs: []string{"100.101.102.103/32"}}}, External{}, false},
 	}
 	for _, c := range cases {
