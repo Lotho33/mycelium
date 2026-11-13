@@ -37,32 +37,84 @@ const maxPileusWebAssetBytes = 100 << 20
 // RegisterPileusWebRoutes wires the Pileus web-app updater endpoint onto mux.
 func RegisterPileusWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/pileus-web/update", adminAuthMiddleware(updatePileusWebApp))
+	mux.HandleFunc("GET /admin/pileus-web/releases", adminAuthMiddleware(listPileusWebReleases))
 	startPileusWebAutoUpdate()
 }
 
-// updatePileusWebApp installs the latest web build of the configured repo.
+// updatePileusWebApp installs the latest web build of the configured repo,
+// or the release named by {"tag": "..."} (a rollback when it is older).
 // When mycelium itself is behind its latest release it answers with a
 // warning and installs nothing, unless the body says {"force": true}.
 func updatePileusWebApp(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Force bool `json:"force"`
+		Force bool   `json:"force"`
+		Tag   string `json:"tag"`
 	}
-	// The body is optional: no body means force=false.
+	// The body is optional: no body means the latest release, force=false.
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	status, resp := runPileusWebUpdate(body.Force)
+	status, resp := runPileusWebUpdate(body.Force, strings.TrimSpace(body.Tag))
 	writeJSON(w, status, resp)
+}
+
+// pileusWebReleasesShown is how many recent releases the dashboard offers
+// to install (the rollback list).
+const pileusWebReleasesShown = 15
+
+// listPileusWebReleases lists the recent releases of the configured repo
+// that carry a web build, newest first, for the rollback picker.
+func listPileusWebReleases(w http.ResponseWriter, r *http.Request) {
+	slug, ok := normalizeRepoSlug(managers.Settings.GetString("pileus_web_repo", defaultPileusWebRepo))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": "repository Pileus non valido"})
+		return
+	}
+	rels, err := core.ReleasesOf(slug, pileusWebReleasesShown*2)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"detail": fmt.Sprintf("impossibile leggere le release di %s: %v", slug, err)})
+		return
+	}
+	type item struct {
+		Tag         string    `json:"tag"`
+		Name        string    `json:"name,omitempty"`
+		PublishedAt time.Time `json:"published_at"`
+		Latest      bool      `json:"latest"`
+	}
+	out := []item{}
+	for i, rel := range rels {
+		if _, ok := pickWebAsset(rel.Assets); !ok {
+			continue
+		}
+		out = append(out, item{Tag: rel.Tag, Name: rel.Name, PublishedAt: rel.PublishedAt, Latest: i == 0})
+		if len(out) == pileusWebReleasesShown {
+			break
+		}
+	}
+	installed := ""
+	if rec := managers.Settings.GetString(pileusWebInstalledTagKey, ""); strings.HasPrefix(rec, slug+"@") {
+		installed = strings.TrimPrefix(rec, slug+"@")
+	}
+	hold := ""
+	if h := managers.Settings.GetString(pileusWebHoldTagKey, ""); strings.HasPrefix(h, slug+"@") {
+		hold = strings.TrimPrefix(h, slug+"@")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repo": slug, "releases": out, "installed": installed, "held": hold})
 }
 
 // pileusWebInstalledTagKey remembers the release tag last installed, so the
 // automatic check updates only when a new release is out.
 const pileusWebInstalledTagKey = "pileus_web_installed_tag"
 
-// runPileusWebUpdate installs the latest web build; it answers what the
-// endpoint returns (status, body). Shared by the dashboard button and the
-// automatic updates.
-func runPileusWebUpdate(force bool) (int, map[string]any) {
+// pileusWebHoldTagKey ("owner/repo@tag") is the release that was the latest
+// when the admin rolled back: the automatic updates skip it, so the faulty
+// build doesn't come straight back, and resume with the next release.
+const pileusWebHoldTagKey = "pileus_web_hold_tag"
+
+// runPileusWebUpdate installs the latest web build, or the release wantTag
+// when set; it answers what the endpoint returns (status, body). Shared by
+// the dashboard button and the automatic updates.
+func runPileusWebUpdate(force bool, wantTag string) (int, map[string]any) {
 	repoSlug := strings.TrimSpace(managers.Settings.GetString("pileus_web_repo", defaultPileusWebRepo))
 	if repoSlug == "" {
 		return http.StatusBadRequest, map[string]any{
@@ -77,6 +129,10 @@ func runPileusWebUpdate(force bool) (int, map[string]any) {
 		}
 	}
 	repoSlug = slug
+
+	if wantTag != "" {
+		return installPileusWebTag(repoSlug, wantTag)
+	}
 
 	// Compatibility gate: a core behind its latest release may lack something
 	// the new web build expects. "" (latest version not fetched yet) counts as
@@ -118,7 +174,8 @@ func runPileusWebUpdate(force bool) (int, map[string]any) {
 	if err := installPileusWebAsset(asset, destDir, expectedSHA); err != nil {
 		return http.StatusInternalServerError, map[string]any{"detail": err.Error()}
 	}
-	if err := managers.Settings.SaveInternal(map[string]any{pileusWebInstalledTagKey: repoSlug + "@" + tag}); err != nil {
+	// The latest release installed on purpose: nothing is held back any more.
+	if err := managers.Settings.SaveInternal(map[string]any{pileusWebInstalledTagKey: repoSlug + "@" + tag, pileusWebHoldTagKey: ""}); err != nil {
 		log.Printf("[pileus-web] salvataggio della release installata: %v", err)
 	}
 
@@ -136,9 +193,69 @@ func runPileusWebUpdate(force bool) (int, map[string]any) {
 	return http.StatusOK, resp
 }
 
+// installPileusWebTag installs the release tag of repoSlug. When it is not
+// the latest (a rollback), the latest is held back from the automatic
+// updates until a newer one is out. No compatibility gate: an older build
+// expects less of the server, not more.
+func installPileusWebTag(repoSlug, wantTag string) (int, map[string]any) {
+	rels, err := core.ReleasesOf(repoSlug, 100)
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"detail": fmt.Sprintf("impossibile leggere le release di %s: %v", repoSlug, err)}
+	}
+	idx := -1
+	for i, rel := range rels {
+		if rel.Tag == wantTag {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return http.StatusNotFound, map[string]any{"detail": fmt.Sprintf("release %s non trovata in %s", wantTag, repoSlug)}
+	}
+	rel := rels[idx]
+	asset, ok := pickWebAsset(rel.Assets)
+	if !ok {
+		return http.StatusNotFound, map[string]any{"detail": fmt.Sprintf("la release %s di %s non contiene il build web", wantTag, repoSlug)}
+	}
+	expectedSHA, sumsErr := releaseChecksumFor(rel.Assets, asset.Name)
+	if sumsErr != nil {
+		return http.StatusBadGateway, map[string]any{"detail": "lettura checksum della release: " + sumsErr.Error()}
+	}
+	if err := installPileusWebAsset(asset, core.AppPath("data", "pileus-web"), expectedSHA); err != nil {
+		return http.StatusInternalServerError, map[string]any{"detail": err.Error()}
+	}
+	hold := ""
+	if idx > 0 {
+		hold = repoSlug + "@" + rels[0].Tag
+	}
+	if err := managers.Settings.SaveInternal(map[string]any{pileusWebInstalledTagKey: repoSlug + "@" + rel.Tag, pileusWebHoldTagKey: hold}); err != nil {
+		log.Printf("[pileus-web] salvataggio della release installata: %v", err)
+	}
+	if hold != "" {
+		log.Printf("[pileus-web] app web riportata a %s; aggiornamenti automatici sospesi fino a una release più nuova di %s", rel.Tag, rels[0].Tag)
+	} else {
+		log.Printf("[pileus-web] app web installata alla %s (asset %s)", rel.Tag, asset.Name)
+	}
+	resp := map[string]any{
+		"ok":                  true,
+		"version":             rel.Tag,
+		"asset":               asset.Name,
+		"checksum_verified":   expectedSHA != "",
+		"mycelium_up_to_date": true,
+		"rolled_back":         hold != "",
+	}
+	if expectedSHA == "" {
+		resp["warning"] = "la release non pubblica un file SHA256SUMS: integrità dell'archivio non verificata"
+	}
+	return http.StatusOK, resp
+}
+
 // ─── Automatic updates ────────────────────────────────────────────────────────
 
-const pileusWebAutoEvery = 6 * time.Hour
+// pileusWebAutoEvery is how often the automatic updates look for a new
+// release: one unauthenticated GitHub API call (the limit is 60 an hour per
+// IP), so a fix reaches the devices within the hour.
+const pileusWebAutoEvery = time.Hour
 
 var pileusWebAutoOnce sync.Once
 
@@ -148,7 +265,7 @@ var pileusWebAutoOnce sync.Once
 func startPileusWebAutoUpdate() {
 	pileusWebAutoOnce.Do(func() {
 		core.SafeGo("pileus-web/auto-update", func() {
-			time.Sleep(4 * time.Minute)
+			time.Sleep(2 * time.Minute)
 			for {
 				autoUpdatePileusWeb()
 				time.Sleep(pileusWebAutoEvery)
@@ -162,6 +279,10 @@ func startPileusWebAutoUpdate() {
 // that (an install from before this was tracked), when the installed build
 // is missing or older.
 func pileusWebNeedsUpdate(repoSlug, latestTag string) bool {
+	// Rolled back from this very release: wait for the next one.
+	if managers.Settings.GetString(pileusWebHoldTagKey, "") == repoSlug+"@"+latestTag {
+		return false
+	}
 	if rec := managers.Settings.GetString(pileusWebInstalledTagKey, ""); rec != "" {
 		return rec != repoSlug+"@"+latestTag
 	}
@@ -190,7 +311,7 @@ func autoUpdatePileusWeb() {
 	}
 	// Never forced: a server behind its own latest release waits (the
 	// dashboard can still force it).
-	status, resp := runPileusWebUpdate(false)
+	status, resp := runPileusWebUpdate(false, "")
 	switch {
 	case status != http.StatusOK:
 		log.Printf("[pileus-web] aggiornamento automatico non riuscito: %v", resp["detail"])

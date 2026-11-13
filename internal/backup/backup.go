@@ -97,6 +97,7 @@ const sharedPluginDir = "shared"
 // backup, so its installed tag must not be either).
 var skippedKeys = map[string]bool{
 	"pileus_web_installed_tag": true,
+	"pileus_web_hold_tag":      true,
 }
 
 // classifyKey says which section and item a config.json key belongs to;

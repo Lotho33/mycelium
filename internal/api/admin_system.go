@@ -213,6 +213,15 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", "Lotho33/pileus"),
 		// Automatic updates of the web app (api/pileus_web.go), on by default.
 		"pileus_web_auto_update": managers.Settings.GetBool("pileus_web_auto_update", true),
+		// The release skipped by the automatic updates after a rollback
+		// ("" = none): they resume with the next one.
+		"pileus_web_held": func() string {
+			h := managers.Settings.GetString(pileusWebHoldTagKey, "")
+			if i := strings.LastIndex(h, "@"); i >= 0 {
+				return h[i+1:]
+			}
+			return ""
+		}(),
 		// Prefer IPv6 on direct connections (core.egressPreferIPv6).
 		"egress_ipv6": core.EgressPreferIPv6(),
 		// Version of the installed Pileus web build ("" = none).

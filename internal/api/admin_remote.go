@@ -121,6 +121,15 @@ func StopRemoteAccess() {
 	}
 }
 
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func firstEnv(keys ...string) string {
 	for _, k := range keys {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
@@ -187,14 +196,25 @@ type remoteStatusResponse struct {
 	Enabled bool `json:"enabled"`
 	// AppURL is the address to open on the phone, set only once HTTPS works:
 	// nobody should install an http:// PWA.
-	AppURL         string `json:"app_url,omitempty"`
-	WebAppReady    bool   `json:"webapp_installed"`
-	ConsoleURL     string `json:"console_url,omitempty"`
-	DNSConsoleURL  string `json:"dns_console_url,omitempty"`
-	HostnameEnv    bool   `json:"hostname_env"`
-	ControlURLEnv  bool   `json:"control_url_env"`
-	AuthKeyFromEnv bool   `json:"authkey_env"`
-	Available      bool   `json:"available"`
+	AppURL string `json:"app_url,omitempty"`
+	// AdminURL is this dashboard on the tailnet, for managing the server
+	// from outside home (at home it is usually reached as mycelium.local,
+	// which does not resolve away from the LAN). Unlike AppURL it is set
+	// without HTTPS too: the dashboard is not a PWA, and WireGuard already
+	// encrypts the traffic.
+	AdminURL string `json:"admin_url,omitempty"`
+	// The dashboard's home addresses, next to AdminURL: the ".local" name
+	// when an mDNS responder (avahi) answers for this machine, and the LAN
+	// IPs, which work without it.
+	MDNSURL        string   `json:"mdns_url,omitempty"`
+	LANURLs        []string `json:"lan_urls,omitempty"`
+	WebAppReady    bool     `json:"webapp_installed"`
+	ConsoleURL     string   `json:"console_url,omitempty"`
+	DNSConsoleURL  string   `json:"dns_console_url,omitempty"`
+	HostnameEnv    bool     `json:"hostname_env"`
+	ControlURLEnv  bool     `json:"control_url_env"`
+	AuthKeyFromEnv bool     `json:"authkey_env"`
+	Available      bool     `json:"available"`
 	// External: the Tailscale already on the machine, in use (state
 	// "external").
 	External *remote.External `json:"external,omitempty"`
@@ -221,6 +241,11 @@ func remoteStatusSnapshot() remoteStatusResponse {
 		}
 		if resp.HTTPSReady && resp.FQDN != "" {
 			resp.AppURL = "https://" + resp.FQDN + "/app/"
+			resp.AdminURL = "https://" + resp.FQDN + "/admin/"
+		} else if resp.State == remote.StateRunning {
+			if h := firstNonEmpty(resp.FQDN, resp.IPv4); h != "" {
+				resp.AdminURL = "http://" + net.JoinHostPort(h, managers.Settings.GetString("server_port", "8000")) + "/admin/"
+			}
 		}
 	}
 	// No node of mycelium's own running, but a Tailscale on the machine: use
@@ -236,8 +261,19 @@ func remoteStatusSnapshot() remoteStatusResponse {
 			resp.FQDN, resp.IPv4, resp.IPv6 = e.FQDN, e.IPv4, e.IPv6
 			resp.Err = ""
 			if h := e.Host(); h != "" {
-				resp.AppURL = "http://" + net.JoinHostPort(h, managers.Settings.GetString("server_port", "8000")) + "/app/"
+				base := "http://" + net.JoinHostPort(h, managers.Settings.GetString("server_port", "8000"))
+				resp.AppURL = base + "/app/"
+				resp.AdminURL = base + "/admin/"
 			}
+		}
+	}
+	if resp.AdminURL != "" {
+		port := managers.Settings.GetString("server_port", "8000")
+		if n := mdnsName(); n != "" {
+			resp.MDNSURL = "http://" + net.JoinHostPort(n, port) + "/admin/"
+		}
+		for _, ip := range lanIPv4s() {
+			resp.LANURLs = append(resp.LANURLs, "http://"+net.JoinHostPort(ip, port)+"/admin/")
 		}
 	}
 	if resp.ControlURL == "" {
@@ -366,14 +402,17 @@ func saveRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// remoteQR renders the app URL (for=app) or the login link (for=login) as
-// an SVG QR code. Only those two: it is not a general-purpose encoder.
+// remoteQR renders the app URL (for=app), the dashboard URL (for=admin) or
+// the login link (for=login) as an SVG QR code. Only those: it is not a
+// general-purpose encoder.
 func remoteQR(w http.ResponseWriter, r *http.Request) {
 	s := remoteStatusSnapshot()
 	var text string
 	switch r.URL.Query().Get("for") {
 	case "login":
 		text = s.AuthURL
+	case "admin":
+		text = s.AdminURL
 	default:
 		text = s.AppURL
 	}

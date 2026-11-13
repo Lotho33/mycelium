@@ -99,6 +99,19 @@ The `running` card also shows the step-by-step instructions for the phone:
 3. Inquadra il QR, apri il link in Safari → Condividi → *Aggiungi alla schermata Home*.
 4. Abbina il dispositivo con un codice (*Abbina un dispositivo*), come in casa.
 
+The `running` and `external` cards (and the *App Pileus* page) also show the
+**dashboard's own tailnet address** (`admin_url` in `/admin/remote/status`:
+`https://<fqdn>/admin/` with the certificate, else `http://<fqdn or ip>:<port>/admin/`),
+with a copy button. At home the mini PCs usually answer as `mycelium.local`
+(avahi), a name that doesn't resolve away from the LAN: with the Tailscale app
+on, this address manages the server from anywhere, same password. Unlike the
+app URL it is shown without HTTPS too: the dashboard is not a PWA, and
+WireGuard already encrypts the traffic. Below it the home addresses: `mdns_url` when an
+mDNS query for the machine's hostname (or `mycelium`) `.local` is answered with
+one of its own IPs (`internal/api/lan_address.go`, cached 5 min, probed in the
+background), and `lan_urls` from the private IPv4s of the LAN interfaces, which
+work without avahi.
+
 ---
 
 ## Architecture

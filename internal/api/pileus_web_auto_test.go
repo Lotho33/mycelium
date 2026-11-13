@@ -45,4 +45,14 @@ func TestPileusWebNeedsUpdate(t *testing.T) {
 	if !pileusWebNeedsUpdate("o/r", "v1.4.0") || !pileusWebNeedsUpdate("other/r", "v1.3.0") {
 		t.Fatal("new release or new repository: want an update")
 	}
+
+	// Rolled back from v1.4.0: it is held back, the next release is not.
+	t.Cleanup(func() { _ = managers.Settings.SaveInternal(map[string]any{pileusWebHoldTagKey: ""}) })
+	_ = managers.Settings.SaveInternal(map[string]any{pileusWebHoldTagKey: "o/r@v1.4.0"})
+	if pileusWebNeedsUpdate("o/r", "v1.4.0") {
+		t.Fatal("held release: want no update")
+	}
+	if !pileusWebNeedsUpdate("o/r", "v1.5.0") {
+		t.Fatal("release newer than the held one: want an update")
+	}
 }

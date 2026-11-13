@@ -187,6 +187,47 @@ const saveSettings = values => post('/admin/settings/save', values);
 
 // ─── Toasts ──────────────────────────────────────────────────────────────────
 // msg is already translated (or comes from the server).
+// copyText puts text on the clipboard. navigator.clipboard exists only in
+// a secure context (https or localhost): on http://mycelium.local:8000 or a
+// LAN IP it falls back to a hidden textarea and execCommand('copy'), which
+// still works there. Shows the outcome as a toast.
+async function copyText(text, okMsg = t('Copiato negli appunti.')) {
+    let ok = false;
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            ok = true;
+        }
+    } catch { /* fall back below */ }
+    if (!ok) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+        // Inside an open <dialog> (modal: the rest of the page is inert).
+        (document.querySelector('dialog[open]') || document.body).appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
+        ta.remove();
+    }
+    toast(ok ? okMsg : t('Copia non riuscita: selezionalo a mano.'), ok ? 'ok' : 'err');
+    return ok;
+}
+document.addEventListener('click', async e => {
+    const b = e.target.closest('[data-copy]');
+    if (!b) return;
+    const ok = await copyText(b.dataset.copy, b.dataset.copyMsg || undefined);
+    // Feedback on the button itself too: inside a modal dialog the toast
+    // sits under the backdrop. (The big pairing code keeps its text.)
+    if (ok && b.classList.contains('btn') && !b._copied) {
+        const was = b.innerHTML;
+        b._copied = true;
+        mount(b, html`${icon('check')}${t('Copiato')}`);
+        setTimeout(() => { b.innerHTML = was; b._copied = false; }, 1600);
+    }
+});
+
 function toast(msg, type = 'ok') {
     const icons = { ok: 'check', err: 'alert', warn: 'alert', info: 'info' };
     const el = document.createElement('div');
@@ -1674,7 +1715,8 @@ async function pairDevice() {
     };
     const codeView = code => html`
         <span>${t('Su Pileus scegli di collegarti a un server e inserisci questo codice:')}</span>
-        <div class="pair-code">${code}</div>
+        <button type="button" class="pair-code" data-copy="${code}" data-copy-msg="${t('Codice copiato.')}" title="${t('Copia il codice')}">${code}</button>
+        <div class="pair-copy"><button type="button" class="btn btn-ghost btn-sm" data-copy="${code}" data-copy-msg="${t('Codice copiato.')}">${icon('copy')}${t('Copia il codice')}</button></div>
         <div class="pair-meta" data-pair="left">&nbsp;</div>`;
     const generate = async dlg => {
         clearInterval(timer);
@@ -1757,7 +1799,8 @@ function renderApps() {
             <b>${t('Accesso da fuori casa attivo')}</b>
             <span class="muted">${t('Usa questo indirizzo su iPhone, iPad e Mac, anche in casa: funziona ovunque finché l\'app Tailscale è attiva. Un\'installazione fatta con l\'indirizzo di casa resta separata e fuori casa non funziona.')}</span>
             ${i.pileus_web_version ? '' : html`<span class="danger-text">${t('Prima installa la versione web qui accanto.')}</span>`}
-        </div></div>`;
+        </div></div>
+        ${adminRemoteBlock(rs)}`;
     } else if (rs?.available && rs.enabled && rs.state !== 'external') {
         note = html`<div class="callout info">${icon('globe')}<div><b>${t('Accesso da fuori casa non ancora pronto')}</b>
             <span>${t('Quando è collegato e ha il certificato HTTPS, qui compare l\'indirizzo da usare. Per ora l\'app funziona solo in casa.')}</span></div>
@@ -1774,9 +1817,75 @@ function renderApps() {
         : t('Non installata');
     ver.className = `pill ${i.pileus_web_version ? 'ok' : ''}`;
     $('#webapp-update-btn').disabled = !i.pileus_web_repo;
+    $('#webapp-versions-btn').disabled = !i.pileus_web_repo;
     $('#webapp-auto').checked = i.pileus_web_auto_update !== false;
     const st = $('#webapp-status');
-    if (!st.dataset.busy) st.textContent = i.pileus_web_repo ? '' : t('Indica il repository per poter aggiornare.');
+    if (!st.dataset.busy) {
+        st.textContent = !i.pileus_web_repo ? t('Indica il repository per poter aggiornare.')
+            : i.pileus_web_held ? t('Versione precedente in uso: la {v} viene saltata, gli aggiornamenti automatici riprendono dalla release successiva.', { v: i.pileus_web_held })
+            : '';
+    }
+}
+
+// webAppVersions lists the recent releases of the web app: installing an
+// older one is a rollback (the server then skips the release that was the
+// latest, until a newer one comes out).
+async function webAppVersions() {
+    let list = null, installed = '', held = '';
+    const view = () => {
+        if (!list) return html`<div class="pair-meta">${t('Leggo le release…')}</div>`;
+        if (!list.length) return html`<p class="muted">${t('Nessuna release con la versione web.')}</p>`;
+        return html`<p class="muted small">${t('Se l\'ultima versione ha un problema, installane una precedente. Gli aggiornamenti automatici saltano quella difettosa e riprendono con la release successiva.')}</p>
+            <div class="list rel-list">${list.map(r => {
+                const norm = v => String(v || '').replace(/^v/i, '');
+                // Installs from before the release was recorded: by version.
+                const cur = installed ? r.tag === installed : norm(r.tag) === norm(state.info?.pileus_web_version);
+                return html`<div class="list-row">
+                    <span class="list-main"><span class="list-title">${r.tag}${r.latest ? html` <span class="pill accent plain">${t('Ultima')}</span>` : ''}${r.tag === held ? html` <span class="pill warn plain">${t('Saltata')}</span>` : ''}</span>
+                        <span class="list-sub">${r.published_at ? new Date(r.published_at).toLocaleDateString(locale(), { day: 'numeric', month: 'short', year: 'numeric' }) : ''}</span></span>
+                    ${cur ? html`<span class="pill ok">${t('Installata')}</span>`
+                        : html`<button type="button" class="btn btn-secondary btn-sm" data-rel="${r.tag}" data-latest="${r.latest ? '1' : ''}">${r.latest ? t('Installa') : t('Torna a questa')}</button>`}
+                </div>`;
+            })}</div>`;
+    };
+    await dialog({
+        title: t('Versioni dell\'app web'),
+        body: view(),
+        confirm: t('Chiudi'), cancel: false,
+        onOpen: async dlg => {
+            const r = await api('/admin/pileus-web/releases');
+            if (!dlg.open) return;
+            if (!r.ok) { mount($('.body', dlg), html`<div class="callout err">${icon('alert')}<div>${r.error || t('Operazione non riuscita.')}</div></div>`); return; }
+            ({ installed, held } = r.data);
+            list = r.data.releases || [];
+            mount($('.body', dlg), view());
+            dlg.addEventListener('click', onPick);
+        },
+        // The <dialog> element is shared by every dialog: drop the handler.
+        onClose: dlg => dlg.removeEventListener('click', onPick),
+    });
+    async function onPick(e) {
+        const b = e.target.closest('[data-rel]');
+        if (!b) return;
+        const tag = b.dataset.rel;
+        // The latest release goes through the usual update (with its
+        // compatibility check), which also clears a skipped release.
+        if (b.dataset.latest) { $('#dialog').close(); updateWebApp(); return; }
+        if (!(await confirmDialog(t('Tornare alla {v}?', { v: tag }),
+            t('Pileus web passa alla {v} alla prossima apertura su ogni dispositivo. Gli aggiornamenti automatici non reinstallano l\'ultima versione: aspettano la release successiva.', { v: tag }),
+            { confirm: t('Torna a questa') }))) return;
+        const st = $('#webapp-status');
+        st.dataset.busy = '1';
+        st.textContent = t('Installo la {v}…', { v: tag });
+        toast(t('Installo la {v}…', { v: tag }), 'info');
+        const res = await post('/admin/pileus-web/update', { tag });
+        delete st.dataset.busy;
+        const d = res.data || {};
+        if (!res.ok || !d.ok) toast(res.error || d.detail || t('Installazione non riuscita.'), 'err');
+        else toast(d.rolled_back ? t('App web riportata alla {v}.', { v: d.version }) : t('App web aggiornata a {v}.', { v: d.version }), 'ok');
+        await loadInfo();
+        renderApps();
+    }
 }
 pages.apps = {
     async enter() { renderApps(); await Promise.all([loadInfo(), loadRemote()]); renderApps(); },
@@ -1919,6 +2028,30 @@ function remoteQR(kind, text) {
     for (const c of text) h = (h * 31 + c.charCodeAt(0)) | 0;
     return html`<img src="/admin/remote/qr.svg?for=${kind}&v=${(h >>> 0).toString(36)}" alt="${t('Codice QR')}">`;
 }
+// adminRemoteBlock is this dashboard's address on the tailnet, with its
+// home addresses: the mini PCs usually answer as mycelium.local (avahi),
+// which doesn't resolve away from home, and without avahi only the IP works
+// at home. With Tailscale on, the tailnet address works from anywhere.
+function adminRemoteBlock(d) {
+    if (!d?.admin_url) return '';
+    const urlRow = (url, label) => html`<div class="rm-url">${label ? html`<span class="rm-url-l">${label}</span>` : ''}<code>${url}</code>
+        <button class="btn btn-ghost btn-sm" data-copy="${url}" data-copy-msg="${t('Indirizzo copiato.')}">${icon('copy')}${t('Copia')}</button></div>`;
+    // The .local name: the server's mDNS probe, or the address this page was
+    // opened with (proof enough that it resolves).
+    const here = /\.local$/i.test(location.hostname) ? `${location.origin}/admin/` : '';
+    const mdns = d.mdns_url || here;
+    const home = [...(mdns ? [mdns] : []), ...(d.lan_urls || [])];
+    return html`<div class="rm-admin">
+        <div class="rm-admin-h">${icon('server')}<b>${t('Questa dashboard da fuori casa')}</b></div>
+        ${urlRow(d.admin_url)}
+        <span class="muted small">${t('Con l\'app Tailscale attiva su telefono o computer, gestisci il server da qui ovunque sei: la password è la stessa.')}</span>
+        ${home.length ? html`<div class="rm-admin-h rm-admin-sub">${icon('home')}<b>${t('In casa')}</b></div>
+            ${home.map(u => urlRow(u))}
+            <span class="muted small">${mdns
+                ? t('Il nome .local funziona solo nella rete di casa; se un dispositivo non lo trova, usa l\'indirizzo IP.')
+                : t('Su questa rete il server non risponde a un nome .local (avahi assente o non raggiungibile): in casa usa l\'indirizzo IP.')}</span>` : ''}
+    </div>`;
+}
 function renderRemote() {
     const box = $('#remote-body'), pill = $('#remote-pill');
     if (!box) return;
@@ -1978,6 +2111,7 @@ function renderRemote() {
                 <span class="muted">${t('Le app native lo trovano da sole. Su iPhone, iPad e Mac installa l\'app web da questo indirizzo (pagina App Pileus), con l\'app Tailscale attiva.')}</span>
                 ${d.fqdn ? '' : html`<span class="muted">${t('Nome MagicDNS non disponibile: si usa l\'indirizzo IP, che resta lo stesso finché il nodo esiste.')}</span>`}
             </div></div>` : ''}
+            ${adminRemoteBlock(d)}
             <dl class="kv">
                 ${d.fqdn ? html`<dt>${t('Nome sulla tailnet')}</dt><dd>${d.fqdn}</dd>` : ''}
                 <dt>${t('Indirizzo IP')}</dt><dd>${d.ipv4 || '—'}</dd>
@@ -2061,6 +2195,7 @@ function renderRemote() {
                 ${d.cert_error ? html`<p class="muted remote-p">${t('Ultimo tentativo: {err}', { err: d.cert_error })}</p>` : ''}`;
         }
         mount(box, html`${main}
+            ${adminRemoteBlock(d)}
             ${daysLeft !== null && daysLeft <= 14 ? html`<div class="callout warn">${icon('clock')}<div><b>${daysLeft < 0 ? t('La chiave del server è scaduta') : t('La chiave del server scade tra {n} giorni', { n: daysLeft })}</b>
                 <span>${d.control_url
                     ? t('Allo scadere l\'accesso da fuori casa smette di funzionare. Su Headscale rinnova la chiave del nodo o registralo con una chiave senza scadenza.')
@@ -2658,7 +2793,8 @@ async function showTourStep() {
         ${s.final ? html`<div class="tour-cta">
             <button class="btn btn-secondary" data-tour="go" data-go="plugins">${icon('upload')}${t('Installa un plugin')}</button>
             <button class="btn btn-secondary" data-tour="go" data-go="devices">${icon('wifi')}${t('Abbina un dispositivo')}</button></div>
-            <p class="small faint">${t('Puoi riaprire questa guida quando vuoi dal menu, alla voce Guida.')}</p>` : ''}
+            <p class="small faint">${t('Puoi riaprire questa guida quando vuoi dal menu, alla voce Guida.')}</p>
+            <div class="tour-sign"><span>${t('Buon divertimento!')}</span><small>— Lotho33, ${t('lo sviluppatore')}</small></div>` : ''}
         <div class="tour-nav">
             ${last ? '' : html`<button class="btn btn-ghost btn-sm" data-tour="close">${t('Salta')}</button>`}
             <span class="tour-count">${tourState.i + 1} / ${tourSteps.length}</span>
@@ -2764,10 +2900,8 @@ document.addEventListener('click', async e => {
         case 'remote-disable': remoteAction('/admin/remote/disable', t('Accesso da fuori casa disattivato.')); break;
         case 'remote-relogin': remoteAction('/admin/remote/relogin'); break;
         case 'remote-settings': remoteSettings(); break;
-        case 'remote-copy':
-            try { await navigator.clipboard.writeText(remoteState?.app_url || ''); toast(t('Indirizzo copiato.'), 'ok'); }
-            catch { toast(t('Copia non riuscita: selezionalo a mano.'), 'err'); }
-            break;
+        case 'remote-copy': copyText(remoteState?.app_url || '', t('Indirizzo copiato.')); break;
+        case 'webapp-versions': webAppVersions(); break;
         case 'remote-logout':
             if (!(await confirmDialog(t('Scollegare il server dal tuo account?'), t('Il server esce dalla tailnet e dimentica il collegamento. Per riattivarlo servirà un nuovo accesso; la vecchia macchina si può rimuovere dalla console.'), { confirm: t('Scollega'), danger: true }))) return;
             remoteAction('/admin/remote/logout', t('Server scollegato.'));

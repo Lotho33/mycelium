@@ -223,3 +223,51 @@ func LatestVersionOf(repoSlug string) (tag string, assets []GitHubReleaseAsset, 
 	}
 	return payload.TagName, payload.Assets, nil
 }
+
+// GitHubRelease is one entry of a repository's release list.
+type GitHubRelease struct {
+	Tag         string               `json:"tag_name"`
+	Name        string               `json:"name"`
+	PublishedAt time.Time            `json:"published_at"`
+	Draft       bool                 `json:"draft"`
+	Prerelease  bool                 `json:"prerelease"`
+	Assets      []GitHubReleaseAsset `json:"assets"`
+}
+
+// ReleasesOf fetches the most recent releases (newest first, at most n) of
+// an "owner/repo" repository, drafts and pre-releases left out.
+// Synchronous and uncached, like LatestVersionOf.
+func ReleasesOf(repoSlug string, n int) ([]GitHubRelease, error) {
+	client := HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	if n <= 0 || n > 100 {
+		n = 30
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, repoSlug, n), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "mycelium-core/"+normalizeVersion(Version))
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("richiesta GitHub per %s: %w", repoSlug, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API %s: status %d", repoSlug, resp.StatusCode)
+	}
+	var all []GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return nil, fmt.Errorf("decodifica risposta GitHub per %s: %w", repoSlug, err)
+	}
+	out := all[:0]
+	for _, r := range all {
+		if r.Tag != "" && !r.Draft && !r.Prerelease {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
