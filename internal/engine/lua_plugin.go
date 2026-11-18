@@ -677,12 +677,53 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	m.plugins[mf.ID] = p
 	m.mu.Unlock()
 
+	// Before anything reads the catalog cache: pages a previous version built
+	// must not be served (fresh or stale) by this one.
+	dropCatalogCacheOnVersionChange(mf.ID, mf.Version)
+
 	core.SafeGo("lua/watch-hot-reload:"+mf.ID, func() { m.watchHotReload(p) })
 	core.SafeGo("lua/run-tasks:"+mf.ID, func() { m.runTasks(p) })
 	// Populate auto_hide counts right away from whatever is cached.
 	go m.warmupCatalogCounts(p)
 	log.Printf("[lua] plugin %q loaded (v%s)", mf.ID, mf.Version)
 	return nil
+}
+
+// catalogVersionKey remembers the plugin version whose pages fill the catalog
+// cache (managers.CatalogCacheKey, keyed without a version).
+func catalogVersionKey(pluginID string) string {
+	return "mycelium:plugin:" + pluginID + ":catalog_version"
+}
+
+// dropCatalogCacheOnVersionChange deletes a plugin's cached catalog pages and
+// item counts when the loaded version differs from the one that built them
+// (an update, or the first boot after one). The catalog cache keeps a stale
+// copy for hours (pileus/catalog_swr.go): without this an updated plugin kept
+// showing the old version's carousels — new rows, changed sorting or
+// filtering — until every page had been refreshed. A plain restart or a
+// reload of the same version keeps the cache, which is what lets the home
+// show up at once while plugins warm up.
+func dropCatalogCacheOnVersionChange(pluginID, version string) {
+	if managers.Redis == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	key := catalogVersionKey(pluginID)
+	prev, found, err := managers.Redis.GetFound(ctx, key)
+	if err != nil || (found && prev == version) {
+		return
+	}
+	n, derr := managers.Redis.DelByPattern(ctx, "mycelium:plugin:"+pluginID+":catalog:*")
+	if derr != nil {
+		log.Printf("[lua] plugin %s: svuotamento cache cataloghi fallito: %v", pluginID, derr)
+		return // il marker resta vecchio: si riprova al prossimo caricamento
+	}
+	n2, _ := managers.Redis.DelByPattern(ctx, "mycelium:plugin:"+pluginID+":catalog_count:*")
+	if found {
+		log.Printf("[lua] plugin %s: versione %s → %s, svuotate %d pagine di catalogo in cache (%d conteggi)", pluginID, prev, version, n, n2)
+	}
+	_ = managers.Redis.Set(ctx, key, version, 0)
 }
 
 // taskLastRunKey returns the Redis key used to persist the last-run timestamp of a task.

@@ -1,0 +1,16 @@
+{
+  "name": "Mycelium",
+  "short_name": "Mycelium",
+  "description": "Dashboard del server mycelium",
+  "id": "/admin/dashboard",
+  "start_url": "/admin/dashboard",
+  "scope": "/admin/",
+  "display": "standalone",
+  "background_color": "#0a0d12",
+  "theme_color": "#0b0d12",
+  "icons": [
+    { "src": "/static/mycelium-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/mycelium-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/mycelium-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

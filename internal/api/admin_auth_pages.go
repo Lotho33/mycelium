@@ -112,6 +112,12 @@ func loginHTML(withErr bool) string {
 <meta name="theme-color" content="#0a0d12">
 <title>Mycelium — Accesso</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/static/admin-manifest.json">
+<link rel="apple-touch-icon" href="/static/mycelium-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mycelium">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
