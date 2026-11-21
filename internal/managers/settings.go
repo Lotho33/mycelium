@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -233,6 +234,28 @@ func (s *SettingsManager) Get(key string, def any) any {
 	defer s.mu.RUnlock()
 	if val, ok := s.data[key]; ok {
 		return val
+	}
+	return def
+}
+
+// Defaults of the two listening ports, in one place (they used to be
+// repeated as literals at every reader).
+const (
+	DefaultServerPort = "8000"
+	DefaultGRPCPort   = "50051"
+)
+
+// ServerPort is the HTTP listening port (server_port), DefaultServerPort when
+// unset or not a valid port.
+func (s *SettingsManager) ServerPort() string { return s.port("server_port", DefaultServerPort) }
+
+// GRPCPort is the Pileus gRPC listening port (pileus_grpc_port),
+// DefaultGRPCPort when unset or not a valid port.
+func (s *SettingsManager) GRPCPort() string { return s.port("pileus_grpc_port", DefaultGRPCPort) }
+
+func (s *SettingsManager) port(key, def string) string {
+	if n, err := strconv.Atoi(strings.TrimSpace(s.GetString(key, ""))); err == nil && n > 0 && n < 65536 {
+		return strconv.Itoa(n)
 	}
 	return def
 }

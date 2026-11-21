@@ -475,7 +475,7 @@ func isTailnetHost(host string) bool {
 }
 
 func clientProxyBase(ctx context.Context) (proxyScheme, proxyHost string) {
-	httpPort := managers.Settings.GetString("server_port", "8000")
+	httpPort := managers.Settings.ServerPort()
 	// Precedence, weakest first:
 	//  1. http://127.0.0.1 — last resort (player on the same machine).
 	//  2. x-http-host / x-http-scheme — the client's hint; on the gRPC-web path

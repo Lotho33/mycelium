@@ -47,7 +47,7 @@ func DownloadResolver(ctx context.Context, pluginID, streamID, owner string) (do
 		src.URL, src.Headers, src.Direct = rawURL, headers, true
 		return src, nil
 	}
-	port := managers.Settings.GetString("server_port", "8000")
+	port := managers.Settings.ServerPort()
 	// A uid that is not a playback session (no lease, no "someone is
 	// watching" pause) but names the owner profile, so the proxy re-resolves
 	// an expired token with that profile's plugin login.

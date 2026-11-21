@@ -244,7 +244,7 @@ func remoteStatusSnapshot() remoteStatusResponse {
 			resp.AdminURL = "https://" + resp.FQDN + "/admin/"
 		} else if resp.State == remote.StateRunning {
 			if h := firstNonEmpty(resp.FQDN, resp.IPv4); h != "" {
-				resp.AdminURL = "http://" + net.JoinHostPort(h, managers.Settings.GetString("server_port", "8000")) + "/admin/"
+				resp.AdminURL = "http://" + net.JoinHostPort(h, managers.Settings.ServerPort()) + "/admin/"
 			}
 		}
 	}
@@ -261,14 +261,14 @@ func remoteStatusSnapshot() remoteStatusResponse {
 			resp.FQDN, resp.IPv4, resp.IPv6 = e.FQDN, e.IPv4, e.IPv6
 			resp.Err = ""
 			if h := e.Host(); h != "" {
-				base := "http://" + net.JoinHostPort(h, managers.Settings.GetString("server_port", "8000"))
+				base := "http://" + net.JoinHostPort(h, managers.Settings.ServerPort())
 				resp.AppURL = base + "/app/"
 				resp.AdminURL = base + "/admin/"
 			}
 		}
 	}
 	if resp.AdminURL != "" {
-		port := managers.Settings.GetString("server_port", "8000")
+		port := managers.Settings.ServerPort()
 		if n := mdnsName(); n != "" {
 			resp.MDNSURL = "http://" + net.JoinHostPort(n, port) + "/admin/"
 		}

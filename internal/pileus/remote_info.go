@@ -51,15 +51,8 @@ func (h *AuthHandler) GetServerInfo(ctx context.Context, _ *gen.GetServerInfoReq
 	}
 	resp.RemoteHost = ri.Host
 	resp.RemoteFqdn = ri.FQDN
-	resp.RemoteGrpcPort = portSetting("pileus_grpc_port", 50051)
-	resp.RemoteHttpPort = portSetting("server_port", 8000)
+	grpc, _ := strconv.Atoi(managers.Settings.GRPCPort())
+	http, _ := strconv.Atoi(managers.Settings.ServerPort())
+	resp.RemoteGrpcPort, resp.RemoteHttpPort = int32(grpc), int32(http)
 	return resp, nil
-}
-
-func portSetting(key string, def int32) int32 {
-	p, err := strconv.Atoi(managers.Settings.GetString(key, ""))
-	if err != nil || p <= 0 || p > 65535 {
-		return def
-	}
-	return int32(p)
 }

@@ -29,15 +29,9 @@ const discoveryMagic = "MYCELIUM_DISCOVER_V1"
 // broadcast.
 func discoveryInfo() map[string]any {
 	fingerprint, tlsEnabled := pileus.TLSFingerprint()
-	httpPort, err := strconv.Atoi(managers.Settings.GetString("server_port", "8000"))
-	if err != nil {
-		httpPort = 8000
-	}
-	// The port the gRPC server really listens on (same setting as main.go).
-	grpcPort, err := strconv.Atoi(managers.Settings.GetString("pileus_grpc_port", "50051"))
-	if err != nil {
-		grpcPort = 50051
-	}
+	// The ports really listened on (both validated by the accessors).
+	httpPort, _ := strconv.Atoi(managers.Settings.ServerPort())
+	grpcPort, _ := strconv.Atoi(managers.Settings.GRPCPort())
 	return map[string]any{
 		"name":                 "Mycelium",
 		"version":              core.Version,

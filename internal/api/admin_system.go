@@ -210,7 +210,7 @@ func getAdminInfo(w http.ResponseWriter, r *http.Request) {
 		"server_host_env": os.Getenv("MYCELIUM_SERVER_HOST") != "",
 		"in_docker":       os.Getenv("MYCELIUM_DOCKER") == "1",
 		// "owner/repo" of the Pileus web build (POST /admin/pileus-web/update).
-		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", "Lotho33/pileus"),
+		"pileus_web_repo": managers.Settings.GetString("pileus_web_repo", defaultPileusWebRepo),
 		// Automatic updates of the web app (api/pileus_web.go), on by default.
 		"pileus_web_auto_update": managers.Settings.GetBool("pileus_web_auto_update", true),
 		// The release skipped by the automatic updates after a rollback

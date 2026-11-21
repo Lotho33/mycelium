@@ -247,7 +247,7 @@ func main() {
 	api.SetAdminSessionKey(jwtSecret)
 	// Device JWT key: derived, like the two keys above.
 	pileusJWTKey := pileus.DeriveJWTSecret(jwtSecret)
-	grpcAddr := managers.Settings.GetString("pileus_grpc_port", "50051")
+	grpcAddr := managers.Settings.GRPCPort()
 	// gRPC TLS is on by default: clients pin the certificate fingerprint
 	// published by /pileus/info. pileus_grpc_tls=false serves plaintext.
 	var tlsCert *tls.Certificate
@@ -274,7 +274,7 @@ func main() {
 	}
 
 	if !managers.Settings.IsSetupDone() {
-		log.Printf("🛑 [Primo Avvio] Configurazione mancante: apri http://<indirizzo-del-server>:%s/setup per iniziare.", managers.Settings.GetString("server_port", "8000"))
+		log.Printf("🛑 [Primo Avvio] Configurazione mancante: apri http://<indirizzo-del-server>:%s/setup per iniziare.", managers.Settings.ServerPort())
 	}
 
 	// LAN discovery responder (internal/api/discovery.go).
@@ -328,7 +328,7 @@ func main() {
 		mux.Handle("OPTIONS "+svc, grpcWeb)
 	}
 
-	port := managers.Settings.GetString("server_port", "8000")
+	port := managers.Settings.ServerPort()
 	handler := securityHeadersMiddleware(corsMiddleware(api.SameOriginMiddleware(bodyLimitMiddleware(mux))))
 	// newHTTPServer is shared with the tailnet listeners (internal/remote), so
 	// both serve the same handler with the same limits.

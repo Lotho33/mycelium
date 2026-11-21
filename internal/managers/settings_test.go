@@ -188,3 +188,21 @@ func TestIsAllowedKey_WarmResolve(t *testing.T) {
 		t.Error("warm_resolve_* is allowed by exact name only")
 	}
 }
+
+func TestListeningPortsValidatedWithOneDefault(t *testing.T) {
+	s := &SettingsManager{data: map[string]any{}}
+	if s.ServerPort() != DefaultServerPort || s.GRPCPort() != DefaultGRPCPort {
+		t.Fatal("defaults")
+	}
+	for _, bad := range []string{"", "abc", "0", "70000", "-1"} {
+		s.data["server_port"] = bad
+		if got := s.ServerPort(); got != DefaultServerPort {
+			t.Fatalf("server_port %q → %q", bad, got)
+		}
+	}
+	s.data["server_port"] = " 18000 "
+	s.data["pileus_grpc_port"] = "50052"
+	if s.ServerPort() != "18000" || s.GRPCPort() != "50052" {
+		t.Fatal("custom ports")
+	}
+}
