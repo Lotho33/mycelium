@@ -205,7 +205,7 @@ const I18N_EN = {
     "in preparazione": "being prepared",
     "Scarica": "Download",
     "Scarica il file MKV su questo computer": "Download the MKV file to this computer",
-    "Il server prepara i file: i dispositivi li scaricano per guardarli senza rete, e da qui puoi salvarli sul computer (per esempio in una libreria Jellyfin).": "The server prepares the files: devices download them to watch offline, and from here you can save them to this computer (e.g. into a Jellyfin library).",
+    "Il server prepara i file: i dispositivi li scaricano per guardarli senza rete, e da qui puoi salvarli sul computer (per esempio nella libreria di un media server).": "The server prepares the files: devices download them to watch offline, and from here you can save them to this computer (e.g. into a media server's library).",
     "Elimina": "Delete",
     "Eliminare questo download?": "Delete this download?",
     "Il file sparisce dal server. I dispositivi che l'hanno già scaricato lo tengono.": "The file is removed from the server. Devices that already downloaded it keep it.",

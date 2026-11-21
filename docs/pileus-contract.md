@@ -227,8 +227,8 @@ itself is passed through unchanged.
 - Unset `logo_meta`: fall back to the legacy `url|w|h|dark` suffix some
   plugins still put in `logo_url` (`logoDark`, `logoRenderSize`), else no
   halo.
-- TMDB logos are measured on their 300 px PNG, SVG ones included; other
-  SVG logos are not measured.
+- The logo is measured at the URL the plugin gave; SVG logos are not
+  measured (a plugin whose source has them hands out a raster variant).
 
 ## La mia lista (`GetMyList` / `SetMyListItem`)
 

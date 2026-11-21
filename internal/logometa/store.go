@@ -199,13 +199,10 @@ func evictOldest() {
 // logo_url (from mycelium.image.analyze_logo).
 var legacySuffix = regexp.MustCompile(`\|\d+\|\d+\|[01]$`)
 
-// tmdbImage matches TMDB image URLs: /t/p/<size>/<file>.<ext>.
-var tmdbImage = regexp.MustCompile(`^(https?://image\.tmdb\.org/t/p/)[a-z0-9_]+(/[A-Za-z0-9_-]+)\.(svg|png|jpe?g|webp)$`)
-
 // SourceURL returns the URL measured for a logo_url, or "" when there is
-// nothing to measure. A legacy "|w|h|dark" suffix is dropped; TMDB logos are
-// measured on their 300 px PNG (TMDB serves one for SVG logos too, and the
-// statistics don't need more).
+// nothing to measure. A legacy "|w|h|dark" suffix is dropped. The URL is
+// measured as the plugin gave it: the core knows no image host (a plugin
+// whose source has SVG logos hands out a raster variant itself).
 func SourceURL(raw string) string {
 	u := strings.TrimSpace(legacySuffix.ReplaceAllString(strings.TrimSpace(raw), ""))
 	if u == "" || len(u) > 2048 {
@@ -214,13 +211,6 @@ func SourceURL(raw string) string {
 	pu, err := url.Parse(u)
 	if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
 		return ""
-	}
-	if m := tmdbImage.FindStringSubmatch(u); m != nil {
-		ext := m[3]
-		if ext == "svg" {
-			ext = "png"
-		}
-		return m[1] + "w300" + m[2] + "." + ext
 	}
 	return u
 }

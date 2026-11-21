@@ -53,7 +53,7 @@ func listDownloadsAdmin(w http.ResponseWriter, r *http.Request) {
 		Owner        string  `json:"owner_id"`
 		// Grouping (a series' episodes under one card) and the file itself:
 		// a signed same-origin link the browser downloads with its real
-		// name (e.g. to put it in a Jellyfin library).
+		// name (e.g. to put it in a media server's library).
 		ParentID string `json:"parent_id"`
 		MediaID  string `json:"media_id"`
 		Poster   string `json:"poster"`

@@ -111,10 +111,10 @@ func TestSourceURL(t *testing.T) {
 		"javascript:alert(1)":                    "",
 		"https://example.com/logo.png":           "https://example.com/logo.png",
 		"https://example.com/logo.png|800|200|1": "https://example.com/logo.png",
-		"https://image.tmdb.org/t/p/original/abcDEF123.png":       "https://image.tmdb.org/t/p/w300/abcDEF123.png",
-		"https://image.tmdb.org/t/p/original/abcDEF123.svg":       "https://image.tmdb.org/t/p/w300/abcDEF123.png",
-		"https://image.tmdb.org/t/p/w500/abcDEF123.svg|800|133|0": "https://image.tmdb.org/t/p/w300/abcDEF123.png",
-		"https://example.com/a|b.png":                             "https://example.com/a|b.png",
+		// No host is special: the URL is measured as given.
+		"https://img.example.org/t/p/original/abc.png":   "https://img.example.org/t/p/original/abc.png",
+		"https://img.example.org/w500/abc.svg|800|133|0": "https://img.example.org/w500/abc.svg",
+		"https://example.com/a|b.png":                    "https://example.com/a|b.png",
 	}
 	for in, want := range cases {
 		if got := SourceURL(in); got != want {
