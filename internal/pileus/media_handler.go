@@ -629,9 +629,13 @@ func (h *MediaHandler) UpdateProgress(ctx context.Context, req *gen.ProgressRequ
 		clientID = pid
 		// The player's heartbeat keeps the lease alive while paused (no segment
 		// traffic) and for direct_stream plugins. A device that lost the lease still
-		// saves its progress.
-		if holder, ok := managers.PlaybackLeases.Claim(pid, deviceID); !ok {
-			movedTo = holder
+		// saves its progress. A replay of progress written offline (a download
+		// watched on a train, sent once back online) only saves: nothing is
+		// playing, and claiming would refuse the TV for the next 90 s.
+		if !progressReplay(ctx) {
+			if holder, ok := managers.PlaybackLeases.Claim(pid, deviceID); !ok {
+				movedTo = holder
+			}
 		}
 	}
 	err := managers.DB.UpsertProgress(
@@ -651,6 +655,17 @@ func (h *MediaHandler) UpdateProgress(ctx context.Context, req *gen.ProgressRequ
 		resp.PlaybackElsewhere, resp.PlayingOn = true, DeviceDisplayName(movedTo)
 	}
 	return resp, nil
+}
+
+// progressReplay: the client marks progress it saved while the server was
+// unreachable and sends later with this header (Pileus' offline queue).
+func progressReplay(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	vals := md.Get("x-progress-replay")
+	return len(vals) > 0 && vals[0] == "1"
 }
 
 func (h *MediaHandler) DeleteProgress(ctx context.Context, req *gen.DeleteProgressRequest) (*gen.DeleteProgressResponse, error) {
