@@ -276,6 +276,19 @@ form.clean [data-form-reset] { display: none; }
 .list-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .list-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-sub { color: var(--faint); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+
+/* Download offline: one card per series (episodes inside) or per movie. */
+.dl-group + .dl-group { border-top: 1px solid var(--border); }
+.dl-group.list-row, .dl-series > summary.list-row { padding: 12px 0; border-top: 0; }
+.dl-poster { width: 42px; height: 63px; border-radius: 6px; object-fit: cover; background: var(--surface-2); flex-shrink: 0; }
+.dl-series > summary { cursor: pointer; list-style: none; }
+.dl-series > summary::-webkit-details-marker { display: none; }
+.dl-chevron { color: var(--faint); transition: transform .15s; display: flex; }
+.dl-series[open] .dl-chevron { transform: rotate(90deg); }
+.dl-episodes { padding: 0 0 8px 56px; }
+.dl-episodes .list-row { padding: 9px 0; }
+.dl-episodes .list-row:first-child { border-top: 1px solid var(--border); padding-top: 9px; }
+@media (max-width: 640px) { .dl-episodes { padding-left: 0; } }
 .list-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 @media (max-width: 600px) {
     .list-row { flex-wrap: wrap; row-gap: 8px; }

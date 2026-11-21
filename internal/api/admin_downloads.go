@@ -51,12 +51,20 @@ func listDownloadsAdmin(w http.ResponseWriter, r *http.Request) {
 		Upgrade      bool    `json:"upgrade_pending"`
 		Fetched      bool    `json:"fetched"`
 		Owner        string  `json:"owner_id"`
+		// Grouping (a series' episodes under one card) and the file itself:
+		// a signed same-origin link the browser downloads with its real
+		// name (e.g. to put it in a Jellyfin library).
+		ParentID string `json:"parent_id"`
+		MediaID  string `json:"media_id"`
+		Poster   string `json:"poster"`
+		FileURL  string `json:"file_url"`
 	}
 	rows := []row{}
 	for _, in := range downloads.M.ListAll() {
 		rows = append(rows, row{in.ID, in.Title, in.SeriesTitle, in.Season, in.Episode, in.PluginID,
 			in.Status, in.Error, in.Progress, in.QualityLabel, in.FileBytes, in.EstimatedBytes,
-			in.CreatedAt, in.ScheduledFor, in.ExpiresAt, in.Shared, in.UpgradePending, in.Fetched, in.Owner})
+			in.CreatedAt, in.ScheduledFor, in.ExpiresAt, in.Shared, in.UpgradePending, in.Fetched, in.Owner,
+			in.ParentID, in.MediaID, in.Poster, in.FilePath})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":         true,

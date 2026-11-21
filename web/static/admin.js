@@ -1419,29 +1419,67 @@ function renderDownloads() {
         mount('#dl-list', html`<div class="empty">${icon('download')}<span>${t('Nessun download. I profili li chiedono dall\'app Pileus.')}</span></div>`);
         return;
     }
-    mount('#dl-list', rows.map(x => {
-        const name = x.series_title
-            ? `${x.series_title}${x.season_number ? ` · S${x.season_number}E${x.episode_number}` : ''} — ${x.title}`
-            : (x.title || x.download_id);
-        const [label, cls] = dlStatus[x.status] || [x.status, ''];
-        const extra = [];
-        if (x.status === 'scheduled' && x.scheduled_for) extra.push(t('alle {when}', { when: fmtDateTime(x.scheduled_for) }));
-        if (x.shared) extra.push(t('condiviso'));
-        if (x.upgrade_pending) extra.push(t('cerco una qualità migliore'));
-        if (x.fetched) extra.push(t('già sul dispositivo'));
-        const size = x.status === 'completed' ? fmtBytes(x.file_bytes) : `~${fmtBytes(x.estimated_bytes)}`;
-        const prog = Math.round((x.progress || 0) * 100);
-        return html`<div class="list-row">
-            <span class="list-main">
-                <span class="list-title">${name}</span>
-                <span class="list-sub"><span>${x.plugin_id}</span>${x.quality_label ? html`<span>${x.quality_label}</span>` : ''}<span>${size}</span>${extra.map(s => html`<span>${s}</span>`)}</span>
-                ${x.status === 'running' ? html`<div class="progress"><i style="width:${prog}%"></i></div>` : ''}
-                ${x.error ? html`<span class="small danger-text">${x.error}</span>` : ''}
-            </span>
-            <span class="pill ${cls}">${t(label)}${x.status === 'running' ? ` ${prog}%` : ''}</span>
-            <button class="icon-btn" data-dl-del="${x.download_id}" title="${t('Elimina')}" aria-label="${t('Elimina')}">${icon('trash')}</button>
-        </div>`;
+    // One card per series (its episodes in order) or per movie: the same
+    // title asked by two profiles shows once, with both owners.
+    const groups = new Map();
+    for (const x of rows) {
+        const key = x.parent_id ? `s\u0000${x.plugin_id}\u0000${x.parent_id}` : `m\u0000${x.plugin_id}\u0000${x.media_id || x.download_id}`;
+        if (!groups.has(key)) groups.set(key, { key, series: !!x.parent_id, title: x.series_title || x.title || x.download_id, poster: x.poster, plugin: x.plugin_id, items: [] });
+        groups.get(key).items.push(x);
+    }
+    mount('#dl-list', [...groups.values()].map(g => {
+        // Same episode for two profiles = one file: list it once.
+        const seen = new Set();
+        const items = g.items.filter(x => {
+            const k = x.media_id || x.download_id;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        }).sort((a, b) => (a.season_number - b.season_number) || (a.episode_number - b.episode_number));
+        const ready = items.filter(x => x.status === 'completed');
+        const bytes = ready.reduce((n, x) => n + (x.file_bytes || 0), 0);
+        const busy = items.some(x => ['running', 'queued', 'scheduled', 'paused'].includes(x.status));
+        const sub = [g.plugin,
+            g.series ? t('{n} episodi', { n: items.length }) : '',
+            ready.length ? fmtBytes(bytes) : '',
+            busy ? t('in preparazione') : ''].filter(Boolean);
+        const poster = g.poster ? html`<img class="dl-poster" src="${g.poster}" alt="" loading="lazy">` : html`<span class="dl-poster"></span>`;
+        if (!g.series) {
+            return html`<div class="list-row dl-group">${poster}${dlItem(items[0], g.title, sub)}</div>`;
+        }
+        const open = state.dlOpen?.has(g.key);
+        return html`<details class="dl-group dl-series" data-dl-group="${g.key}" ${open ? 'open' : ''}>
+            <summary class="list-row">${poster}
+                <span class="list-main"><span class="list-title">${g.title}</span>
+                <span class="list-sub">${sub.map(s => html`<span>${s}</span>`)}</span></span>
+                <span class="dl-chevron">${icon('chevron')}</span>
+            </summary>
+            <div class="dl-episodes">${items.map(x => html`<div class="list-row">${dlItem(x,
+                `${x.season_number ? `S${x.season_number}E${x.episode_number} · ` : ''}${x.title}`, [])}</div>`)}</div>
+        </details>`;
     }));
+}
+// One downloadable file: status, size, the browser download link (the
+// signed same-origin URL, saved under its real name), delete.
+function dlItem(x, name, sub) {
+    const [label, cls] = dlStatus[x.status] || [x.status, ''];
+    const extra = [...sub];
+    if (x.status === 'scheduled' && x.scheduled_for) extra.push(t('alle {when}', { when: fmtDateTime(x.scheduled_for) }));
+    if (x.shared) extra.push(t('condiviso'));
+    if (x.upgrade_pending) extra.push(t('cerco una qualità migliore'));
+    if (x.fetched) extra.push(t('già sul dispositivo'));
+    if (x.quality_label) extra.push(x.quality_label);
+    if (!sub.length) extra.push(x.status === 'completed' ? fmtBytes(x.file_bytes) : `~${fmtBytes(x.estimated_bytes)}`);
+    const prog = Math.round((x.progress || 0) * 100);
+    return html`<span class="list-main">
+            <span class="list-title">${name}</span>
+            <span class="list-sub">${extra.map(s => html`<span>${s}</span>`)}</span>
+            ${x.status === 'running' ? html`<div class="progress"><i style="width:${prog}%"></i></div>` : ''}
+            ${x.error ? html`<span class="small danger-text">${x.error}</span>` : ''}
+        </span>
+        ${x.status === 'completed' ? '' : html`<span class="pill ${cls}">${t(label)}${x.status === 'running' ? ` ${prog}%` : ''}</span>`}
+        ${x.status === 'completed' && x.file_url ? html`<a class="btn btn-secondary btn-sm" href="${x.file_url}" download title="${t('Scarica il file MKV su questo computer')}">${icon('download')}${t('Scarica')}</a>` : ''}
+        <button class="icon-btn" data-dl-del="${x.download_id}" title="${t('Elimina')}" aria-label="${t('Elimina')}">${icon('trash')}</button>`;
 }
 function fillDownloadSettings() {
     const form = $('form[data-form=downloads]');
@@ -1466,6 +1504,17 @@ pages.downloads = {
     },
     topics: { downloads: async () => { await loadDownloads(); renderDownloads(); } },
 };
+// A poster that doesn't load leaves an empty frame, not a broken image.
+$('#dl-list').addEventListener('error', e => {
+    if (e.target.classList?.contains('dl-poster')) e.target.style.visibility = 'hidden';
+}, true);
+// Which series cards are open survives the 2-3 s refresh.
+$('#dl-list').addEventListener('toggle', e => {
+    const g = e.target.closest?.('[data-dl-group]');
+    if (!g) return;
+    state.dlOpen ??= new Set();
+    if (g.open) state.dlOpen.add(g.dataset.dlGroup); else state.dlOpen.delete(g.dataset.dlGroup);
+}, true);
 $('#dl-list').addEventListener('click', async e => {
     const b = e.target.closest('[data-dl-del]');
     if (!b) return;
