@@ -120,6 +120,19 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One of our own images (a client resolved a mycelium: URL against a
+	// different base): served in-process, never fetched over HTTP from
+	// ourselves — see imgSelfTarget.
+	upstream, home, away, ok := imgSelfTarget(upstream)
+	if !ok {
+		http.Error(w, "bad u", http.StatusBadRequest)
+		return
+	}
+	if home != "" {
+		serveVersus(w, r, home, away)
+		return
+	}
+
 	// SVG is not re-encoded: redirect to it.
 	if strings.Contains(strings.ToLower(upstream), ".svg") {
 		http.Redirect(w, r, upstream, http.StatusFound)
@@ -216,6 +229,42 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 	imgServeHeaders(w)
 	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 	_, _ = w.Write(out)
+}
+
+// imgMaxSelfNesting bounds how many /img?u= layers imgSelfTarget unwraps.
+const imgMaxSelfNesting = 3
+
+// imgSelfTarget recognises an upstream that is one of mycelium's own images
+// by its path alone (the host may be a LAN IP, server_host, a domain, a
+// tailnet name…). Fetching those over HTTP would deadlock on imgConvSem: the
+// outer /img holds a slot while the inner request waits for one, so a few at
+// once exhaust the semaphore and everything answers "busy" after
+// imgQueueWait.
+//
+//   - /img/versus?h=…&a=… → home and away (decoded), for serveVersus.
+//   - /img?u=… → unwrapped and checked again, at most imgMaxSelfNesting times.
+//
+// Anything else comes back as inner, unchanged. ok is false for a URL nested
+// deeper than the limit or an unwrapped URL that isn't http(s).
+func imgSelfTarget(upstream string) (inner, home, away string, ok bool) {
+	for depth := 0; ; depth++ {
+		pu, err := url.Parse(upstream)
+		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+			return "", "", "", false
+		}
+		q := pu.Query()
+		switch {
+		case pu.Path == "/img/versus" && q.Get("h") != "" && q.Get("a") != "":
+			return upstream, imgB64Decode(q.Get("h")), imgB64Decode(q.Get("a")), true
+		case pu.Path == "/img" && q.Get("u") != "":
+			if depth >= imgMaxSelfNesting {
+				return "", "", "", false
+			}
+			upstream = imgB64Decode(q.Get("u"))
+		default:
+			return upstream, "", "", true
+		}
+	}
 }
 
 // imgServeCached serves cacheFile when present and non-empty.

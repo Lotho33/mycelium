@@ -49,7 +49,13 @@ const (
 // ImageVersus serves the versus cover of h and a (see the file comment).
 func ImageVersus(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	home, away := imgB64Decode(q.Get("h")), imgB64Decode(q.Get("a"))
+	serveVersus(w, r, imgB64Decode(q.Get("h")), imgB64Decode(q.Get("a")))
+}
+
+// serveVersus serves the versus cover of the decoded badge URLs home and away:
+// the body of GET /img/versus, also used by /img when its upstream is one of
+// our own versus URLs (see imgSelfTarget).
+func serveVersus(w http.ResponseWriter, r *http.Request, home, away string) {
 	for _, u := range []string{home, away} {
 		pu, err := url.Parse(u)
 		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || strings.Contains(strings.ToLower(pu.Path), ".svg") {
