@@ -521,6 +521,48 @@ browser service's `/v1/fetch` relay when one is configured
 
 ---
 
+## Testing a plugin
+
+`cmd/plugintest` runs a plugin's own Lua test files against the real
+`mycelium.*` SDK, the plugin loaded exactly as on a server, with every
+network call answered from routes the test declares — no server, no source
+reachable, no installation.
+
+```sh
+go run ./cmd/plugintest -plugin ./myplugin -set api_token=x ./myplugin/tests/*.lua
+```
+
+`-set key=value` sets one of the plugin's global settings
+(`mycelium.context.get_global_setting`); `-v` shows the plugin's log lines.
+Each file runs in a fresh state and may call the plugin's entrypoints and
+globals directly. Besides those, a test file has:
+
+| | |
+|---|---|
+| `plugintest.route(pattern, response)` | `pattern` is a Go regexp on the URL; `response` a body string or `{status=, body=, headers={...}}`. The most recently added matching route answers. |
+| `plugintest.requests()` | the requests made so far: `{method=, url=, headers=}` |
+| `plugintest.clear()` | forget the recorded requests |
+| `check(cond, message)` | fails the file when `cond` is false |
+
+A request no route answers gets status 599 and fails the file, listed even
+when the test failed for another reason (it is often the cause). There is no
+Redis: `mycelium.cache` stays empty, so code behind a cache runs every time.
+A test may replace a plugin global (e.g. an availability check) to keep the
+test on what it is about.
+
+```lua
+-- tests/search_test.lua
+plugintest.route("/search", '{"results":[{"id":1,"title":"A"}]}')
+local res = search_items({ query = "a", filters = {} })
+check(#res.items == 1, "one result")
+check(plugintest.requests()[1].url:find("query=a", 1, true), "query sent")
+```
+
+Keep tests in a subdirectory (`tests/`): only the `.lua` files at the
+plugin's top level are loaded as its modules.
+
+---
+
 ## Installing
 
 - **Dashboard:** ZIP the plugin directory (the folder itself as the single

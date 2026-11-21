@@ -238,6 +238,14 @@ func (s *SettingsManager) Get(key string, def any) any {
 	return def
 }
 
+// SetInMemory sets key for this process only, never written to disk — for
+// tools that run plugins outside a server (cmd/plugintest).
+func (s *SettingsManager) SetInMemory(key string, v any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = v
+}
+
 // Defaults of the two listening ports, in one place (they used to be
 // repeated as literals at every reader).
 const (
