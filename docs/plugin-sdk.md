@@ -226,6 +226,13 @@ languages and subtitles are read from the HLS master playlist by the server.
 
 Available as globals inside every plugin function.
 
+For completion and type checks in an editor, point the Lua language server
+(LuaLS, e.g. the VS Code "Lua" extension) at
+[`mycelium.meta.lua`](mycelium.meta.lua) — e.g. a `.luarc.json` in the
+plugin folder with `{ "workspace.library": ["<mycelium-core>/docs"] }`. It
+covers this whole SDK plus the `plugintest` helpers; a test in the core keeps
+it in step with what the server actually registers.
+
 ### `mycelium.network`
 
 ```lua
