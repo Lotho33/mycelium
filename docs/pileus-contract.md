@@ -227,8 +227,9 @@ itself is passed through unchanged.
 - Unset `logo_meta`: fall back to the legacy `url|w|h|dark` suffix some
   plugins still put in `logo_url` (`logoDark`, `logoRenderSize`), else no
   halo.
-- The logo is measured at the URL the plugin gave; SVG logos are not
-  measured (a plugin whose source has them hands out a raster variant).
+- The logo is measured at the URL the plugin gave, SVG included (drawn to
+  a raster for the measurement only): a plugin hands out SVG logos as they
+  are, and clients draw them as vectors.
 
 ## La mia lista (`GetMyList` / `SetMyListItem`)
 

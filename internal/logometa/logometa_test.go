@@ -169,8 +169,15 @@ func TestLookupQueuesThenAnswers(t *testing.T) {
 }
 
 func TestDecodeRejectsUnsupportedAndHuge(t *testing.T) {
-	if _, err := decode([]byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)); !errors.Is(err, errUnsupported) {
-		t.Errorf("svg: %v", err)
+	if _, err := decode([]byte(`<!doctype html><html><body>no</body></html>`)); !errors.Is(err, errUnsupported) {
+		t.Errorf("html: %v", err)
+	}
+	// An SVG with no size can't be drawn: an error, not a measurement.
+	if _, err := decode([]byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)); err == nil {
+		t.Error("unsized svg measured")
+	}
+	if _, err := decode(append([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">`), make([]byte, maxSVGBytes)...)); err == nil {
+		t.Error("oversized svg accepted")
 	}
 	// A PNG header declaring 20000×20000 is refused before decoding.
 	hdr := pngHeader(20000, 20000)
@@ -187,5 +194,36 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// SVG logos (clients draw them as vectors) are measured on a raster drawn
+// here: a wide dark-red wordmark on a transparent background.
+func TestSVGLogoMeasured(t *testing.T) {
+	svg := `<?xml version="1.0" encoding="UTF-8"?>
+<!-- a logo -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100" width="400" height="100">
+  <g transform="translate(10,10)"><rect x="0" y="0" width="380" height="80" fill="#8b0000"/></g>
+</svg>`
+	img, err := decode([]byte(svg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	if b.Dx() != svgRasterPx || b.Dy() != svgRasterPx/4 {
+		t.Fatalf("raster %dx%d, want %dx%d", b.Dx(), b.Dy(), svgRasterPx, svgRasterPx/4)
+	}
+	if _, _, _, a := img.At(0, 0).RGBA(); a != 0 {
+		t.Error("background not transparent")
+	}
+	m := Analyze(img)
+	if m.W*10/m.H < 40 || m.W*10/m.H > 52 {
+		t.Errorf("aspect %d:%d, want ~4.75:1 (the visible part)", m.W, m.H)
+	}
+	if r, g := m.Color>>16, (m.Color>>8)&0xff; r < 0x70 || g > 0x20 {
+		t.Errorf("colour %06x, want dark red", m.Color)
+	}
+	if m.Halo != "light" {
+		t.Errorf("dark logo without a light halo: %q", m.Halo)
 	}
 }

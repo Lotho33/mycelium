@@ -201,8 +201,8 @@ var legacySuffix = regexp.MustCompile(`\|\d+\|\d+\|[01]$`)
 
 // SourceURL returns the URL measured for a logo_url, or "" when there is
 // nothing to measure. A legacy "|w|h|dark" suffix is dropped. The URL is
-// measured as the plugin gave it: the core knows no image host (a plugin
-// whose source has SVG logos hands out a raster variant itself).
+// measured as the plugin gave it: the core knows no image host. SVG logos
+// are measured on a raster drawn here (svg.go).
 func SourceURL(raw string) string {
 	u := strings.TrimSpace(legacySuffix.ReplaceAllString(strings.TrimSpace(raw), ""))
 	if u == "" || len(u) > 2048 {
@@ -255,7 +255,10 @@ func fetchImage(ctx context.Context, u string) (image.Image, error) {
 func decode(raw []byte) (image.Image, error) {
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
-		// SVG, AVIF, HTML…: nothing this package can measure.
+		if looksLikeSVG(raw) {
+			return rasterizeSVG(raw)
+		}
+		// AVIF, HTML…: nothing this package can measure.
 		return nil, errUnsupported
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxSourcePixels {

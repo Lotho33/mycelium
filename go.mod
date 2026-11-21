@@ -11,6 +11,8 @@ require (
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
+	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tidwall/gjson v1.19.0
 	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/crypto v0.58.0
