@@ -682,6 +682,14 @@ func (m *Manager) createItem(owner, device, pluginID string, meta ItemMeta, c ch
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	// The same episode/movie twice for one profile makes no sense (a second
+	// tap, a season batch over episodes already there): the one it has is
+	// the answer. A failed or canceled one can be asked again.
+	if id := activeItemFor(owner, pluginID, meta.MediaID); id != "" {
+		log.Printf("[downloads] %s/%s già scaricato da questo profilo (%s)", pluginID, meta.MediaID, id)
+		return m.Get(owner, id)
+	}
+
 	now := m.now()
 	sched, useWindow := m.schedule(pluginID, notBefore, usePreferred, now)
 	status := StatusQueued
@@ -738,6 +746,22 @@ func (m *Manager) createItem(owner, device, pluginID string, meta ItemMeta, c ch
 	}
 	m.wake()
 	return m.Get(owner, id)
+}
+
+// activeItemFor is owner's download of mediaID that isn't failed or
+// canceled, or "".
+func activeItemFor(owner, pluginID, mediaID string) string {
+	if owner == "" || mediaID == "" {
+		return ""
+	}
+	var id string
+	err := managers.DB.QueryRow(`SELECT i.download_id FROM dl_items i JOIN dl_blobs b ON b.blob_id=i.blob_id
+		WHERE i.owner_id=? AND i.media_id=? AND b.plugin_id=? AND b.status NOT IN (?,?)
+		ORDER BY i.created_at DESC LIMIT 1`, owner, mediaID, pluginID, StatusFailed, StatusCanceled).Scan(&id)
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 func boolInt(b bool) int {

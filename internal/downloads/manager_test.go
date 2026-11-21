@@ -632,3 +632,33 @@ func TestManager_DeleteOwnerAndReset(t *testing.T) {
 		t.Fatal("reset left downloads behind")
 	}
 }
+
+// The same episode twice for one profile returns the download it already
+// has (a second tap, a season batch over episodes already there); another
+// profile still gets its own entry on the shared file.
+func TestManager_SameMediaSameProfileNotDuplicated(t *testing.T) {
+	e := newEnv(t)
+	withMedia := func(r *CreateRequest) { r.MediaID = "ep-1" }
+	a := e.create(t, "anna", withMedia)
+	again := e.create(t, "anna", withMedia)
+	if again.ID != a.ID {
+		t.Fatalf("duplicated: %s and %s", a.ID, again.ID)
+	}
+	if n := len(e.m.List("anna")); n != 1 {
+		t.Fatalf("anna has %d downloads", n)
+	}
+	b := e.create(t, "bruno", withMedia)
+	if b.ID == a.ID {
+		t.Fatal("another profile got anna's entry")
+	}
+	// Canceled: asking again starts a new one.
+	if err := e.m.Cancel("anna", a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.m.Delete("bruno", b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c := e.create(t, "anna", withMedia); c.ID == a.ID {
+		t.Fatal("a canceled download blocked a new request")
+	}
+}
