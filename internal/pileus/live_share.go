@@ -69,3 +69,21 @@ func liveShareStore(pluginID, streamID string, rs *ResolvedStream) {
 		}
 	}
 }
+
+// RefreshLiveShare replaces the URL and headers of pluginID/streamID's shared
+// live link, if there is one, with what the proxy just re-resolved (an
+// expired token renewed mid-stream): the next Play gets a link that works
+// instead of the one handed out when the stream started.
+func RefreshLiveShare(pluginID, streamID, url string, headers map[string]string) {
+	key := resolveFlightKey(pluginID, streamID)
+	liveShares.Lock()
+	defer liveShares.Unlock()
+	e, ok := liveShares.m[key]
+	if !ok || e.rs == nil || url == "" {
+		return
+	}
+	fresh := *e.rs
+	fresh.URL, fresh.Headers = url, headers
+	e.rs = &fresh
+	liveShares.m[key] = e
+}

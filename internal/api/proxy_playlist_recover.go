@@ -278,6 +278,11 @@ func reResolveShared(sidRaw, profileID string) (string, map[string]string, error
 		e.url, e.headers, e.err = "", nil, errors.New("sid non valido")
 	} else {
 		e.url, e.headers, e.err = reResolveLua(pluginID, sourceID, profileID)
+		if e.err == nil {
+			// Plays that reuse this live stream's shared link get the fresh one,
+			// not the one whose token just expired.
+			pileus.RefreshLiveShare(pluginID, sourceID, e.url, e.headers)
+		}
 	}
 	e.at = time.Now()
 	return e.url, e.headers, e.err
@@ -341,6 +346,23 @@ func remapFromHeaders(u string, headers map[string]string) playlistRemap {
 		rm.xhdrRaw = strings.TrimPrefix(sfx, "&xhdr=")
 	}
 	return rm
+}
+
+// recoverTopPlaylist re-resolves the stream behind sidRaw and fetches the new
+// top-level playlist (master or media) in place of origURL, remembered for
+// later reloads.
+func recoverTopPlaylist(client *http.Client, sidRaw, profileID, origURL string, useVPN bool, egr string) (playlistRemap, []byte, error) {
+	newURL, headers, err := reResolveShared(sidRaw, profileID)
+	if err != nil {
+		return playlistRemap{}, nil, fmt.Errorf("re-resolve: %w", err)
+	}
+	rm := remapFromHeaders(newURL, headers)
+	content, err := fetchUpstreamPlaylist(client, rm.url, rm.origin, rm.cookiesRaw, rm.xhdrRaw, useVPN, egr)
+	if err != nil {
+		return playlistRemap{}, nil, fmt.Errorf("fetch nuova playlist: %w", err)
+	}
+	storePlaylistRemap(origURL, rm)
+	return rm, content, nil
 }
 
 // recoverChildPlaylist re-resolves the stream behind sidRaw and fetches child

@@ -196,14 +196,13 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A child playlist already recovered once: go straight to its new upstream.
+	// A playlist already recovered once (a child, or the top-level one of a
+	// stream whose token expired): go straight to its new upstream.
 	origURL := realURL
-	if childIdx != "" {
-		if rm, ok := lookupPlaylistRemap(origURL); ok {
-			realURL, realOrigin = rm.url, rm.origin
-			originRaw = b64url(rm.origin)
-			cookiesRaw, xhdrRaw = rm.cookiesRaw, rm.xhdrRaw
-		}
+	if rm, ok := lookupPlaylistRemap(origURL); ok {
+		realURL, realOrigin = rm.url, rm.origin
+		originRaw = b64url(rm.origin)
+		cookiesRaw, xhdrRaw = rm.cookiesRaw, rm.xhdrRaw
 	}
 
 	if proxyDebug { // debug only: every live reload
@@ -256,6 +255,22 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[proxy/playlist] child vi=%s recovery failed: %v", childIdx, err)
 		} else {
 			log.Printf("[proxy/playlist] child vi=%s recovered → %s", childIdx, logURL(rm.url))
+			realURL, realOrigin = rm.url, rm.origin
+			originRaw = b64url(rm.origin)
+			cookiesRaw, xhdrRaw = rm.cookiesRaw, rm.xhdrRaw
+			content, fetchErr = recovered, nil
+		}
+	}
+
+	// The top-level playlist failed (typically a live token expired): recover
+	// in place too, under the player's unchanged URL. A live player keeps
+	// reloading the URL it was given, not where a redirect sent it, so a
+	// redirect meant a 403 and a new round trip on every reload.
+	if fetchErr != nil && sidRaw != "" && childIdx == "" && q.Get("rr") == "" && r.Context().Err() == nil {
+		if rm, recovered, err := recoverTopPlaylist(plClient, sidRaw, sessionProfile(uidRaw), origURL, useVPN, egr); err != nil {
+			log.Printf("[proxy/playlist] recovery in place failed: %v", err)
+		} else {
+			log.Printf("[proxy/playlist] re-resolved in place → %s", logURL(rm.url))
 			realURL, realOrigin = rm.url, rm.origin
 			originRaw = b64url(rm.origin)
 			cookiesRaw, xhdrRaw = rm.cookiesRaw, rm.xhdrRaw
