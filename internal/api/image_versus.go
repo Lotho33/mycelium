@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -64,8 +63,7 @@ func serveVersus(w http.ResponseWriter, r *http.Request, home, away string) {
 		}
 	}
 
-	sum := sha256.Sum256([]byte("versus|" + versusVersion + "|" + home + "|" + away))
-	cacheFile := filepath.Join(imageCacheDir(), hex.EncodeToString(sum[:])+".webp")
+	cacheFile := versusCacheFile(home, away)
 	if imgServeCached(w, r, cacheFile, home) {
 		return
 	}
@@ -114,13 +112,7 @@ func serveVersus(w http.ResponseWriter, r *http.Request, home, away string) {
 		if aImg, err = imgFetchDecode(r.Context(), away); err == nil {
 			var out []byte
 			if out, err = versusEncode(hImg, aImg); err == nil {
-				tmp := cacheFile + ".tmp" + strconv.FormatInt(time.Now().UnixNano(), 36)
-				if e := os.WriteFile(tmp, out, 0o644); e == nil {
-					_ = os.Rename(tmp, cacheFile)
-					core.SafeGo("api/img-cache-sweep", imgCacheSweep)
-				} else {
-					_ = os.Remove(tmp)
-				}
+				_ = imgWriteCache(cacheFile, out)
 				flight.out = out
 				imgServeHeaders(w)
 				w.Header().Set("Content-Length", strconv.Itoa(len(out)))
@@ -131,6 +123,13 @@ func serveVersus(w http.ResponseWriter, r *http.Request, home, away string) {
 	}
 	log.Printf("[img] versus failed (%v): %s vs %s", core.RedactURLError(err), imgShortURL(home), imgShortURL(away))
 	http.Error(w, "image unavailable", http.StatusBadGateway)
+}
+
+// versusCacheFile is the disk cache entry of the versus cover of home/away
+// (shared with the prewarm, image_prewarm.go).
+func versusCacheFile(home, away string) string {
+	sum := sha256.Sum256([]byte("versus|" + versusVersion + "|" + home + "|" + away))
+	return filepath.Join(imageCacheDir(), hex.EncodeToString(sum[:])+".webp")
 }
 
 // imgFetchDecode downloads and decodes one source image under the /img caps.

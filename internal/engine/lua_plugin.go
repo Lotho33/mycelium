@@ -965,6 +965,11 @@ func (m *LuaPluginManager) ResolveCatalogDefs(pluginID string) []LuaCatalogDef {
 	return m.resolveCatalogDefs(p)
 }
 
+// OnCatalogWarmed, when set, gets page 1 of every catalog the counts below
+// fetch (raw get_catalog result): the image proxy prewarms the covers the
+// home will ask for (api/image_prewarm.go). Must not block.
+var OnCatalogWarmed func(pluginID, catalogID string, raw []byte)
+
 // warmupCatalogCounts fetches page 1 for every auto_hide_when_empty catalog
 // and writes the item count to Redis. Called in a goroutine after each task
 // run so that ListPlugins reflects current catalog state without waiting for
@@ -999,6 +1004,10 @@ func (m *LuaPluginManager) warmupCatalogCounts(p *LuaPlugin) {
 			// hiding the catalog.
 			log.Printf("[lua] warmup count %s/%s: skip (%v)", p.Manifest.ID, cat.ID, err)
 			continue
+		}
+
+		if hook := OnCatalogWarmed; hook != nil && len(raw) > 0 {
+			hook(p.Manifest.ID, cat.ID, raw)
 		}
 
 		count := 0

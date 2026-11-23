@@ -154,8 +154,7 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|q%d", upstream, imgWebPQuality)))
-	cacheFile := filepath.Join(imageCacheDir(), hex.EncodeToString(sum[:])+".webp")
+	cacheFile := imgCacheFile(upstream)
 
 	if imgServeCached(w, r, cacheFile, upstream) {
 		return
@@ -226,14 +225,8 @@ func ImageProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// tmp + rename so a concurrent read never sees a half-written file.
 	note := ""
-	tmp := cacheFile + ".tmp" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if e := os.WriteFile(tmp, out, 0o644); e == nil {
-		_ = os.Rename(tmp, cacheFile)
-		core.SafeGo("api/img-cache-sweep", imgCacheSweep)
-	} else {
-		_ = os.Remove(tmp)
+	if e := imgWriteCache(cacheFile, out); e != nil {
 		note = " (cache write failed)"
 	}
 
@@ -280,6 +273,26 @@ func imgSelfTarget(upstream string) (inner, home, away string, ok bool) {
 			return upstream, "", "", true
 		}
 	}
+}
+
+// imgCacheFile is the disk cache entry of upstream's WebP (shared with the
+// prewarm, image_prewarm.go).
+func imgCacheFile(upstream string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|q%d", upstream, imgWebPQuality)))
+	return filepath.Join(imageCacheDir(), hex.EncodeToString(sum[:])+".webp")
+}
+
+// imgWriteCache stores out as cacheFile (tmp + rename, so a concurrent read
+// never sees a half-written file) and kicks the size sweep.
+func imgWriteCache(cacheFile string, out []byte) error {
+	tmp := cacheFile + ".tmp" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	_ = os.Rename(tmp, cacheFile)
+	core.SafeGo("api/img-cache-sweep", imgCacheSweep)
+	return nil
 }
 
 // imgServeCached serves cacheFile when present and non-empty.
