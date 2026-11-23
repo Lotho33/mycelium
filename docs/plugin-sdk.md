@@ -44,7 +44,8 @@ direct_egress: true           # opt OUT of the default proxy/VPN routing
 vpn_optional: true            # (with direct_egress) add an admin toggle that
                               # routes only the video flow through the proxy
 direct_stream: true           # hand the resolved URL to the player as-is,
-                              # skipping mycelium's HLS proxy (LAN sources only)
+                              # skipping mycelium's HLS proxy (LAN sources only;
+                              # one resolve can opt back in with proxy = true)
 warm_resolve: true            # resolve_stream caches its result: mycelium may
                               # run it ahead of Play (args.warm = true) when a
                               # details page opens; adds an admin toggle, on
@@ -56,10 +57,10 @@ share_live: false             # default true: Plays of a live stream already
 # --- segments packed in another container (optional, see "Packed segments") ---
 segments:
   unwrap:
-    - carrier: png_pixels       # body | png_pixels | webp_chunk
+    - carrier: png_pixels       # body | png_pixels | webp_chunk | png_text
       magic: "MAGIC"            # bytes right before the payload
       length: u32be             # "" | u32be | u32le: length field after magic
-      codec: gzip               # "" | gzip | zlib
+      codec: gzip               # "" | gzip | zlib | base64
 
 # --- encrypted segment URIs in media playlists (optional, see "Sealed playlists") ---
 playlist:
@@ -171,6 +172,7 @@ hand — no extra request per episode.
   url     = "https://cdn.example/index.m3u8",  -- final playable URL
   headers = { Referer = "…", Cookie = "…" },   -- replayed by the HLS proxy
   is_live = false,
+  proxy   = false,                             -- optional: true = through the proxy even if direct_stream
   extra   = { … },                             -- plugin-specific passthrough
   subtitles = {                                -- optional, HLS only
     { url = "https://…/it.srt", lang = "it", name = "Italiano", default = true },
@@ -187,7 +189,8 @@ SRT/WebVTT, plain, gzip or zip, any encoding (non-UTF-8 is read as
 Windows-1252). Players and offline downloads see a normal track. A track
 whose language the master already has (non-forced) is skipped; a file that
 can't be fetched becomes an empty track, never a playback error. At most 4
-tracks; ignored for non-HLS streams and `direct_stream` plugins.
+tracks; ignored for non-HLS streams and for `direct_stream` plugins unless
+the result also sets `proxy = true`.
 
 `data_base64` hands the file itself instead of a `url` (same formats, up to
 4 MiB): for a subtitle the plugin keeps on disk, so a later Play needs no new
@@ -205,6 +208,11 @@ follows calls `resolve_stream` again and finds the cache warm — do those
 per-profile writes on the cache-hit path too. Only for plugins whose
 `resolve_stream` caches its result: without a cache a warm doubles the
 requests to the site.
+
+`proxy = true` (optional) sends this one stream through mycelium's proxy
+even though the plugin is `direct_stream`: e.g. a server-side transcode that
+needs `subtitles` injected, next to an original file that stays direct.
+Without it a `direct_stream` plugin's URL goes to the player as-is.
 
 `extra` is forwarded to the client verbatim — never put secrets in it. Keys
 the Pileus client understands:
@@ -483,11 +491,11 @@ already MPEG-TS or fMP4.
 
 | field | meaning |
 |-------|---------|
-| `carrier` | `body`: anywhere in the response, right after `magic` (searched). `png_pixels`: the samples of an 8-bit RGB/RGBA PNG, alpha dropped, row by row from the first pixel. `webp_chunk`: the data of the WebP chunk named `chunk` |
-| `chunk` | `webp_chunk` only: the FourCC, e.g. `EXIF` |
+| `carrier` | `body`: anywhere in the response, right after `magic` (searched). `png_pixels`: the samples of an 8-bit RGB/RGBA PNG, alpha dropped, row by row from the first pixel. `webp_chunk`: the data of the WebP chunk named `chunk`. `png_text`: the text of the PNG's `tEXt`/`zTXt`/`iTXt` chunks whose keyword starts with `chunk`, joined in file order (compressed ones inflated first) |
+| `chunk` | `webp_chunk`: the FourCC, e.g. `EXIF`. `png_text`: the keyword prefix, e.g. `payload-` (empty = every text chunk) |
 | `magic` | bytes before the payload; required for `body`, must start the carrier otherwise |
 | `length` | `u32be` / `u32le`: a 4-byte length right after `magic`; empty = to the end |
-| `codec` | `gzip` / `zlib`, empty = raw |
+| `codec` | `gzip` / `zlib` / `base64` (standard alphabet, padding and line breaks optional), empty = raw |
 
 What a rule extracts is used only if it is MPEG-TS or fMP4; at most 8 rules,
 invalid ones are dropped at load (logged). Sizes declared by the source are

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"encoding/base64"
 	"encoding/binary"
 	"io"
 
@@ -13,7 +14,8 @@ import (
 // Segments packed inside another container by the source, unpacked with the
 // rules its plugin declares (manifest `segments.unwrap`, core.SegmentUnwrap).
 // This file only knows generic carriers — a response body, the samples of a
-// PNG, a WebP chunk — and codecs; the bytes to look for come from the plugin.
+// PNG, a WebP chunk, the text chunks of a PNG — and codecs; the bytes to look
+// for come from the plugin.
 // Every size the source declares is bounded before anything is allocated.
 
 // unwrapMaxPixels bounds the canvas a PNG may declare before any of it is
@@ -53,6 +55,12 @@ func unwrapOne(b []byte, r core.SegmentUnwrap) []byte {
 		return framedPayload(d[len(magic):], r)
 	case core.UnwrapCarrierPNGPixels:
 		return pngPixelsPayload(b, r)
+	case core.UnwrapCarrierPNGText:
+		d := pngTextData(b, r.Chunk)
+		if d == nil || !bytes.HasPrefix(d, magic) {
+			return nil
+		}
+		return framedPayload(d[len(magic):], r)
 	}
 	return nil
 }
@@ -98,8 +106,114 @@ func framedPayload(p []byte, r core.SegmentUnwrap) []byte {
 		}
 		defer zr.Close()
 		return readAllCapped(zr)
+	case "base64":
+		return base64Payload(p)
 	}
 	return p
+}
+
+// base64Payload decodes standard base64, with or without padding and line
+// breaks; nil when it isn't base64.
+func base64Payload(p []byte) []byte {
+	if bytes.ContainsAny(p, "\r\n") {
+		p = bytes.ReplaceAll(bytes.ReplaceAll(p, []byte("\r"), nil), []byte("\n"), nil)
+	}
+	p = bytes.TrimRight(p, "=")
+	out := make([]byte, base64.RawStdEncoding.DecodedLen(len(p)))
+	n, err := base64.RawStdEncoding.Decode(out, p)
+	if err != nil {
+		return nil
+	}
+	return out[:n]
+}
+
+// pngTextData joins, in file order, the text of a PNG's tEXt/zTXt/iTXt
+// chunks whose keyword starts with prefix (every text chunk when prefix is
+// empty), inflating compressed ones; nil when b isn't a PNG, nothing matches
+// or the text outgrows what a segment may be (base64 of segmentBufferLimit).
+func pngTextData(b []byte, prefix string) []byte {
+	if !bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")) {
+		return nil
+	}
+	limit := segmentBufferLimit/3*4 + 4
+	var out []byte
+	found := false
+	p := 8
+	for p+12 <= len(b) {
+		n := int(binary.BigEndian.Uint32(b[p : p+4]))
+		if n < 0 || n > len(b)-p-12 {
+			return nil
+		}
+		typ := string(b[p+4 : p+8])
+		data := b[p+8 : p+8+n]
+		p += 12 + n
+		if typ == "IEND" {
+			break
+		}
+		if typ != "tEXt" && typ != "zTXt" && typ != "iTXt" {
+			continue
+		}
+		kw, rest, ok := bytes.Cut(data, []byte{0})
+		if !ok || !bytes.HasPrefix(kw, []byte(prefix)) {
+			continue
+		}
+		var text []byte
+		switch typ {
+		case "tEXt":
+			text = rest
+		case "zTXt": // compression method, then zlib data
+			if len(rest) < 1 || rest[0] != 0 {
+				return nil
+			}
+			text = inflateCapped(rest[1:], limit-len(out))
+		case "iTXt": // flag, method, language\0, translated keyword\0, text
+			if len(rest) < 2 {
+				return nil
+			}
+			flag, method := rest[0], rest[1]
+			_, rest, ok = bytes.Cut(rest[2:], []byte{0})
+			if !ok {
+				return nil
+			}
+			_, rest, ok = bytes.Cut(rest, []byte{0})
+			if !ok {
+				return nil
+			}
+			text = rest
+			if flag == 1 {
+				if method != 0 {
+					return nil
+				}
+				text = inflateCapped(rest, limit-len(out))
+			}
+		}
+		if text == nil || len(out)+len(text) > limit {
+			return nil
+		}
+		out = append(out, text...)
+		found = true
+	}
+	if !found {
+		return nil
+	}
+	return out
+}
+
+// inflateCapped inflates zlib data up to max bytes; nil on error or beyond.
+func inflateCapped(p []byte, max int) []byte {
+	if max <= 0 {
+		return nil
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(p))
+	if err != nil {
+		return nil
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(io.LimitReader(zr, int64(max)+1))
+	if err != nil || len(out) > max {
+		return nil
+	}
+	return out
 }
 
 // readAllCapped inflates up to segmentBufferLimit; nil on error or beyond.

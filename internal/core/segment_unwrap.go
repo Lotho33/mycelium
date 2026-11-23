@@ -15,12 +15,18 @@ import (
 //	           png_pixels  in the samples of an 8-bit RGB/RGBA PNG (alpha
 //	                       dropped), read row by row from the first pixel
 //	           webp_chunk  in the data of the WebP chunk named Chunk
-//	chunk    webp_chunk only: the chunk's FourCC (e.g. "EXIF")
+//	           png_text    in the text of a PNG's tEXt/zTXt/iTXt chunks
+//	                       whose keyword starts with Chunk (all when
+//	                       empty), joined in file order; compressed text
+//	                       is inflated first
+//	chunk    webp_chunk: the chunk's FourCC (e.g. "EXIF"); png_text: the
+//	         keyword prefix (e.g. "payload-")
 //	magic    bytes right before the payload; required for body, which is
 //	         searched for it, and must start the carrier otherwise
 //	length   "" (payload runs to the end) | u32be | u32le — a length field
 //	         right after Magic
-//	codec    "" (raw) | gzip | zlib
+//	codec    "" (raw) | gzip | zlib | base64 (standard alphabet, padding
+//	         and line breaks optional)
 //
 // Whatever a rule extracts must be MPEG-TS or fMP4, or it is ignored.
 type SegmentUnwrap struct {
@@ -35,10 +41,13 @@ const (
 	UnwrapCarrierBody      = "body"
 	UnwrapCarrierPNGPixels = "png_pixels"
 	UnwrapCarrierWebPChunk = "webp_chunk"
+	UnwrapCarrierPNGText   = "png_text"
 
 	// MaxSegmentUnwrapRules bounds the rules tried on one segment.
 	MaxSegmentUnwrapRules = 8
 	maxUnwrapMagic        = 64
+	// maxPNGKeyword is the PNG limit on a text chunk's keyword.
+	maxPNGKeyword = 79
 )
 
 // Validate reports why a rule can't be used (nil = valid).
@@ -53,8 +62,12 @@ func (u SegmentUnwrap) Validate() error {
 		if len(u.Chunk) != 4 {
 			return fmt.Errorf("carrier webp_chunk richiede chunk di 4 caratteri, non %q", u.Chunk)
 		}
+	case UnwrapCarrierPNGText:
+		if len(u.Chunk) > maxPNGKeyword {
+			return fmt.Errorf("carrier png_text: chunk (prefisso della keyword) oltre %d byte", maxPNGKeyword)
+		}
 	default:
-		return fmt.Errorf("carrier %q sconosciuto (body | png_pixels | webp_chunk)", u.Carrier)
+		return fmt.Errorf("carrier %q sconosciuto (body | png_pixels | webp_chunk | png_text)", u.Carrier)
 	}
 	if len(u.Magic) > maxUnwrapMagic {
 		return fmt.Errorf("magic oltre %d byte", maxUnwrapMagic)
@@ -65,9 +78,9 @@ func (u SegmentUnwrap) Validate() error {
 		return fmt.Errorf("length %q sconosciuto (u32be | u32le)", u.Length)
 	}
 	switch strings.ToLower(u.Codec) {
-	case "", "gzip", "zlib":
+	case "", "gzip", "zlib", "base64":
 	default:
-		return fmt.Errorf("codec %q sconosciuto (gzip | zlib)", u.Codec)
+		return fmt.Errorf("codec %q sconosciuto (gzip | zlib | base64)", u.Codec)
 	}
 	return nil
 }
