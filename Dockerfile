@@ -62,8 +62,16 @@ RUN mkdir -p /ffmpeg/licenses \
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# libwebp: the image proxy's WebP encoder (gen2brain/webp) loads the system
+# library when it finds it (purego, no cgo) and otherwise falls back to a
+# WASM build translated to Go, ~4-5x slower (328 -> 71 ms for a 1280x720
+# frame on x86; on the ARM boxes it is the bulk of a cold home's CPU). It
+# looks for the unversioned names, which only the -dev packages ship.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata wget \
+    ca-certificates tzdata wget libwebp7 libwebpdemux2 \
+    && libdir="$(dirname "$(ls /usr/lib/*-linux-gnu/libwebp.so.7)")" \
+    && ln -s libwebp.so.7 "$libdir/libwebp.so" \
+    && ln -s libwebpdemux.so.2 "$libdir/libwebpdemux.so" \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

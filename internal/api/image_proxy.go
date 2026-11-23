@@ -90,6 +90,11 @@ var imgClient = &http.Client{
 // init registers a WebP decoder (the standard library has none), so WebP
 // sources go through the normal re-encode/cache path.
 func init() {
+	if err := webp.Dynamic(); err != nil {
+		log.Printf("[img] WebP: libwebp di sistema non disponibile, uso la versione WASM (più lenta): %v", err)
+	} else {
+		log.Printf("[img] WebP: libwebp di sistema")
+	}
 	image.RegisterFormat("webp", "RIFF????WEBP",
 		func(r io.Reader) (image.Image, error) { return webp.Decode(r) },
 		func(r io.Reader) (image.Config, error) { return webp.DecodeConfig(r) },
