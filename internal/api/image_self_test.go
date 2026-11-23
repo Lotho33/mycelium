@@ -90,12 +90,12 @@ func TestImageProxy_SelfURLTakesOneSemaphoreSlot(t *testing.T) {
 	badges := badgeServer(t)
 	self, selfHits := selfHost(t)
 
-	// 2 of 3 slots taken: the nested request must still get through.
-	for i := 0; i < imgMaxConversions-1; i++ {
+	// All slots but one taken: the nested request must still get through.
+	for i := 0; i < cap(imgConvSem)-1; i++ {
 		imgConvSem <- struct{}{}
 	}
 	defer func() {
-		for i := 0; i < imgMaxConversions-1; i++ {
+		for i := 0; i < cap(imgConvSem)-1; i++ {
 			<-imgConvSem
 		}
 	}()

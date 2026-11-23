@@ -684,7 +684,8 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	core.SafeGo("lua/watch-hot-reload:"+mf.ID, func() { m.watchHotReload(p) })
 	core.SafeGo("lua/run-tasks:"+mf.ID, func() { m.runTasks(p) })
 	// Populate auto_hide counts right away from whatever is cached.
-	go m.warmupCatalogCounts(p)
+	forgetWarmup(mf.ID)
+	scheduleWarmup(mf.ID, func() { m.warmupCatalogCounts(p) })
 	log.Printf("[lua] plugin %q loaded (v%s)", mf.ID, mf.Version)
 	return nil
 }
@@ -762,8 +763,17 @@ func cronInterval(spec string) time.Duration {
 // runTasks schedules the manifest's cron tasks.
 // bgTaskSem caps concurrent background tasks process-wide, so tasks that are
 // all due at once (e.g. at boot) don't run every heavy catalog sync in
-// parallel. Capacity 2 lets a light task run beside one long sync.
-var bgTaskSem = make(chan struct{}, 2)
+// parallel. Capacity 2 lets a light task run beside one long sync; 1 on a
+// low-end machine (core.LowEnd), so the background never takes two of its
+// slow cores from the clients.
+var bgTaskSem = make(chan struct{}, bgTaskSlots())
+
+func bgTaskSlots() int {
+	if core.LowEnd() {
+		return 1
+	}
+	return 2
+}
 
 // TryAcquireBgTaskSem takes a bgTaskSem slot without blocking (the
 // dashboard's manual run answers busy/started at once). On true the caller
@@ -858,8 +868,9 @@ func (m *LuaPluginManager) runTaskNow(p *LuaPlugin, t LuaManifestTask) {
 		log.Printf("[lua] task %s/%s: OK", p.Manifest.ID, t.Function)
 		MarkTaskRan(p.Manifest.ID, t.Function)
 	}
-	// After any task, refresh auto_hide_when_empty catalog counts.
-	go m.warmupCatalogCounts(p)
+	// After any task, refresh auto_hide_when_empty catalog counts (at most
+	// once per warmupMinGap, see warmup_debounce.go).
+	scheduleWarmup(p.Manifest.ID, func() { m.warmupCatalogCounts(p) })
 }
 
 // RunDueTasksNow runs pluginID's due cron tasks right away — called when a
@@ -1628,6 +1639,7 @@ func (m *LuaPluginManager) UnloadPlugin(pluginID string) {
 		delete(m.plugins, pluginID)
 	}
 	m.mu.Unlock()
+	forgetWarmup(pluginID)
 	pluginIndexes.dropPlugin(pluginID)
 	pluginLimiters.dropPlugin(pluginID)
 }

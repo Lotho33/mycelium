@@ -2511,6 +2511,7 @@ async function memoryProfile(btn) {
             <span>${t('Plugin Lua')} <b>${fmtMem(d.lua_total_bytes)}</b></span>
             <span>${t('Indici condivisi')} <b>${fmtMem(d.index_bytes || 0)}</b></span>
             <span>${t('Goroutine')} <b>${d.goroutines}</b></span>
+            ${d.hw_profile ? html`<span title="${t('Su una macchina leggera mycelium fa meno lavoro in parallelo (conversioni di immagini, task)')}">${t('Macchina')} <b>${d.hw_profile === 'low' ? t('leggera') : t('normale')} · ${t('{n} CPU', { n: d.hw_cpus })}</b></span>` : ''}
             <span>${t('Misurato in')} <b>${d.took_ms} ms</b></span>
         </div>
         ${plugins.length ? plugins.map(p => {

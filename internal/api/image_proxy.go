@@ -58,7 +58,7 @@ const (
 )
 
 var (
-	imgConvSem = make(chan struct{}, imgMaxConversions)
+	imgConvSem = make(chan struct{}, imgConversions())
 	// imgInflight merges concurrent misses for the same cache file: one
 	// conversion, the others wait for it and serve its result.
 	imgInflightMu sync.Mutex
@@ -68,6 +68,16 @@ var (
 type imgFlight struct {
 	done chan struct{}
 	out  []byte
+}
+
+// imgConversions is how many conversions run at once: imgMaxConversions,
+// one on a low-end machine (core.LowEnd), where each conversion takes a
+// whole slow core and three would starve the requests being served.
+func imgConversions() int {
+	if core.LowEnd() {
+		return 1
+	}
+	return imgMaxConversions
 }
 
 // imgDebug enables the per-request cache hit/store lines.

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"mycelium/internal/core"
 	"mycelium/internal/engine"
 	"mycelium/internal/managers"
 )
@@ -37,6 +38,7 @@ func getLuaPluginMemory(w http.ResponseWriter, r *http.Request) {
 		luaTotal += p.Bytes
 		indexTotal += p.IndexBytes
 	}
+	hw := core.ThisMachine()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"rss_bytes":       managers.GetCoreStats().MemBytes,
@@ -48,5 +50,9 @@ func getLuaPluginMemory(w http.ResponseWriter, r *http.Request) {
 		"index_bytes":     indexTotal,
 		"plugins":         plugins,
 		"took_ms":         time.Since(start).Milliseconds(),
+		// core.ThisMachine: low-end machines run fewer things in parallel.
+		"hw_profile":  string(hw.Profile),
+		"hw_cpus":     hw.CPUs,
+		"hw_bench_ms": float64(hw.Bench.Microseconds()) / 1000,
 	})
 }
