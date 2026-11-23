@@ -197,9 +197,15 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A playlist already recovered once (a child, or the top-level one of a
-	// stream whose token expired): go straight to its new upstream.
+	// stream whose token expired): go straight to its new upstream. A
+	// top-level remap is keyed by the request's own headers too, so a fresh
+	// resolve of the same URL with other cookies/headers never inherits it.
 	origURL := realURL
-	if rm, ok := lookupPlaylistRemap(origURL); ok {
+	remapKey := origURL
+	if childIdx == "" {
+		remapKey = topRemapKey(origURL, cookiesRaw, xhdrRaw)
+	}
+	if rm, ok := lookupPlaylistRemap(remapKey); ok {
 		realURL, realOrigin = rm.url, rm.origin
 		originRaw = b64url(rm.origin)
 		cookiesRaw, xhdrRaw = rm.cookiesRaw, rm.xhdrRaw
@@ -266,8 +272,10 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	// in place too, under the player's unchanged URL. A live player keeps
 	// reloading the URL it was given, not where a redirect sent it, so a
 	// redirect meant a 403 and a new round trip on every reload.
+	triedInPlace := false
 	if fetchErr != nil && sidRaw != "" && childIdx == "" && q.Get("rr") == "" && r.Context().Err() == nil {
-		if rm, recovered, err := recoverTopPlaylist(plClient, sidRaw, sessionProfile(uidRaw), origURL, useVPN, egr); err != nil {
+		triedInPlace = true
+		if rm, recovered, err := recoverTopPlaylist(plClient, sidRaw, sessionProfile(uidRaw), remapKey, useVPN, egr); err != nil {
 			log.Printf("[proxy/playlist] recovery in place failed: %v", err)
 		} else {
 			log.Printf("[proxy/playlist] re-resolved in place → %s", logURL(rm.url))
@@ -297,7 +305,9 @@ func ProxyPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	if fetchErr != nil {
 		log.Printf("[proxy/playlist] fetch error: %v", fetchErr)
-		if sidRaw != "" && childIdx == "" && q.Get("rr") == "" {
+		// After a failed in-place recovery a redirect would only fetch the
+		// same re-resolved upstream again.
+		if sidRaw != "" && childIdx == "" && q.Get("rr") == "" && !triedInPlace {
 			if newURL, _ := proxyResolveForPlaylist(r, sidRaw, uidRaw, q.Get("xsub")); newURL != "" {
 				log.Printf("[proxy/playlist] re-resolve → %s", logURL(newURL))
 				http.Redirect(w, r, newURL, http.StatusFound)

@@ -348,10 +348,17 @@ func remapFromHeaders(u string, headers map[string]string) playlistRemap {
 	return rm
 }
 
+// topRemapKey is the remap key of a top-level playlist: its URL plus the
+// headers the request carries, so only reloads of that exact link follow a
+// recovery (a fresh resolve of the same URL with new credentials doesn't).
+func topRemapKey(origURL, cookiesRaw, xhdrRaw string) string {
+	return "top\x00" + origURL + "\x00" + cookiesRaw + "\x00" + xhdrRaw
+}
+
 // recoverTopPlaylist re-resolves the stream behind sidRaw and fetches the new
-// top-level playlist (master or media) in place of origURL, remembered for
-// later reloads.
-func recoverTopPlaylist(client *http.Client, sidRaw, profileID, origURL string, useVPN bool, egr string) (playlistRemap, []byte, error) {
+// top-level playlist (master or media) in place of the one remembered under
+// remapKey (topRemapKey), for later reloads.
+func recoverTopPlaylist(client *http.Client, sidRaw, profileID, remapKey string, useVPN bool, egr string) (playlistRemap, []byte, error) {
 	newURL, headers, err := reResolveShared(sidRaw, profileID)
 	if err != nil {
 		return playlistRemap{}, nil, fmt.Errorf("re-resolve: %w", err)
@@ -361,7 +368,7 @@ func recoverTopPlaylist(client *http.Client, sidRaw, profileID, origURL string, 
 	if err != nil {
 		return playlistRemap{}, nil, fmt.Errorf("fetch nuova playlist: %w", err)
 	}
-	storePlaylistRemap(origURL, rm)
+	storePlaylistRemap(remapKey, rm)
 	return rm, content, nil
 }
 

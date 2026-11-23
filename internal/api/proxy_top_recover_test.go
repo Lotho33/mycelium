@@ -82,3 +82,87 @@ func TestProxyPlaylist_TopLevelFailureWithoutSid(t *testing.T) {
 		t.Fatalf("status %d location %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
+
+// A plugin whose playlist URL never changes (auth in a cookie): after one
+// recovery, a fresh Play of the same URL with its own, newer cookie must go
+// to the upstream with that cookie, not follow the earlier recovery.
+func TestProxyPlaylist_TopRemapDoesNotCaptureFreshResolve(t *testing.T) {
+	core.SetProxySignKey([]byte("recover-test"))
+	defer core.SetProxySignKey(nil)
+	useLoopbackPlaylistClient(t)
+
+	var seen []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := r.Header.Get("Cookie")
+		seen = append(seen, c)
+		if c == "tok=1" {
+			http.Error(w, "expired", http.StatusForbidden)
+			return
+		}
+		io.WriteString(w, "#EXTM3U\n#EXTINF:4,\nseg.ts\n")
+	}))
+	defer up.Close()
+
+	sid := b64url("plug\x00fixed-" + t.Name())
+	reResolveMu.Lock()
+	reResolveCache[sid+"\x00"] = &reResolveEntry{at: time.Now(), url: up.URL + "/live.m3u8", headers: map[string]string{"Cookie": "tok=2"}}
+	reResolveMu.Unlock()
+	defer func() { reResolveMu.Lock(); delete(reResolveCache, sid+"\x00"); reResolveMu.Unlock() }()
+
+	with := func(cookie string) string {
+		return core.AppendProxySig("http://box.local/proxy/playlist.m3u8?data=" + b64url(up.URL+"/live.m3u8") +
+			"&origin=&cookies=" + b64url(cookie) + "&vpn=0&sid=" + sid)
+	}
+	// The first Play's cookie expires: recovered with tok=2.
+	rec := httptest.NewRecorder()
+	ProxyPlaylist(rec, httptest.NewRequest(http.MethodGet, with("tok=1"), nil))
+	if rec.Code != 200 {
+		t.Fatalf("recovery: status %d", rec.Code)
+	}
+	// A fresh Play of the same URL with tok=3: straight to the upstream with tok=3.
+	seen = nil
+	rec = httptest.NewRecorder()
+	ProxyPlaylist(rec, httptest.NewRequest(http.MethodGet, with("tok=3"), nil))
+	if rec.Code != 200 || len(seen) != 1 || seen[0] != "tok=3" {
+		t.Fatalf("fresh Play: status %d, upstream saw cookies %v (want only tok=3)", rec.Code, seen)
+	}
+}
+
+// A playlist that is really broken (gone upstream): one recovery attempt,
+// then 502 — no redirect fetching the same upstream once more.
+func TestProxyPlaylist_TopLevelRealFailureIsOneAttempt(t *testing.T) {
+	core.SetProxySignKey([]byte("recover-test"))
+	defer core.SetProxySignKey(nil)
+	useLoopbackPlaylistClient(t)
+
+	var hits int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		http.Error(w, "gone", http.StatusNotFound)
+	}))
+	defer up.Close()
+
+	sid := b64url("plug\x00gone-" + t.Name())
+	reResolveMu.Lock()
+	reResolveCache[sid+"\x00"] = &reResolveEntry{at: time.Now(), url: up.URL + "/gone.m3u8?v=2"}
+	reResolveMu.Unlock()
+	defer func() { reResolveMu.Lock(); delete(reResolveCache, sid+"\x00"); reResolveMu.Unlock() }()
+
+	// Attempts one fetch makes on its own (its retries), to count fetches.
+	plClient, err := upstreamPlaylistClient(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fetchUpstreamPlaylist(plClient, up.URL+"/probe.m3u8", "", "", "", false, "")
+	perFetch := atomic.SwapInt32(&hits, 0)
+
+	rec := httptest.NewRecorder()
+	ProxyPlaylist(rec, httptest.NewRequest(http.MethodGet, signedPlaylistURL(up.URL+"/gone.m3u8?v=1", "&sid="+sid), nil))
+	if rec.Code != http.StatusBadGateway || rec.Header().Get("Location") != "" {
+		t.Fatalf("status %d location %q, want 502 without redirect", rec.Code, rec.Header().Get("Location"))
+	}
+	// The original fetch and the re-resolved one: no third via a redirect.
+	if n := atomic.LoadInt32(&hits); n != 2*perFetch {
+		t.Fatalf("upstream hit %d times, want %d (2 fetches × %d attempts)", n, 2*perFetch, perFetch)
+	}
+}
