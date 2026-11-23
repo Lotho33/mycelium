@@ -280,7 +280,7 @@ form.clean [data-form-reset] { display: none; }
 /* Download offline: one card per series (episodes inside) or per movie. */
 .dl-group + .dl-group { border-top: 1px solid var(--border); }
 .dl-group.list-row, .dl-series > summary.list-row { padding: 12px 0; border-top: 0; }
-.dl-poster { width: 42px; height: 63px; border-radius: 6px; object-fit: cover; background: var(--surface-2); flex-shrink: 0; }
+.dl-poster { width: 96px; height: 54px; border-radius: 6px; object-fit: cover; background: var(--surface-2); flex-shrink: 0; }
 .dl-series > summary { cursor: pointer; list-style: none; }
 .dl-series > summary::-webkit-details-marker { display: none; }
 .dl-chevron { color: var(--faint); transition: transform .15s; display: flex; }

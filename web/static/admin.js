@@ -1423,7 +1423,9 @@ function renderDownloads() {
     // title asked by two profiles shows once, with both owners.
     const groups = new Map();
     for (const x of rows) {
-        const key = x.parent_id ? `s\u0000${x.plugin_id}\u0000${x.parent_id}` : `m\u0000${x.plugin_id}\u0000${x.media_id || x.download_id}`;
+        // Printable key: it round-trips through data-dl-group, and the HTML parser
+        // turns a NUL in an attribute into U+FFFD (the open card never matched).
+        const key = [x.parent_id ? 's' : 'm', x.plugin_id, x.parent_id || x.media_id || x.download_id].map(encodeURIComponent).join('/');
         if (!groups.has(key)) groups.set(key, { key, series: !!x.parent_id, title: x.series_title || x.title || x.download_id, poster: x.poster, plugin: x.plugin_id, items: [] });
         groups.get(key).items.push(x);
     }
