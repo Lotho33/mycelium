@@ -366,6 +366,8 @@ func parseLuaResolved(b json.RawMessage) (*ResolvedStream, error) {
 			DataBase64 string `json:"data_base64"`
 			Default    bool   `json:"default"`
 		} `json:"subtitles"`
+		// Proxy: through mycelium's proxy even for a direct_stream plugin.
+		Proxy bool `json:"proxy"`
 	}
 	if err := json.Unmarshal(b, &result); err != nil {
 		return nil, fmt.Errorf("invalid lua result: %w", err)
@@ -378,6 +380,7 @@ func parseLuaResolved(b json.RawMessage) (*ResolvedStream, error) {
 		Headers: map[string]string(result.Headers),
 		IsLive:  result.IsLive,
 		Extra:   map[string]string(result.Extra),
+		Proxy:   result.Proxy,
 	}
 	for _, s := range result.Subtitles {
 		u := s.URL

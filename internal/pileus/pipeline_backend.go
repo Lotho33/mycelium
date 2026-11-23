@@ -51,8 +51,19 @@ type ResolvedStream struct {
 	IsLive  bool
 	Extra   map[string]string
 	// Subtitles are external tracks the HLS proxy adds to the master playlist
-	// (ignored for non-HLS and direct_stream plugins).
+	// (ignored for non-HLS streams and, unless Proxy is set, direct_stream
+	// plugins).
 	Subtitles []core.ExtSubtitle
+	// Proxy sends this one stream through mycelium's proxy even though its
+	// plugin is direct_stream: e.g. a transcode that needs subtitles injected,
+	// next to an original file that must stay direct.
+	Proxy bool
+}
+
+// skipProxy reports whether rs goes to the player as-is (see
+// LuaManifest.DirectStream and ResolvedStream.Proxy).
+func skipProxy(pluginID string, rs *ResolvedStream) bool {
+	return !rs.Proxy && engine.LuaPlugins.ShouldSkipProxy(pluginID)
 }
 
 // lookupBackend returns the PipelineProvider for pluginID. All plugins are Lua.

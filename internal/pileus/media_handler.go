@@ -408,8 +408,9 @@ func (h *MediaHandler) ResolveStream(req *gen.ResolveRequest, stream gen.MediaPi
 	}
 
 	// direct_stream plugins: the resolved URL goes to the player as-is (keeps
-	// the origin's native Range support, no proxy time limits).
-	if engine.LuaPlugins.ShouldSkipProxy(req.PluginId) {
+	// the origin's native Range support, no proxy time limits) — unless the
+	// resolve asked for the proxy (rs.Proxy).
+	if skipProxy(req.PluginId, rs) {
 		resp := &gen.ResolveResponse{ResolvedUrl: rawURL, IsLive: isLive}
 		if headers != nil {
 			resp.HttpHeaders = headers

@@ -8,7 +8,6 @@ import (
 	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
 
 	"mycelium/internal/downloads"
-	"mycelium/internal/engine"
 	"mycelium/internal/managers"
 
 	"google.golang.org/grpc/codes"
@@ -43,7 +42,7 @@ func DownloadResolver(ctx context.Context, pluginID, streamID, owner string) (do
 	lower := strings.ToLower(rawURL)
 	isHLS := strings.Contains(lower, ".m3u8") || strings.Contains(lower, "/playlist/")
 	src := downloads.Source{IsHLS: isHLS, IsLive: isLive, Extra: extra}
-	if engine.LuaPlugins.ShouldSkipProxy(pluginID) {
+	if skipProxy(pluginID, rs) {
 		src.URL, src.Headers, src.Direct = rawURL, headers, true
 		return src, nil
 	}
