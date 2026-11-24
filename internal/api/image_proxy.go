@@ -382,9 +382,15 @@ func imgFetchEncode(r *http.Request, upstream string) (out []byte, srcLen int, s
 	rawContentType = resp.Header.Get("Content-Type")
 
 	// Check the declared dimensions first (see imgMaxSourcePixels).
-	if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr == nil {
+	if cfg, cfmt, cerr := image.DecodeConfig(bytes.NewReader(raw)); cerr == nil {
 		if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > imgMaxSourcePixels {
 			return nil, srcLen, "", nil, "", fmt.Errorf("source too large: %dx%d", cfg.Width, cfg.Height)
+		}
+		// Already WebP and no bigger than we'd scale to: nothing to gain from
+		// decoding and encoding it again (sites now ship ready-made WebP
+		// variants), only CPU — on a TV box, a lot of it.
+		if cfmt == "webp" && cfg.Width <= imgMaxDimension && cfg.Height <= imgMaxDimension {
+			return raw, srcLen, "webp", nil, "", nil
 		}
 	}
 
