@@ -268,6 +268,13 @@ to its own origin.
 - `get_streams`: an explicit list — even empty — is returned as-is (empty =
   "nothing to play"); only `nil` means a single implicit source
   `{id = media_id}`.
+- `StreamSource.path` (optional): the source's place in a tree of choices,
+  outermost first and ending with its own name (`["Channel A", "Server 2"]`).
+  A client shows one level at a time: a group is the sources sharing that
+  prefix, and choosing a group plays its first source. The list order is the
+  plugin's preference: when a source fails, try the next one in the list —
+  the rest of the same group first. Without `path`, a flat list of `label`s
+  (which stays a full name for clients that ignore `path`).
 - `get_catalog` / `browse`: returning `{items = {...}, has_more = bool}`
   makes the server pass the plugin's `has_more` through; a plain array falls
   back to `has_more = #items > 0`.

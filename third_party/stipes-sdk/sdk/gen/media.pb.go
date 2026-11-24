@@ -687,16 +687,14 @@ type SearchFilter struct {
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Label string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
 	// type:
-	//
-	//	"select"      one option id, sent as filters[id] = "<optId>"
-	//	"multiselect" zero+ option ids, sent comma-joined: filters[id] = "a,b,c"
-	//	"range"       numeric interval; `options` carries {id:"min"|"max"|"step"}
-	//	              bounds (step optional, default 1). Sent as
-	//	              filters[id] = "<lo>..<hi>"; either side may be empty
-	//	              ("2000..", "..2015"). Absent key = no constraint.
-	//	"bool"        filters[id] = "true" | "false"
-	//	"number"      one integer, sent as filters[id] = "<n>"
-	//
+	//   "select"      one option id, sent as filters[id] = "<optId>"
+	//   "multiselect" zero+ option ids, sent comma-joined: filters[id] = "a,b,c"
+	//   "range"       numeric interval; `options` carries {id:"min"|"max"|"step"}
+	//                 bounds (step optional, default 1). Sent as
+	//                 filters[id] = "<lo>..<hi>"; either side may be empty
+	//                 ("2000..", "..2015"). Absent key = no constraint.
+	//   "bool"        filters[id] = "true" | "false"
+	//   "number"      one integer, sent as filters[id] = "<n>"
 	// (filters stays map<string,string> on the wire — see SearchRequest.)
 	Type          string          `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
 	Options       []*FilterOption `protobuf:"bytes,4,rep,name=options,proto3" json:"options,omitempty"`
@@ -2219,11 +2217,18 @@ func (x *BrowseResponse) GetEpisodes() []*EpisodeInfo {
 }
 
 type StreamSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
-	Quality       string                 `protobuf:"bytes,3,opt,name=quality,proto3" json:"quality,omitempty"`
-	IsLive        bool                   `protobuf:"varint,4,opt,name=is_live,json=isLive,proto3" json:"is_live,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Label   string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"` // full name, for a flat list ("Channel A · Server 2")
+	Quality string                 `protobuf:"bytes,3,opt,name=quality,proto3" json:"quality,omitempty"`
+	IsLive  bool                   `protobuf:"varint,4,opt,name=is_live,json=isLive,proto3" json:"is_live,omitempty"`
+	// Where the source sits in a tree of choices, outermost first, ending with
+	// its own name: ["Channel A", "Server 2"]. Empty = a flat list. Sources
+	// sharing a prefix are siblings; the list order is the plugin's order of
+	// preference, so a client falling back after a failure tries the next
+	// source, i.e. the rest of the same group before the next one. Opaque to
+	// the server: any depth, any meaning.
+	Path          []string `protobuf:"bytes,5,rep,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2284,6 +2289,13 @@ func (x *StreamSource) GetIsLive() bool {
 		return x.IsLive
 	}
 	return false
+}
+
+func (x *StreamSource) GetPath() []string {
+	if x != nil {
+		return x.Path
+	}
+	return nil
 }
 
 type StreamsRequest struct {
@@ -3619,21 +3631,17 @@ type CatalogDef struct {
 	Type            string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
 	CacheTtlSeconds int32                  `protobuf:"varint,4,opt,name=cache_ttl_seconds,json=cacheTtlSeconds,proto3" json:"cache_ttl_seconds,omitempty"`
 	// section_kind: row layout, orthogonal to content type.
-	//
-	//	""|"carousel" — horizontal scroll (today's default, always safe).
-	//	"grid"        — tile grid. Reserved: no client renders it yet as of
-	//	                this writing: treat as unset until a client opts in.
-	//
+	//   ""|"carousel" — horizontal scroll (today's default, always safe).
+	//   "grid"        — tile grid. Reserved: no client renders it yet as of
+	//                   this writing: treat as unset until a client opts in.
 	// Forward-compat contract: a client that doesn't recognize a value here
 	// must skip/ignore it gracefully (treat as unset), never crash or render
 	// garbage — this field will grow new values over time without a proto bump.
 	SectionKind string `protobuf:"bytes,5,opt,name=section_kind,json=sectionKind,proto3" json:"section_kind,omitempty"`
 	// style_hint: presentation weight within section_kind.
-	//
-	//	""         — default card size (today's behavior).
-	//	"featured" — larger cards, visual emphasis.
-	//	"compact"  — smaller/denser cards.
-	//
+	//   ""         — default card size (today's behavior).
+	//   "featured" — larger cards, visual emphasis.
+	//   "compact"  — smaller/denser cards.
 	// Same forward-compat contract as section_kind.
 	StyleHint string `protobuf:"bytes,6,opt,name=style_hint,json=styleHint,proto3" json:"style_hint,omitempty"`
 	// True when this catalog backs a task the plugin author marked as
@@ -3650,10 +3658,8 @@ type CatalogDef struct {
 	// (`CatalogItem.media_type` stays whatever it already was — "video", not
 	// "live" — and continues to drive live-vs-VOD *player* behavior on its
 	// own, unaffected by this field).
-	//
-	//	""           — poster/vertical, 2:3 (today's default, unchanged).
-	//	"landscape"  — wide/horizontal, 16:9.
-	//
+	//   ""           — poster/vertical, 2:3 (today's default, unchanged).
+	//   "landscape"  — wide/horizontal, 16:9.
 	// Same forward-compat contract as section_kind: unrecognized values must
 	// be treated as unset, never crash or render garbage.
 	CardLayout string `protobuf:"bytes,8,opt,name=card_layout,json=cardLayout,proto3" json:"card_layout,omitempty"`
@@ -6015,12 +6021,13 @@ const file_media_proto_rawDesc = "" +
 	"\x0eBrowseResponse\x12+\n" +
 	"\x05items\x18\x01 \x03(\v2\x15.mycelium.CatalogItemR\x05items\x12\x19\n" +
 	"\bhas_more\x18\x02 \x01(\bR\ahasMore\x121\n" +
-	"\bepisodes\x18\x03 \x03(\v2\x15.mycelium.EpisodeInfoR\bepisodes\"g\n" +
+	"\bepisodes\x18\x03 \x03(\v2\x15.mycelium.EpisodeInfoR\bepisodes\"{\n" +
 	"\fStreamSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x18\n" +
 	"\aquality\x18\x03 \x01(\tR\aquality\x12\x17\n" +
-	"\ais_live\x18\x04 \x01(\bR\x06isLive\"H\n" +
+	"\ais_live\x18\x04 \x01(\bR\x06isLive\x12\x12\n" +
+	"\x04path\x18\x05 \x03(\tR\x04path\"H\n" +
 	"\x0eStreamsRequest\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\"C\n" +

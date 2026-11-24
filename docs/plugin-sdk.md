@@ -140,8 +140,24 @@ mycelium passes.
 | `get_search_filters` | —                                | array of filter defs (see [search-filters.md](search-filters.md)) |
 | `get_details`    | `media_id`                          | one item with full metadata |
 | `browse`         | `directory_id`, `page`              | array of items; use `is_dir = true` for folders |
-| `get_streams`    | `media_id`                          | array of stream sources: `{ id, label, quality, is_live }` |
+| `get_streams`    | `media_id`                          | array of stream sources: `{ id, label, quality, is_live, path }` (see below) |
 | `resolve_stream` | `stream_id`, `force_refresh` (bool), `warm` (bool) | `{ url, headers, is_live, extra }` |
+
+### Stream sources
+
+```lua
+{ id = "a:p2", label = "Channel A · Server 2", is_live = true,
+  path = { "Channel A", "Server 2" } }   -- optional
+```
+
+`label` is the full name, shown by clients that list sources flat. `path`
+(optional) nests them: outermost group first, ending with the source's own
+name; any depth, and sources may use different depths (one level for a
+channel page, two for an event with several channels). Return the sources
+in order of preference, each group's sources together: a client that falls
+back after a failure tries the next source in the list, so the rest of the
+same group comes first. Choosing a group plays its first source, so put the
+one that should start by default (e.g. an automatic choice) first.
 
 ### Item shape
 

@@ -292,11 +292,13 @@ func (p *luaPipelineProvider) GetStreams(ctx context.Context, mediaID string) ([
 		Label   string `json:"label"`
 		Quality string `json:"quality"`
 		IsLive  bool   `json:"is_live"`
+		// Lua serialises an empty table as {} or []: both decode to no path.
+		Path flexStrings `json:"path"`
 	}
 	toProto := func(ss []srcEntry) []*gen.StreamSource {
 		out := make([]*gen.StreamSource, 0, len(ss))
 		for _, s := range ss {
-			out = append(out, &gen.StreamSource{Id: s.ID, Label: s.Label, Quality: s.Quality, IsLive: s.IsLive})
+			out = append(out, &gen.StreamSource{Id: s.ID, Label: s.Label, Quality: s.Quality, IsLive: s.IsLive, Path: s.Path})
 		}
 		return out
 	}
@@ -783,4 +785,37 @@ func luaMetasFromJSON(b json.RawMessage) ([]luaMeta, bool, error) {
 // isNullJSON reports whether b represents a JSON null or is empty.
 func isNullJSON(b json.RawMessage) bool {
 	return len(b) == 0 || string(b) == "null"
+}
+
+// flexStrings is a list of strings that never fails the decode around it:
+// an empty Lua table ({}), a single string, numbers (turned into strings) and
+// junk entries (dropped) are all accepted.
+type flexStrings []string
+
+func (s *flexStrings) UnmarshalJSON(b []byte) error {
+	*s = nil
+	var one string
+	if json.Unmarshal(b, &one) == nil {
+		if one != "" {
+			*s = flexStrings{one}
+		}
+		return nil
+	}
+	var raw []json.RawMessage
+	if json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	for _, v := range raw {
+		var str string
+		if json.Unmarshal(v, &str) == nil {
+			if str != "" {
+				*s = append(*s, str)
+			}
+			continue
+		}
+		if t := strings.TrimSpace(string(v)); t != "" && (t[0] == '-' || (t[0] >= '0' && t[0] <= '9')) {
+			*s = append(*s, t)
+		}
+	}
+	return nil
 }
