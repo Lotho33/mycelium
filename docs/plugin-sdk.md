@@ -96,7 +96,8 @@ exposes:
       cache_ttl_seconds: 900
       auto_hide_when_empty: true       # hide the row when page 1 came back empty
       section_kind: carousel           # carousel | grid  (client hint)
-      style_hint: featured             # free-form hint within section_kind
+      style_hint: featured             # featured | ranked (a Top 10 row: big
+                                       # numbers, at most 10 cards); free-form
       card_layout: landscape           # "" (poster 2:3) | landscape (16:9)
       disable_hero_background: true     # never use this row's art in the hero
 
@@ -171,9 +172,27 @@ one that should start by default (e.g. an automatic choice) first.
   plot        = "…",
   is_dir      = false,           -- true → a browsable folder
   -- episodes/series: parent_id, season_number, episode_number, …
+  rank        = 1,               -- optional: place in a "ranked" row
+  badge       = "new",           -- optional: "new" | "new_episode"
   extra       = { fanart_url = "https://…" },
 }
 ```
+
+`rank` (optional) is the number a `style_hint: ranked` row shows; without it
+the client numbers the cards by their place. Set it when the plugin drops
+items from a row (e.g. those already shown higher up), which shifts places.
+`badge` (optional) labels the card: `"new"` (added recently), `"new_episode"`
+(a new episode came out recently). Clients ignore values they don't know.
+
+On a series, `get_details` may add the latest episode out:
+
+```lua
+latest_episode = { season_number = 2, episode_number = 8, air_date = "2026-11-20" }
+```
+
+The server compares it with where each profile following the series got to,
+to flag a new episode on their lists. Leave it out when unknown; never fetch
+anything extra just for it.
 
 `extra` is opaque to mycelium and reaches the client as is, on catalog items
 and on episode rows (`browse` results with `media_type = "episode"`). On an

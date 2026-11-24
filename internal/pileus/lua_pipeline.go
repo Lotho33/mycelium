@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -475,6 +476,11 @@ type luaMeta struct {
 	IsExternal    bool     `json:"is_external"`
 	LogoURL       string   `json:"logo_url"`
 	BannerURL     string   `json:"banner_url"`
+	// cards: place in a ranked row, label ("new", "new_episode")
+	Rank  flexInt `json:"rank"`
+	Badge string  `json:"badge"`
+	// series details: the latest episode out
+	LatestEpisode latestEpisode `json:"latest_episode"`
 
 	// episode-specific
 	ThumbnailURL string  `json:"thumbnail_url"`
@@ -581,6 +587,7 @@ func populateDetails(resp *gen.DetailsResponse, lm luaMeta) {
 			FanartUrl:      lm.FanartURL,
 			LogoUrl:        lm.LogoURL,
 		}
+		sd.LatestEpisode = lm.LatestEpisode.proto()
 		for _, s := range lm.Seasons {
 			dirID := s.DirectoryID
 			if dirID == "" {
@@ -704,6 +711,8 @@ func luaMetaToCatalogItem(lm luaMeta) *gen.CatalogItem {
 		Extra:           extra,
 		LogoUrl:         lm.LogoURL,
 		BannerUrl:       lm.BannerURL,
+		Rank:            int32(min(max(int(lm.Rank), 0), 999)),
+		Badge:           cardBadge(lm.Badge),
 	}
 }
 
@@ -818,4 +827,55 @@ func (s *flexStrings) UnmarshalJSON(b []byte) error {
 		}
 	}
 	return nil
+}
+
+// flexInt is an integer that never fails the decode around it: a Lua number
+// may arrive as 3, 3.0 or "3"; anything else is 0.
+type flexInt int64
+
+func (n *flexInt) UnmarshalJSON(b []byte) error {
+	*n = 0
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if f, err := strconv.ParseFloat(s, 64); err == nil && f >= -1e15 && f <= 1e15 {
+		*n = flexInt(f)
+	}
+	return nil
+}
+
+// cardBadge: a short lowercase token ("new", "new_episode"); anything else
+// longer than a label is dropped. Values are the clients' business.
+func cardBadge(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if len(s) > 32 {
+		return ""
+	}
+	return s
+}
+
+// latestEpisode is a series' latest episode out; an empty Lua table ([]) or
+// any other shape decodes to "unknown".
+type latestEpisode struct {
+	Season  int32
+	Episode int32
+	AirDate string
+}
+
+func (l *latestEpisode) UnmarshalJSON(b []byte) error {
+	*l = latestEpisode{}
+	var raw struct {
+		Season  flexInt `json:"season_number"`
+		Episode flexInt `json:"episode_number"`
+		AirDate string  `json:"air_date"`
+	}
+	if json.Unmarshal(b, &raw) == nil {
+		l.Season, l.Episode, l.AirDate = int32(raw.Season), int32(raw.Episode), raw.AirDate
+	}
+	return nil
+}
+
+func (l latestEpisode) proto() *gen.LatestEpisode {
+	if l.Episode <= 0 {
+		return nil
+	}
+	return &gen.LatestEpisode{SeasonNumber: max(l.Season, 0), EpisodeNumber: l.Episode, AirDate: l.AirDate}
 }
