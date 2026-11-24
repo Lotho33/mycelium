@@ -3301,8 +3301,11 @@ type ContinueWatchingItem struct {
 	Year              int32                  `protobuf:"varint,13,opt,name=year,proto3" json:"year,omitempty"`
 	SeasonNumber      int32                  `protobuf:"varint,14,opt,name=season_number,json=seasonNumber,proto3" json:"season_number,omitempty"`
 	EpisodeNumber     int32                  `protobuf:"varint,15,opt,name=episode_number,json=episodeNumber,proto3" json:"episode_number,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// "new_episode" when the series got an episode after this profile last
+	// watched it (see GetNewEpisodes); empty otherwise.
+	Badge         string `protobuf:"bytes,16,opt,name=badge,proto3" json:"badge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ContinueWatchingItem) Reset() {
@@ -3438,6 +3441,13 @@ func (x *ContinueWatchingItem) GetEpisodeNumber() int32 {
 		return x.EpisodeNumber
 	}
 	return 0
+}
+
+func (x *ContinueWatchingItem) GetBadge() string {
+	if x != nil {
+		return x.Badge
+	}
+	return ""
 }
 
 type ContinueWatchingRequest struct {
@@ -5579,8 +5589,11 @@ type MyListItem struct {
 	AddedAt   int64                  `protobuf:"varint,10,opt,name=added_at,json=addedAt,proto3" json:"added_at,omitempty"` // unix seconds, set by the server
 	// Same keys as CatalogItem.extra (plot, genres, cover_url, anilist_id…):
 	// what a card needs when it is shown again, with no call to the plugin.
-	Extra         map[string]string `protobuf:"bytes,11,rep,name=extra,proto3" json:"extra,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	LogoMeta      *LogoMeta         `protobuf:"bytes,12,opt,name=logo_meta,json=logoMeta,proto3" json:"logo_meta,omitempty"` // set by the core
+	Extra    map[string]string `protobuf:"bytes,11,rep,name=extra,proto3" json:"extra,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	LogoMeta *LogoMeta         `protobuf:"bytes,12,opt,name=logo_meta,json=logoMeta,proto3" json:"logo_meta,omitempty"` // set by the core
+	// "new_episode" for a series with an episode out since it was added or
+	// last watched (see GetNewEpisodes); empty otherwise.
+	Badge         string `protobuf:"bytes,13,opt,name=badge,proto3" json:"badge,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5697,6 +5710,13 @@ func (x *MyListItem) GetLogoMeta() *LogoMeta {
 		return x.LogoMeta
 	}
 	return nil
+}
+
+func (x *MyListItem) GetBadge() string {
+	if x != nil {
+		return x.Badge
+	}
+	return ""
 }
 
 // Empty plugin_id = every plugin, most recently added first.
@@ -5884,6 +5904,192 @@ func (x *SetMyListItemResponse) GetOk() bool {
 		return x.Ok
 	}
 	return false
+}
+
+// New episodes of the series this profile follows (in its list, or watched):
+// the server checks each followed series once a day (the plugin's
+// SeriesDetails.latest_episode) and lists the ones with an episode out after
+// the profile last watched them — or added them, if never watched — and
+// past where it got to. An entry stays NEW_EPISODES_DAYS (14) days, or until
+// the profile watches that episode.
+type NewEpisodesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NewEpisodesRequest) Reset() {
+	*x = NewEpisodesRequest{}
+	mi := &file_media_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NewEpisodesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NewEpisodesRequest) ProtoMessage() {}
+
+func (x *NewEpisodesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_media_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NewEpisodesRequest.ProtoReflect.Descriptor instead.
+func (*NewEpisodesRequest) Descriptor() ([]byte, []int) {
+	return file_media_proto_rawDescGZIP(), []int{71}
+}
+
+type NewEpisode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PluginId      string                 `protobuf:"bytes,1,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
+	SeriesId      string                 `protobuf:"bytes,2,opt,name=series_id,json=seriesId,proto3" json:"series_id,omitempty"` // media id of the series (GetDetails)
+	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`                       // series title, as stored with the list/history
+	PosterUrl     string                 `protobuf:"bytes,4,opt,name=poster_url,json=posterUrl,proto3" json:"poster_url,omitempty"`
+	SeasonNumber  int32                  `protobuf:"varint,5,opt,name=season_number,json=seasonNumber,proto3" json:"season_number,omitempty"` // the latest episode out
+	EpisodeNumber int32                  `protobuf:"varint,6,opt,name=episode_number,json=episodeNumber,proto3" json:"episode_number,omitempty"`
+	AirDate       string                 `protobuf:"bytes,7,opt,name=air_date,json=airDate,proto3" json:"air_date,omitempty"`  // ISO 8601, when the plugin knows it
+	FoundAt       int64                  `protobuf:"varint,8,opt,name=found_at,json=foundAt,proto3" json:"found_at,omitempty"` // unix seconds: when the server saw it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NewEpisode) Reset() {
+	*x = NewEpisode{}
+	mi := &file_media_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NewEpisode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NewEpisode) ProtoMessage() {}
+
+func (x *NewEpisode) ProtoReflect() protoreflect.Message {
+	mi := &file_media_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NewEpisode.ProtoReflect.Descriptor instead.
+func (*NewEpisode) Descriptor() ([]byte, []int) {
+	return file_media_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *NewEpisode) GetPluginId() string {
+	if x != nil {
+		return x.PluginId
+	}
+	return ""
+}
+
+func (x *NewEpisode) GetSeriesId() string {
+	if x != nil {
+		return x.SeriesId
+	}
+	return ""
+}
+
+func (x *NewEpisode) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *NewEpisode) GetPosterUrl() string {
+	if x != nil {
+		return x.PosterUrl
+	}
+	return ""
+}
+
+func (x *NewEpisode) GetSeasonNumber() int32 {
+	if x != nil {
+		return x.SeasonNumber
+	}
+	return 0
+}
+
+func (x *NewEpisode) GetEpisodeNumber() int32 {
+	if x != nil {
+		return x.EpisodeNumber
+	}
+	return 0
+}
+
+func (x *NewEpisode) GetAirDate() string {
+	if x != nil {
+		return x.AirDate
+	}
+	return ""
+}
+
+func (x *NewEpisode) GetFoundAt() int64 {
+	if x != nil {
+		return x.FoundAt
+	}
+	return 0
+}
+
+type NewEpisodesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*NewEpisode          `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"` // most recent first
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NewEpisodesResponse) Reset() {
+	*x = NewEpisodesResponse{}
+	mi := &file_media_proto_msgTypes[73]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NewEpisodesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NewEpisodesResponse) ProtoMessage() {}
+
+func (x *NewEpisodesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_media_proto_msgTypes[73]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NewEpisodesResponse.ProtoReflect.Descriptor instead.
+func (*NewEpisodesResponse) Descriptor() ([]byte, []int) {
+	return file_media_proto_rawDescGZIP(), []int{73}
+}
+
+func (x *NewEpisodesResponse) GetItems() []*NewEpisode {
+	if x != nil {
+		return x.Items
+	}
+	return nil
 }
 
 var File_media_proto protoreflect.FileDescriptor
@@ -6190,7 +6396,7 @@ const file_media_proto_rawDesc = "" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\"(\n" +
 	"\x16DeleteProgressResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd3\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xe9\x03\n" +
 	"\x14ContinueWatchingItem\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
 	"\bmedia_id\x18\x02 \x01(\tR\amediaId\x12\x1b\n" +
@@ -6208,7 +6414,8 @@ const file_media_proto_rawDesc = "" +
 	"\x04plot\x18\f \x01(\tR\x04plot\x12\x12\n" +
 	"\x04year\x18\r \x01(\x05R\x04year\x12#\n" +
 	"\rseason_number\x18\x0e \x01(\x05R\fseasonNumber\x12%\n" +
-	"\x0eepisode_number\x18\x0f \x01(\x05R\repisodeNumber\"i\n" +
+	"\x0eepisode_number\x18\x0f \x01(\x05R\repisodeNumber\x12\x14\n" +
+	"\x05badge\x18\x10 \x01(\tR\x05badge\"i\n" +
 	"\x17ContinueWatchingRequest\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x05R\x05limit\x12\x1b\n" +
 	"\tparent_id\x18\x02 \x01(\tR\bparentId\x12\x1b\n" +
@@ -6397,7 +6604,7 @@ const file_media_proto_rawDesc = "" +
 	"\vdownload_id\x18\x01 \x01(\tR\n" +
 	"downloadId\"(\n" +
 	"\x16DownloadActionResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xbb\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd1\x03\n" +
 	"\n" +
 	"MyListItem\x12\x1b\n" +
 	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x19\n" +
@@ -6415,7 +6622,8 @@ const file_media_proto_rawDesc = "" +
 	"\badded_at\x18\n" +
 	" \x01(\x03R\aaddedAt\x125\n" +
 	"\x05extra\x18\v \x03(\v2\x1f.mycelium.MyListItem.ExtraEntryR\x05extra\x12/\n" +
-	"\tlogo_meta\x18\f \x01(\v2\x12.mycelium.LogoMetaR\blogoMeta\x1a8\n" +
+	"\tlogo_meta\x18\f \x01(\v2\x12.mycelium.LogoMetaR\blogoMeta\x12\x14\n" +
+	"\x05badge\x18\r \x01(\tR\x05badge\x1a8\n" +
 	"\n" +
 	"ExtraEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
@@ -6428,11 +6636,25 @@ const file_media_proto_rawDesc = "" +
 	"\x04item\x18\x01 \x01(\v2\x14.mycelium.MyListItemR\x04item\x12\x17\n" +
 	"\ain_list\x18\x02 \x01(\bR\x06inList\"'\n" +
 	"\x15SetMyListItemResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xa0\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x14\n" +
+	"\x12NewEpisodesRequest\"\xfd\x01\n" +
+	"\n" +
+	"NewEpisode\x12\x1b\n" +
+	"\tplugin_id\x18\x01 \x01(\tR\bpluginId\x12\x1b\n" +
+	"\tseries_id\x18\x02 \x01(\tR\bseriesId\x12\x14\n" +
+	"\x05title\x18\x03 \x01(\tR\x05title\x12\x1d\n" +
+	"\n" +
+	"poster_url\x18\x04 \x01(\tR\tposterUrl\x12#\n" +
+	"\rseason_number\x18\x05 \x01(\x05R\fseasonNumber\x12%\n" +
+	"\x0eepisode_number\x18\x06 \x01(\x05R\repisodeNumber\x12\x19\n" +
+	"\bair_date\x18\a \x01(\tR\aairDate\x12\x19\n" +
+	"\bfound_at\x18\b \x01(\x03R\afoundAt\"A\n" +
+	"\x13NewEpisodesResponse\x12*\n" +
+	"\x05items\x18\x01 \x03(\v2\x14.mycelium.NewEpisodeR\x05items2\xa0\x02\n" +
 	"\rPluginService\x12\\\n" +
 	"\x11GetPluginSettings\x12\".mycelium.GetPluginSettingsRequest\x1a#.mycelium.GetPluginSettingsResponse\x12\\\n" +
 	"\x11SavePluginSetting\x12\".mycelium.SavePluginSettingRequest\x1a#.mycelium.SavePluginSettingResponse\x12S\n" +
-	"\x0eTriggerRefresh\x12\x1f.mycelium.TriggerRefreshRequest\x1a .mycelium.TriggerRefreshResponse2\xb2\r\n" +
+	"\x0eTriggerRefresh\x12\x1f.mycelium.TriggerRefreshRequest\x1a .mycelium.TriggerRefreshResponse2\x81\x0e\n" +
 	"\rMediaPipeline\x12A\n" +
 	"\n" +
 	"GetCatalog\x12\x18.mycelium.CatalogRequest\x1a\x19.mycelium.CatalogResponse\x12S\n" +
@@ -6459,7 +6681,8 @@ const file_media_proto_rawDesc = "" +
 	"\n" +
 	"WarmStream\x12\x1b.mycelium.WarmStreamRequest\x1a\x1c.mycelium.WarmStreamResponse\x12>\n" +
 	"\tGetMyList\x12\x17.mycelium.MyListRequest\x1a\x18.mycelium.MyListResponse\x12P\n" +
-	"\rSetMyListItem\x12\x1e.mycelium.SetMyListItemRequest\x1a\x1f.mycelium.SetMyListItemResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
+	"\rSetMyListItem\x12\x1e.mycelium.SetMyListItemRequest\x1a\x1f.mycelium.SetMyListItemResponse\x12M\n" +
+	"\x0eGetNewEpisodes\x12\x1c.mycelium.NewEpisodesRequest\x1a\x1d.mycelium.NewEpisodesResponseB+Z)github.com/Lotho33/stipes-sdk/sdk/gen;genb\x06proto3"
 
 var (
 	file_media_proto_rawDescOnce sync.Once
@@ -6473,7 +6696,7 @@ func file_media_proto_rawDescGZIP() []byte {
 	return file_media_proto_rawDescData
 }
 
-var file_media_proto_msgTypes = make([]protoimpl.MessageInfo, 77)
+var file_media_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
 var file_media_proto_goTypes = []any{
 	(*CatalogItem)(nil),               // 0: mycelium.CatalogItem
 	(*LogoMeta)(nil),                  // 1: mycelium.LogoMeta
@@ -6546,21 +6769,24 @@ var file_media_proto_goTypes = []any{
 	(*MyListResponse)(nil),            // 68: mycelium.MyListResponse
 	(*SetMyListItemRequest)(nil),      // 69: mycelium.SetMyListItemRequest
 	(*SetMyListItemResponse)(nil),     // 70: mycelium.SetMyListItemResponse
-	nil,                               // 71: mycelium.CatalogItem.ExtraEntry
-	nil,                               // 72: mycelium.EpisodeInfo.ExtraEntry
-	nil,                               // 73: mycelium.SearchRequest.FiltersEntry
-	nil,                               // 74: mycelium.ResolveResponse.HttpHeadersEntry
-	nil,                               // 75: mycelium.ResolveResponse.ExtraEntry
-	nil,                               // 76: mycelium.MyListItem.ExtraEntry
+	(*NewEpisodesRequest)(nil),        // 71: mycelium.NewEpisodesRequest
+	(*NewEpisode)(nil),                // 72: mycelium.NewEpisode
+	(*NewEpisodesResponse)(nil),       // 73: mycelium.NewEpisodesResponse
+	nil,                               // 74: mycelium.CatalogItem.ExtraEntry
+	nil,                               // 75: mycelium.EpisodeInfo.ExtraEntry
+	nil,                               // 76: mycelium.SearchRequest.FiltersEntry
+	nil,                               // 77: mycelium.ResolveResponse.HttpHeadersEntry
+	nil,                               // 78: mycelium.ResolveResponse.ExtraEntry
+	nil,                               // 79: mycelium.MyListItem.ExtraEntry
 }
 var file_media_proto_depIdxs = []int32{
-	71, // 0: mycelium.CatalogItem.extra:type_name -> mycelium.CatalogItem.ExtraEntry
+	74, // 0: mycelium.CatalogItem.extra:type_name -> mycelium.CatalogItem.ExtraEntry
 	1,  // 1: mycelium.CatalogItem.logo_meta:type_name -> mycelium.LogoMeta
-	72, // 2: mycelium.EpisodeInfo.extra:type_name -> mycelium.EpisodeInfo.ExtraEntry
+	75, // 2: mycelium.EpisodeInfo.extra:type_name -> mycelium.EpisodeInfo.ExtraEntry
 	0,  // 3: mycelium.CatalogResponse.items:type_name -> mycelium.CatalogItem
 	7,  // 4: mycelium.SearchFilter.options:type_name -> mycelium.FilterOption
 	6,  // 5: mycelium.SearchFiltersResponse.filters:type_name -> mycelium.SearchFilter
-	73, // 6: mycelium.SearchRequest.filters:type_name -> mycelium.SearchRequest.FiltersEntry
+	76, // 6: mycelium.SearchRequest.filters:type_name -> mycelium.SearchRequest.FiltersEntry
 	0,  // 7: mycelium.SearchResponse.items:type_name -> mycelium.CatalogItem
 	1,  // 8: mycelium.MovieDetails.logo_meta:type_name -> mycelium.LogoMeta
 	3,  // 9: mycelium.SeriesDetails.seasons:type_name -> mycelium.SeasonInfo
@@ -6577,8 +6803,8 @@ var file_media_proto_depIdxs = []int32{
 	0,  // 20: mycelium.BrowseResponse.items:type_name -> mycelium.CatalogItem
 	2,  // 21: mycelium.BrowseResponse.episodes:type_name -> mycelium.EpisodeInfo
 	24, // 22: mycelium.StreamsResponse.sources:type_name -> mycelium.StreamSource
-	74, // 23: mycelium.ResolveResponse.http_headers:type_name -> mycelium.ResolveResponse.HttpHeadersEntry
-	75, // 24: mycelium.ResolveResponse.extra:type_name -> mycelium.ResolveResponse.ExtraEntry
+	77, // 23: mycelium.ResolveResponse.http_headers:type_name -> mycelium.ResolveResponse.HttpHeadersEntry
+	78, // 24: mycelium.ResolveResponse.extra:type_name -> mycelium.ResolveResponse.ExtraEntry
 	29, // 25: mycelium.ResolveStreamEvent.progress:type_name -> mycelium.ResolveProgress
 	28, // 26: mycelium.ResolveStreamEvent.result:type_name -> mycelium.ResolveResponse
 	39, // 27: mycelium.ContinueWatchingResponse.items:type_name -> mycelium.ContinueWatchingItem
@@ -6591,65 +6817,68 @@ var file_media_proto_depIdxs = []int32{
 	58, // 34: mycelium.CreateDownloadsRequest.items:type_name -> mycelium.CreateDownloadItem
 	61, // 35: mycelium.CreateDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
 	61, // 36: mycelium.ListDownloadsResponse.downloads:type_name -> mycelium.DownloadInfo
-	76, // 37: mycelium.MyListItem.extra:type_name -> mycelium.MyListItem.ExtraEntry
+	79, // 37: mycelium.MyListItem.extra:type_name -> mycelium.MyListItem.ExtraEntry
 	1,  // 38: mycelium.MyListItem.logo_meta:type_name -> mycelium.LogoMeta
 	66, // 39: mycelium.MyListResponse.items:type_name -> mycelium.MyListItem
 	66, // 40: mycelium.SetMyListItemRequest.item:type_name -> mycelium.MyListItem
-	47, // 41: mycelium.PluginService.GetPluginSettings:input_type -> mycelium.GetPluginSettingsRequest
-	49, // 42: mycelium.PluginService.SavePluginSetting:input_type -> mycelium.SavePluginSettingRequest
-	51, // 43: mycelium.PluginService.TriggerRefresh:input_type -> mycelium.TriggerRefreshRequest
-	4,  // 44: mycelium.MediaPipeline.GetCatalog:input_type -> mycelium.CatalogRequest
-	8,  // 45: mycelium.MediaPipeline.GetSearchFilters:input_type -> mycelium.SearchFiltersRequest
-	10, // 46: mycelium.MediaPipeline.Search:input_type -> mycelium.SearchRequest
-	12, // 47: mycelium.MediaPipeline.GetDetails:input_type -> mycelium.DetailsRequest
-	22, // 48: mycelium.MediaPipeline.Browse:input_type -> mycelium.BrowseRequest
-	25, // 49: mycelium.MediaPipeline.GetStreams:input_type -> mycelium.StreamsRequest
-	27, // 50: mycelium.MediaPipeline.ResolveStream:input_type -> mycelium.ResolveRequest
-	31, // 51: mycelium.MediaPipeline.UpdateProgress:input_type -> mycelium.ProgressRequest
-	37, // 52: mycelium.MediaPipeline.DeleteProgress:input_type -> mycelium.DeleteProgressRequest
-	40, // 53: mycelium.MediaPipeline.GetContinueWatching:input_type -> mycelium.ContinueWatchingRequest
-	42, // 54: mycelium.MediaPipeline.ListPlugins:input_type -> mycelium.PluginListRequest
-	53, // 55: mycelium.MediaPipeline.GetDownloadOptions:input_type -> mycelium.DownloadOptionsRequest
-	57, // 56: mycelium.MediaPipeline.CreateDownload:input_type -> mycelium.CreateDownloadRequest
-	62, // 57: mycelium.MediaPipeline.ListDownloads:input_type -> mycelium.ListDownloadsRequest
-	64, // 58: mycelium.MediaPipeline.CancelDownload:input_type -> mycelium.DownloadIdRequest
-	64, // 59: mycelium.MediaPipeline.DeleteDownload:input_type -> mycelium.DownloadIdRequest
-	59, // 60: mycelium.MediaPipeline.CreateDownloads:input_type -> mycelium.CreateDownloadsRequest
-	64, // 61: mycelium.MediaPipeline.AckDownloadFetched:input_type -> mycelium.DownloadIdRequest
-	33, // 62: mycelium.MediaPipeline.ReleasePlayback:input_type -> mycelium.ReleasePlaybackRequest
-	35, // 63: mycelium.MediaPipeline.WarmStream:input_type -> mycelium.WarmStreamRequest
-	67, // 64: mycelium.MediaPipeline.GetMyList:input_type -> mycelium.MyListRequest
-	69, // 65: mycelium.MediaPipeline.SetMyListItem:input_type -> mycelium.SetMyListItemRequest
-	48, // 66: mycelium.PluginService.GetPluginSettings:output_type -> mycelium.GetPluginSettingsResponse
-	50, // 67: mycelium.PluginService.SavePluginSetting:output_type -> mycelium.SavePluginSettingResponse
-	52, // 68: mycelium.PluginService.TriggerRefresh:output_type -> mycelium.TriggerRefreshResponse
-	5,  // 69: mycelium.MediaPipeline.GetCatalog:output_type -> mycelium.CatalogResponse
-	9,  // 70: mycelium.MediaPipeline.GetSearchFilters:output_type -> mycelium.SearchFiltersResponse
-	11, // 71: mycelium.MediaPipeline.Search:output_type -> mycelium.SearchResponse
-	21, // 72: mycelium.MediaPipeline.GetDetails:output_type -> mycelium.DetailsResponse
-	23, // 73: mycelium.MediaPipeline.Browse:output_type -> mycelium.BrowseResponse
-	26, // 74: mycelium.MediaPipeline.GetStreams:output_type -> mycelium.StreamsResponse
-	30, // 75: mycelium.MediaPipeline.ResolveStream:output_type -> mycelium.ResolveStreamEvent
-	32, // 76: mycelium.MediaPipeline.UpdateProgress:output_type -> mycelium.ProgressResponse
-	38, // 77: mycelium.MediaPipeline.DeleteProgress:output_type -> mycelium.DeleteProgressResponse
-	41, // 78: mycelium.MediaPipeline.GetContinueWatching:output_type -> mycelium.ContinueWatchingResponse
-	45, // 79: mycelium.MediaPipeline.ListPlugins:output_type -> mycelium.PluginListResponse
-	56, // 80: mycelium.MediaPipeline.GetDownloadOptions:output_type -> mycelium.DownloadOptionsResponse
-	61, // 81: mycelium.MediaPipeline.CreateDownload:output_type -> mycelium.DownloadInfo
-	63, // 82: mycelium.MediaPipeline.ListDownloads:output_type -> mycelium.ListDownloadsResponse
-	65, // 83: mycelium.MediaPipeline.CancelDownload:output_type -> mycelium.DownloadActionResponse
-	65, // 84: mycelium.MediaPipeline.DeleteDownload:output_type -> mycelium.DownloadActionResponse
-	60, // 85: mycelium.MediaPipeline.CreateDownloads:output_type -> mycelium.CreateDownloadsResponse
-	65, // 86: mycelium.MediaPipeline.AckDownloadFetched:output_type -> mycelium.DownloadActionResponse
-	34, // 87: mycelium.MediaPipeline.ReleasePlayback:output_type -> mycelium.ReleasePlaybackResponse
-	36, // 88: mycelium.MediaPipeline.WarmStream:output_type -> mycelium.WarmStreamResponse
-	68, // 89: mycelium.MediaPipeline.GetMyList:output_type -> mycelium.MyListResponse
-	70, // 90: mycelium.MediaPipeline.SetMyListItem:output_type -> mycelium.SetMyListItemResponse
-	66, // [66:91] is the sub-list for method output_type
-	41, // [41:66] is the sub-list for method input_type
-	41, // [41:41] is the sub-list for extension type_name
-	41, // [41:41] is the sub-list for extension extendee
-	0,  // [0:41] is the sub-list for field type_name
+	72, // 41: mycelium.NewEpisodesResponse.items:type_name -> mycelium.NewEpisode
+	47, // 42: mycelium.PluginService.GetPluginSettings:input_type -> mycelium.GetPluginSettingsRequest
+	49, // 43: mycelium.PluginService.SavePluginSetting:input_type -> mycelium.SavePluginSettingRequest
+	51, // 44: mycelium.PluginService.TriggerRefresh:input_type -> mycelium.TriggerRefreshRequest
+	4,  // 45: mycelium.MediaPipeline.GetCatalog:input_type -> mycelium.CatalogRequest
+	8,  // 46: mycelium.MediaPipeline.GetSearchFilters:input_type -> mycelium.SearchFiltersRequest
+	10, // 47: mycelium.MediaPipeline.Search:input_type -> mycelium.SearchRequest
+	12, // 48: mycelium.MediaPipeline.GetDetails:input_type -> mycelium.DetailsRequest
+	22, // 49: mycelium.MediaPipeline.Browse:input_type -> mycelium.BrowseRequest
+	25, // 50: mycelium.MediaPipeline.GetStreams:input_type -> mycelium.StreamsRequest
+	27, // 51: mycelium.MediaPipeline.ResolveStream:input_type -> mycelium.ResolveRequest
+	31, // 52: mycelium.MediaPipeline.UpdateProgress:input_type -> mycelium.ProgressRequest
+	37, // 53: mycelium.MediaPipeline.DeleteProgress:input_type -> mycelium.DeleteProgressRequest
+	40, // 54: mycelium.MediaPipeline.GetContinueWatching:input_type -> mycelium.ContinueWatchingRequest
+	42, // 55: mycelium.MediaPipeline.ListPlugins:input_type -> mycelium.PluginListRequest
+	53, // 56: mycelium.MediaPipeline.GetDownloadOptions:input_type -> mycelium.DownloadOptionsRequest
+	57, // 57: mycelium.MediaPipeline.CreateDownload:input_type -> mycelium.CreateDownloadRequest
+	62, // 58: mycelium.MediaPipeline.ListDownloads:input_type -> mycelium.ListDownloadsRequest
+	64, // 59: mycelium.MediaPipeline.CancelDownload:input_type -> mycelium.DownloadIdRequest
+	64, // 60: mycelium.MediaPipeline.DeleteDownload:input_type -> mycelium.DownloadIdRequest
+	59, // 61: mycelium.MediaPipeline.CreateDownloads:input_type -> mycelium.CreateDownloadsRequest
+	64, // 62: mycelium.MediaPipeline.AckDownloadFetched:input_type -> mycelium.DownloadIdRequest
+	33, // 63: mycelium.MediaPipeline.ReleasePlayback:input_type -> mycelium.ReleasePlaybackRequest
+	35, // 64: mycelium.MediaPipeline.WarmStream:input_type -> mycelium.WarmStreamRequest
+	67, // 65: mycelium.MediaPipeline.GetMyList:input_type -> mycelium.MyListRequest
+	69, // 66: mycelium.MediaPipeline.SetMyListItem:input_type -> mycelium.SetMyListItemRequest
+	71, // 67: mycelium.MediaPipeline.GetNewEpisodes:input_type -> mycelium.NewEpisodesRequest
+	48, // 68: mycelium.PluginService.GetPluginSettings:output_type -> mycelium.GetPluginSettingsResponse
+	50, // 69: mycelium.PluginService.SavePluginSetting:output_type -> mycelium.SavePluginSettingResponse
+	52, // 70: mycelium.PluginService.TriggerRefresh:output_type -> mycelium.TriggerRefreshResponse
+	5,  // 71: mycelium.MediaPipeline.GetCatalog:output_type -> mycelium.CatalogResponse
+	9,  // 72: mycelium.MediaPipeline.GetSearchFilters:output_type -> mycelium.SearchFiltersResponse
+	11, // 73: mycelium.MediaPipeline.Search:output_type -> mycelium.SearchResponse
+	21, // 74: mycelium.MediaPipeline.GetDetails:output_type -> mycelium.DetailsResponse
+	23, // 75: mycelium.MediaPipeline.Browse:output_type -> mycelium.BrowseResponse
+	26, // 76: mycelium.MediaPipeline.GetStreams:output_type -> mycelium.StreamsResponse
+	30, // 77: mycelium.MediaPipeline.ResolveStream:output_type -> mycelium.ResolveStreamEvent
+	32, // 78: mycelium.MediaPipeline.UpdateProgress:output_type -> mycelium.ProgressResponse
+	38, // 79: mycelium.MediaPipeline.DeleteProgress:output_type -> mycelium.DeleteProgressResponse
+	41, // 80: mycelium.MediaPipeline.GetContinueWatching:output_type -> mycelium.ContinueWatchingResponse
+	45, // 81: mycelium.MediaPipeline.ListPlugins:output_type -> mycelium.PluginListResponse
+	56, // 82: mycelium.MediaPipeline.GetDownloadOptions:output_type -> mycelium.DownloadOptionsResponse
+	61, // 83: mycelium.MediaPipeline.CreateDownload:output_type -> mycelium.DownloadInfo
+	63, // 84: mycelium.MediaPipeline.ListDownloads:output_type -> mycelium.ListDownloadsResponse
+	65, // 85: mycelium.MediaPipeline.CancelDownload:output_type -> mycelium.DownloadActionResponse
+	65, // 86: mycelium.MediaPipeline.DeleteDownload:output_type -> mycelium.DownloadActionResponse
+	60, // 87: mycelium.MediaPipeline.CreateDownloads:output_type -> mycelium.CreateDownloadsResponse
+	65, // 88: mycelium.MediaPipeline.AckDownloadFetched:output_type -> mycelium.DownloadActionResponse
+	34, // 89: mycelium.MediaPipeline.ReleasePlayback:output_type -> mycelium.ReleasePlaybackResponse
+	36, // 90: mycelium.MediaPipeline.WarmStream:output_type -> mycelium.WarmStreamResponse
+	68, // 91: mycelium.MediaPipeline.GetMyList:output_type -> mycelium.MyListResponse
+	70, // 92: mycelium.MediaPipeline.SetMyListItem:output_type -> mycelium.SetMyListItemResponse
+	73, // 93: mycelium.MediaPipeline.GetNewEpisodes:output_type -> mycelium.NewEpisodesResponse
+	68, // [68:94] is the sub-list for method output_type
+	42, // [42:68] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_media_proto_init() }
@@ -6676,7 +6905,7 @@ func file_media_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_media_proto_rawDesc), len(file_media_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   77,
+			NumMessages:   80,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -225,6 +225,7 @@ const (
 	MediaPipeline_WarmStream_FullMethodName          = "/mycelium.MediaPipeline/WarmStream"
 	MediaPipeline_GetMyList_FullMethodName           = "/mycelium.MediaPipeline/GetMyList"
 	MediaPipeline_SetMyListItem_FullMethodName       = "/mycelium.MediaPipeline/SetMyListItem"
+	MediaPipeline_GetNewEpisodes_FullMethodName      = "/mycelium.MediaPipeline/GetNewEpisodes"
 )
 
 // MediaPipelineClient is the client API for MediaPipeline service.
@@ -253,6 +254,7 @@ type MediaPipelineClient interface {
 	WarmStream(ctx context.Context, in *WarmStreamRequest, opts ...grpc.CallOption) (*WarmStreamResponse, error)
 	GetMyList(ctx context.Context, in *MyListRequest, opts ...grpc.CallOption) (*MyListResponse, error)
 	SetMyListItem(ctx context.Context, in *SetMyListItemRequest, opts ...grpc.CallOption) (*SetMyListItemResponse, error)
+	GetNewEpisodes(ctx context.Context, in *NewEpisodesRequest, opts ...grpc.CallOption) (*NewEpisodesResponse, error)
 }
 
 type mediaPipelineClient struct {
@@ -492,6 +494,16 @@ func (c *mediaPipelineClient) SetMyListItem(ctx context.Context, in *SetMyListIt
 	return out, nil
 }
 
+func (c *mediaPipelineClient) GetNewEpisodes(ctx context.Context, in *NewEpisodesRequest, opts ...grpc.CallOption) (*NewEpisodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NewEpisodesResponse)
+	err := c.cc.Invoke(ctx, MediaPipeline_GetNewEpisodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MediaPipelineServer is the server API for MediaPipeline service.
 // All implementations must embed UnimplementedMediaPipelineServer
 // for forward compatibility.
@@ -518,6 +530,7 @@ type MediaPipelineServer interface {
 	WarmStream(context.Context, *WarmStreamRequest) (*WarmStreamResponse, error)
 	GetMyList(context.Context, *MyListRequest) (*MyListResponse, error)
 	SetMyListItem(context.Context, *SetMyListItemRequest) (*SetMyListItemResponse, error)
+	GetNewEpisodes(context.Context, *NewEpisodesRequest) (*NewEpisodesResponse, error)
 	mustEmbedUnimplementedMediaPipelineServer()
 }
 
@@ -593,6 +606,9 @@ func (UnimplementedMediaPipelineServer) GetMyList(context.Context, *MyListReques
 }
 func (UnimplementedMediaPipelineServer) SetMyListItem(context.Context, *SetMyListItemRequest) (*SetMyListItemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetMyListItem not implemented")
+}
+func (UnimplementedMediaPipelineServer) GetNewEpisodes(context.Context, *NewEpisodesRequest) (*NewEpisodesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNewEpisodes not implemented")
 }
 func (UnimplementedMediaPipelineServer) mustEmbedUnimplementedMediaPipelineServer() {}
 func (UnimplementedMediaPipelineServer) testEmbeddedByValue()                       {}
@@ -1004,6 +1020,24 @@ func _MediaPipeline_SetMyListItem_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaPipeline_GetNewEpisodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NewEpisodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPipelineServer).GetNewEpisodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPipeline_GetNewEpisodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPipelineServer).GetNewEpisodes(ctx, req.(*NewEpisodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MediaPipeline_ServiceDesc is the grpc.ServiceDesc for MediaPipeline service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1094,6 +1128,10 @@ var MediaPipeline_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetMyListItem",
 			Handler:    _MediaPipeline_SetMyListItem_Handler,
+		},
+		{
+			MethodName: "GetNewEpisodes",
+			Handler:    _MediaPipeline_GetNewEpisodes_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

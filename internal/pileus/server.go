@@ -80,6 +80,8 @@ func Start(addr string, jwtSecret []byte, tlsCert *tls.Certificate) *grpc.Server
 	srv := grpc.NewServer(opts...)
 	gen.RegisterAuthServiceServer(srv, authHandler)
 	gen.RegisterMediaPipelineServer(srv, mediaHandler)
+	// "Nuovo episodio": daily check of the followed series (new_episodes.go).
+	startNewEpisodeChecker()
 	gen.RegisterPluginServiceServer(srv, pluginHandler)
 
 	lis, err := net.Listen("tcp", addr)

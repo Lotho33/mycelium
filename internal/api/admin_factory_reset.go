@@ -47,6 +47,9 @@ func factoryResetHandler(w http.ResponseWriter, r *http.Request) {
 	if _, err := managers.DB.Exec(`DELETE FROM my_list`); err != nil {
 		log.Printf("[admin] factory reset: my_list: %v", err)
 	}
+	if _, err := managers.DB.Exec(`DELETE FROM series_latest`); err != nil {
+		log.Printf("[admin] factory reset: series_latest: %v", err)
+	}
 	devRes, err := managers.DB.Exec(`DELETE FROM pileus_devices`)
 	if err != nil {
 		http.Error(w, "db error (devices): "+err.Error(), http.StatusInternalServerError)

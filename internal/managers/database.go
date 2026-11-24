@@ -136,6 +136,10 @@ func InitDB() error {
 	if _, err := db.Exec(MyListSchema); err != nil {
 		return err
 	}
+	// Latest episode of followed series (see series_latest.go).
+	if _, err := db.Exec(SeriesLatestSchema); err != nil {
+		return err
+	}
 	// extra_json: card metadata, added after the table first shipped.
 	runMigration(db, `ALTER TABLE my_list ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'`)
 	// season_number/episode_number: 0 for non-episodic items.

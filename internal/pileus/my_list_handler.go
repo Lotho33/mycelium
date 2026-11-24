@@ -38,8 +38,14 @@ func (h *MediaHandler) GetMyList(ctx context.Context, req *gen.MyListRequest) (*
 		return nil, status.Error(codes.Internal, "lettura della lista non riuscita")
 	}
 	items := make([]*gen.MyListItem, 0, len(entries))
+	news := newEpisodeSet(owner)
 	for _, e := range entries {
+		badge := ""
+		if news[[2]string{e.PluginID, e.MediaID}] {
+			badge = BadgeNewEpisode
+		}
 		items = append(items, &gen.MyListItem{
+			Badge:     badge,
 			PluginId:  e.PluginID,
 			MediaId:   e.MediaID,
 			Title:     e.Title,

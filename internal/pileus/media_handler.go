@@ -714,8 +714,14 @@ func (h *MediaHandler) GetContinueWatching(ctx context.Context, req *gen.Continu
 	}
 
 	items := make([]*gen.ContinueWatchingItem, 0, len(entries))
+	news := newEpisodeSet(clientID)
 	for _, e := range entries {
+		badge := ""
+		if e.ParentId != "" && news[[2]string{e.ProviderID, e.ParentId}] {
+			badge = BadgeNewEpisode
+		}
 		items = append(items, &gen.ContinueWatchingItem{
+			Badge:             badge,
 			PluginId:          e.ProviderID,
 			MediaId:           e.PlayableID,
 			ParentId:          e.ParentId,

@@ -242,6 +242,27 @@ stored one. `in_list=false` removes; only `plugin_id`/`media_id` matter. Both
 are idempotent. A client on a server without the RPCs gets `UNIMPLEMENTED` and
 hides the feature.
 
+## New episodes (`GetNewEpisodes`, `badge`)
+
+Once a day the server asks each plugin for the details of the series some
+profile follows (in La mia lista as a series, or watched in the last 90 days)
+and keeps the latest episode out (`SeriesDetails.latest_episode`) with the
+time it first saw it. `GetNewEpisodes` lists, for the calling profile, the
+series whose latest episode came out after the profile last watched them (or
+added them, if never watched) and is past where it got to — for 14 days, or
+until it is watched. A "Nuovi episodi" row on the home is that list.
+
+The same series carry `badge = "new_episode"` on `ContinueWatchingItem` and
+`MyListItem`; empty otherwise. The first check of a series never flags
+anything (what was out then is not news), and a plugin that doesn't report
+`latest_episode` never does.
+
+Card badges from plugins (`CatalogItem.badge`): `"new"` (added recently),
+`"new_episode"` (a new episode came out recently). Ignore unknown values.
+`CatalogItem.rank` + a catalog with `style_hint: "ranked"`: a Top 10 row —
+the number shown is `rank` when > 0, else the card's place; at most 10 cards,
+no further pages.
+
 ## Away from home (`GetServerInfo`)
 
 With *Accesso da fuori casa* on, or a Tailscale already on the machine

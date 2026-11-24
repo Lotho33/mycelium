@@ -438,6 +438,9 @@ message ContinueWatchingItem {
   int32  year               = 13;
   int32  season_number      = 14;
   int32  episode_number     = 15;
+  // "new_episode" when the series got an episode after this profile last
+  // watched it (see GetNewEpisodes); empty otherwise.
+  string badge              = 16;
 }
 message ContinueWatchingRequest {
   int32  limit     = 1;  // 0 = server default
@@ -757,6 +760,9 @@ message MyListItem {
   // what a card needs when it is shown again, with no call to the plugin.
   map<string, string> extra = 11;
   LogoMeta logo_meta = 12;  // set by the core
+  // "new_episode" for a series with an episode out since it was added or
+  // last watched (see GetNewEpisodes); empty otherwise.
+  string badge = 13;
 }
 
 // Empty plugin_id = every plugin, most recently added first.
@@ -775,6 +781,27 @@ message SetMyListItemRequest {
 }
 message SetMyListItemResponse {
   bool ok = 1;
+}
+
+// New episodes of the series this profile follows (in its list, or watched):
+// the server checks each followed series once a day (the plugin's
+// SeriesDetails.latest_episode) and lists the ones with an episode out after
+// the profile last watched them — or added them, if never watched — and
+// past where it got to. An entry stays NEW_EPISODES_DAYS (14) days, or until
+// the profile watches that episode.
+message NewEpisodesRequest {}
+message NewEpisode {
+  string plugin_id      = 1;
+  string series_id      = 2;  // media id of the series (GetDetails)
+  string title          = 3;  // series title, as stored with the list/history
+  string poster_url     = 4;
+  int32  season_number  = 5;  // the latest episode out
+  int32  episode_number = 6;
+  string air_date       = 7;  // ISO 8601, when the plugin knows it
+  int64  found_at       = 8;  // unix seconds: when the server saw it
+}
+message NewEpisodesResponse {
+  repeated NewEpisode items = 1;  // most recent first
 }
 
 service MediaPipeline {
@@ -800,4 +827,5 @@ service MediaPipeline {
   rpc WarmStream         (WarmStreamRequest)      returns (WarmStreamResponse);
   rpc GetMyList          (MyListRequest)          returns (MyListResponse);
   rpc SetMyListItem      (SetMyListItemRequest)   returns (SetMyListItemResponse);
+  rpc GetNewEpisodes     (NewEpisodesRequest)     returns (NewEpisodesResponse);
 }
