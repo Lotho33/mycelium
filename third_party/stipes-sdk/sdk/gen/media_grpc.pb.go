@@ -226,6 +226,7 @@ const (
 	MediaPipeline_GetMyList_FullMethodName           = "/mycelium.MediaPipeline/GetMyList"
 	MediaPipeline_SetMyListItem_FullMethodName       = "/mycelium.MediaPipeline/SetMyListItem"
 	MediaPipeline_GetNewEpisodes_FullMethodName      = "/mycelium.MediaPipeline/GetNewEpisodes"
+	MediaPipeline_GetCalendar_FullMethodName         = "/mycelium.MediaPipeline/GetCalendar"
 )
 
 // MediaPipelineClient is the client API for MediaPipeline service.
@@ -255,6 +256,7 @@ type MediaPipelineClient interface {
 	GetMyList(ctx context.Context, in *MyListRequest, opts ...grpc.CallOption) (*MyListResponse, error)
 	SetMyListItem(ctx context.Context, in *SetMyListItemRequest, opts ...grpc.CallOption) (*SetMyListItemResponse, error)
 	GetNewEpisodes(ctx context.Context, in *NewEpisodesRequest, opts ...grpc.CallOption) (*NewEpisodesResponse, error)
+	GetCalendar(ctx context.Context, in *CalendarRequest, opts ...grpc.CallOption) (*CalendarResponse, error)
 }
 
 type mediaPipelineClient struct {
@@ -504,6 +506,16 @@ func (c *mediaPipelineClient) GetNewEpisodes(ctx context.Context, in *NewEpisode
 	return out, nil
 }
 
+func (c *mediaPipelineClient) GetCalendar(ctx context.Context, in *CalendarRequest, opts ...grpc.CallOption) (*CalendarResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CalendarResponse)
+	err := c.cc.Invoke(ctx, MediaPipeline_GetCalendar_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MediaPipelineServer is the server API for MediaPipeline service.
 // All implementations must embed UnimplementedMediaPipelineServer
 // for forward compatibility.
@@ -531,6 +543,7 @@ type MediaPipelineServer interface {
 	GetMyList(context.Context, *MyListRequest) (*MyListResponse, error)
 	SetMyListItem(context.Context, *SetMyListItemRequest) (*SetMyListItemResponse, error)
 	GetNewEpisodes(context.Context, *NewEpisodesRequest) (*NewEpisodesResponse, error)
+	GetCalendar(context.Context, *CalendarRequest) (*CalendarResponse, error)
 	mustEmbedUnimplementedMediaPipelineServer()
 }
 
@@ -609,6 +622,9 @@ func (UnimplementedMediaPipelineServer) SetMyListItem(context.Context, *SetMyLis
 }
 func (UnimplementedMediaPipelineServer) GetNewEpisodes(context.Context, *NewEpisodesRequest) (*NewEpisodesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNewEpisodes not implemented")
+}
+func (UnimplementedMediaPipelineServer) GetCalendar(context.Context, *CalendarRequest) (*CalendarResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCalendar not implemented")
 }
 func (UnimplementedMediaPipelineServer) mustEmbedUnimplementedMediaPipelineServer() {}
 func (UnimplementedMediaPipelineServer) testEmbeddedByValue()                       {}
@@ -1038,6 +1054,24 @@ func _MediaPipeline_GetNewEpisodes_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaPipeline_GetCalendar_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CalendarRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPipelineServer).GetCalendar(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPipeline_GetCalendar_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPipelineServer).GetCalendar(ctx, req.(*CalendarRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MediaPipeline_ServiceDesc is the grpc.ServiceDesc for MediaPipeline service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1132,6 +1166,10 @@ var MediaPipeline_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNewEpisodes",
 			Handler:    _MediaPipeline_GetNewEpisodes_Handler,
+		},
+		{
+			MethodName: "GetCalendar",
+			Handler:    _MediaPipeline_GetCalendar_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

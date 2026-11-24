@@ -144,6 +144,7 @@ const (
 	EPBrowse           = "browse"
 	EPGetStreams       = "streams"
 	EPResolveStream    = "resolve"
+	EPCalendar         = "calendar"
 )
 
 // isVideoFlowEntrypoint reports whether ep touches the video CDN (streams,
@@ -1068,7 +1069,7 @@ const readEntrypointTimeout = 45 * time.Second
 
 func isReadEntrypoint(ep string) bool {
 	switch ep {
-	case EPSearch, EPGetSearchFilters, EPGetDetails, EPBrowse, EPGetStreams:
+	case EPSearch, EPGetSearchFilters, EPGetDetails, EPBrowse, EPGetStreams, EPCalendar:
 		return true
 	}
 	return false

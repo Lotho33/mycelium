@@ -110,6 +110,7 @@ entrypoints:                    # pipeline step  ->  Lua function name
   browse:         browse
   streams:        get_streams
   resolve:        resolve_stream
+  calendar:       calendar        # optional: release calendar
 
 tasks:
   - function: sync_catalog
@@ -143,6 +144,7 @@ mycelium passes.
 | `browse`         | `directory_id`, `page`              | array of items; use `is_dir = true` for folders |
 | `get_streams`    | `media_id`                          | array of stream sources: `{ id, label, quality, is_live, path }` (see below) |
 | `resolve_stream` | `stream_id`, `force_refresh` (bool), `warm` (bool) | `{ url, headers, is_live, extra }` |
+| `calendar`       | `from`, `to` (`"YYYY-MM-DD"`), `follows` | array of releases (see "Release calendar") |
 
 ### Stream sources
 
@@ -201,6 +203,35 @@ to flag), `"ita"`, `"jap"`, `"eng"`; `extra.filler` marks it `"filler"` or
 `"recap"` (a summary episode) — `""` or absent when canon or not known, and
 clients show nothing then. Compute them only from data already at hand — no
 extra request per episode.
+
+### Release calendar (`calendar`)
+
+Optional. What comes out between `from` and `to` (dates, inclusive; at most
+31 days). Each release is an item (same shape as a catalog item) plus:
+
+```lua
+{
+  id = "1396_2_8", title = "Episodio 8", media_type = "episode",
+  poster_url = "https://…", season_number = 2, episode_number = 8,
+  series_id  = "1396",                  -- the series' media id (or show_id)
+  release_at = "2026-11-26T15:30",      -- or "2026-11-26" when only the day is known
+  available  = false,                   -- already in the catalog (playable)?
+}
+```
+
+`release_at`: a date, or a date and time with or without seconds and offset
+(`"2026-11-26T15:30+09:00"`); without an offset it is the server's time zone.
+Releases without a readable date, or outside the range, are dropped.
+
+`available` is the honest part: a date is a plan, and a title announced for
+a day may reach the source days later. Say `true` only when the plugin
+already has it (e.g. its episode index lists it).
+
+`args.follows` holds the ids of the series the calling profile follows in
+this plugin (La mia lista or watched lately): use it to keep the work small
+— look up only those, for instance — but the server still marks followed
+releases itself. The server keeps each answer for 3 hours (5 minutes after
+a failure) and asks every plugin in parallel.
 
 ### `resolve_stream` result
 

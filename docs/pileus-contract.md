@@ -263,6 +263,22 @@ Card badges from plugins (`CatalogItem.badge`): `"new"` (added recently),
 the number shown is `rank` when > 0, else the card's place; at most 10 cards,
 no further pages.
 
+## Release calendar (`GetCalendar`)
+
+`GetCalendar(from, to, plugin_id?, followed_only?)`: releases between two
+dates ("YYYY-MM-DD", inclusive; default today + 6 days, at most 31), from
+every plugin with a `calendar` entrypoint, sorted by `release_at` (RFC 3339
+with offset; `all_day` = only the date is known — show no time). Group by
+day in the device's time zone.
+
+- `available`: the title is already playable; otherwise it is only expected
+  ("Previsto") — open its details only when available.
+- `followed`: the profile follows the series (La mia lista or watched); with
+  `followed_only` only those come back ("Solo le mie").
+- `series_id`: the series' media id for an episode (to open the series).
+- `failed_plugins`: plugins that didn't answer — show what came back, and a
+  quiet note.
+
 ## Away from home (`GetServerInfo`)
 
 With *Accesso da fuori casa* on, or a Tailscale already on the machine
