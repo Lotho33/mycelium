@@ -256,3 +256,37 @@ func TestEntrypointTimeout_ReadsAreCapped_ResolveKeepsDefault(t *testing.T) {
 		t.Errorf("catalog must keep the default, got %v", got)
 	}
 }
+
+// A catalog call waiting for the shared budget goes before background work
+// that was waiting longer: opening the home beats counts and syncs.
+func TestLuaPool_CatalogBeforeBackground(t *testing.T) {
+	pool := newTestPool(t, 2)
+	hold, err := pool.BackgroundSlot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := make(chan string, 2)
+	go func() { // background, queued first
+		free, err := pool.BackgroundSlot(context.Background())
+		if err == nil {
+			order <- "background"
+			free()
+		}
+	}()
+	time.Sleep(3 * backgroundYieldPoll)
+	go func() {
+		free, err := pool.CatalogSlot(context.Background())
+		if err == nil {
+			order <- "catalog"
+			time.Sleep(2 * backgroundYieldPoll) // still holding: background must wait
+			free()
+		}
+	}()
+	time.Sleep(backgroundYieldPoll)
+	hold()
+	first := <-order
+	second := <-order
+	if first != "catalog" || second != "background" {
+		t.Fatalf("order = %s, %s; want catalog first", first, second)
+	}
+}

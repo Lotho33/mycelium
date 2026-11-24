@@ -683,12 +683,38 @@ func (m *LuaPluginManager) loadPlugin(dir string) error {
 	dropCatalogCacheOnVersionChange(mf.ID, mf.Version)
 
 	core.SafeGo("lua/watch-hot-reload:"+mf.ID, func() { m.watchHotReload(p) })
-	core.SafeGo("lua/run-tasks:"+mf.ID, func() { m.runTasks(p) })
-	// Populate auto_hide counts right away from whatever is cached.
+	// Background work (tasks due now, catalog counts) waits loadQuietPeriod:
+	// a plugin just installed or updated is usually opened right away, and
+	// its first home must not queue behind syncs and counts on a cold cache.
+	core.SafeGo("lua/run-tasks:"+mf.ID, func() {
+		if waitLoadQuiet(p) {
+			m.runTasks(p)
+		}
+	})
 	forgetWarmup(mf.ID)
-	scheduleWarmup(mf.ID, func() { m.warmupCatalogCounts(p) })
+	scheduleWarmup(mf.ID, func() {
+		if waitLoadQuiet(p) {
+			m.warmupCatalogCounts(p)
+		}
+	})
 	log.Printf("[lua] plugin %q loaded (v%s)", mf.ID, mf.Version)
 	return nil
+}
+
+// loadQuietPeriod: see LoadPlugin. A var for tests.
+var loadQuietPeriod = 20 * time.Second
+
+// waitLoadQuiet sleeps loadQuietPeriod; false when p was unloaded meanwhile.
+func waitLoadQuiet(p *LuaPlugin) bool {
+	if loadQuietPeriod <= 0 {
+		return true
+	}
+	select {
+	case <-time.After(loadQuietPeriod):
+		return true
+	case <-p.cronStop:
+		return false
+	}
 }
 
 // catalogVersionKey remembers the plugin version whose pages fill the catalog

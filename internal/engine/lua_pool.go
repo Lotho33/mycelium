@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -31,6 +32,10 @@ type LuaPool struct {
 	// nonInteractive is the single budget (size-1 states) shared by background
 	// tasks and catalog fetches; see BackgroundSlot.
 	nonInteractive chan struct{}
+	// catalogWaiting counts GetCatalog calls waiting for that budget: while
+	// any waits, background work doesn't take it (a home screen being opened
+	// goes before counts, logos and syncs).
+	catalogWaiting atomic.Int32
 	script         string            // absolute path to the .lua file
 	sharedDirs     []string          // directories whose .lua files are preloaded as shared modules
 	setupFn        func(*lua.LState) // called on every new LState (registers SDK modules)
@@ -106,11 +111,31 @@ func backgroundSlots(size int) int {
 // Take it before Acquire and give it back with the returned func once done,
 // also after a timeout that discarded the state.
 func (p *LuaPool) BackgroundSlot(ctx context.Context) (func(), error) {
-	return takeSlot(ctx, p.nonInteractive)
+	for {
+		if p.catalogWaiting.Load() == 0 {
+			select {
+			case p.nonInteractive <- struct{}{}:
+				return func() { <-p.nonInteractive }, nil
+			default:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backgroundYieldPoll):
+		}
+	}
 }
 
-// CatalogSlot is BackgroundSlot for GetCatalog calls (same budget).
+// backgroundYieldPoll: how often waiting background work looks again for
+// the budget (it yields to catalog calls, so it can't just block on it).
+const backgroundYieldPoll = 50 * time.Millisecond
+
+// CatalogSlot is BackgroundSlot for GetCatalog calls (same budget), ahead of
+// background work.
 func (p *LuaPool) CatalogSlot(ctx context.Context) (func(), error) {
+	p.catalogWaiting.Add(1)
+	defer p.catalogWaiting.Add(-1)
 	return takeSlot(ctx, p.nonInteractive)
 }
 
