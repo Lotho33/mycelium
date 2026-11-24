@@ -178,8 +178,10 @@ one that should start by default (e.g. an automatic choice) first.
 `extra` is opaque to mycelium and reaches the client as is, on catalog items
 and on episode rows (`browse` results with `media_type = "episode"`). On an
 episode, `extra.lang` names its language versions: `""` / `"both"` (nothing
-to flag), `"ita"`, `"jap"`, `"eng"`. Compute it only from data already at
-hand — no extra request per episode.
+to flag), `"ita"`, `"jap"`, `"eng"`; `extra.filler` marks it `"filler"` or
+`"recap"` (a summary episode) — `""` or absent when canon or not known, and
+clients show nothing then. Compute them only from data already at hand — no
+extra request per episode.
 
 ### `resolve_stream` result
 
