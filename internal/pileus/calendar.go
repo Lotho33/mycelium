@@ -173,11 +173,23 @@ func calendarPlugins(only string) []string {
 	return ids
 }
 
+// calendarPluginVersion: the running version of pluginID ("" if unknown).
+func calendarPluginVersion(pluginID string) string {
+	for _, mf := range engine.LuaPlugins.GetMeta() {
+		if mf.ID == pluginID {
+			return mf.Version
+		}
+	}
+	return ""
+}
+
 // pluginCalendar asks one plugin (or its cached answer).
 func pluginCalendar(ctx context.Context, pluginID string, from, to time.Time, follows []string, profileID string) ([]*gen.CalendarEntry, bool) {
 	sort.Strings(follows)
 	sum := sha256.Sum256([]byte(strings.Join(follows, "\x00")))
-	key := pluginID + "|" + from.Format("2006-01-02") + "|" + to.Format("2006-01-02") + "|" + hex.EncodeToString(sum[:8])
+	// The version is in the key: an updated plugin is asked again at once
+	// instead of serving the old version's answer for calendarTTL.
+	key := pluginID + "@" + calendarPluginVersion(pluginID) + "|" + from.Format("2006-01-02") + "|" + to.Format("2006-01-02") + "|" + hex.EncodeToString(sum[:8])
 	now := calendarNow()
 	calendarMu.Lock()
 	if c, ok := calendarCache[key]; ok && now.Before(c.expires) {
