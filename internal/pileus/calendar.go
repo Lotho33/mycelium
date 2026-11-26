@@ -21,7 +21,7 @@ import (
 
 // Release calendar (GetCalendar). Plugins with a `calendar` entrypoint say
 // what comes out between two dates; the server asks them in parallel, keeps
-// each answer for calendarTTL, merges them by release time and marks the
+// each answer a while (calendarAnswerTTL), merges them by release time and marks the
 // series the profile follows. Nothing here knows a site: a date and an
 // "available" flag are all it reads.
 //
@@ -31,7 +31,13 @@ import (
 // the server relies on.
 
 const (
-	calendarTTL         = 3 * time.Hour
+	// calendarTTL: how long a plugin's answer is kept. Plugins cache their
+	// own sources, so this mostly spares the call; "available" still has to
+	// turn true soon after a release comes out.
+	calendarTTL = 30 * time.Minute
+	// calendarLiveTTL: an answer with live items, whose "available" means
+	// "on air now" and whose list changes during the day.
+	calendarLiveTTL     = 2 * time.Minute
 	calendarFailTTL     = 5 * time.Minute // a failed plugin is asked again sooner
 	calendarCallTimeout = 30 * time.Second
 	calendarDefaultDays = 7
@@ -216,10 +222,7 @@ func pluginCalendar(ctx context.Context, pluginID string, from, to time.Time, fo
 	if err != nil {
 		log.Printf("[calendar] %s: %v", pluginID, err)
 	}
-	ttl := calendarTTL
-	if err != nil {
-		ttl = calendarFailTTL
-	}
+	ttl := calendarAnswerTTL(entries, err)
 	calendarMu.Lock()
 	if len(calendarCache) >= calendarCacheMax {
 		for k, c := range calendarCache {
@@ -234,6 +237,19 @@ func pluginCalendar(ctx context.Context, pluginID string, from, to time.Time, fo
 	calendarCache[key] = calendarCacheEntry{entries: entries, failed: err != nil, expires: now.Add(ttl)}
 	calendarMu.Unlock()
 	return entries, err == nil
+}
+
+// calendarAnswerTTL: how long to keep one plugin's answer.
+func calendarAnswerTTL(entries []*gen.CalendarEntry, err error) time.Duration {
+	if err != nil {
+		return calendarFailTTL
+	}
+	for _, e := range entries {
+		if e.GetItem().GetMediaType() == "live" {
+			return calendarLiveTTL
+		}
+	}
+	return calendarTTL
 }
 
 // followedSeries: the series owner follows (list or history), by plugin.

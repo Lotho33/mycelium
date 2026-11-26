@@ -230,8 +230,10 @@ already has it (e.g. its episode index lists it).
 `args.follows` holds the ids of the series the calling profile follows in
 this plugin (La mia lista or watched lately): use it to keep the work small
 — look up only those, for instance — but the server still marks followed
-releases itself. The server keeps each answer for 3 hours (5 minutes after
-a failure) and asks every plugin in parallel.
+releases itself. The server keeps each answer for 30 minutes — 2 minutes
+when it has `media_type: "live"` items (their `available` means "on air
+now"), 5 after a failure — and asks every plugin in parallel; a new plugin
+version is asked again at once.
 
 ### `resolve_stream` result
 

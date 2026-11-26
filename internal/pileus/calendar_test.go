@@ -2,6 +2,7 @@ package pileus
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -162,5 +163,19 @@ func TestGetCalendarFailingPlugin(t *testing.T) {
 	resp, err := (&MediaHandler{}).GetCalendar(ctx, &gen.CalendarRequest{PluginId: "t.calfail"})
 	if err != nil || len(resp.FailedPlugins) != 1 || len(resp.Entries) != 0 {
 		t.Fatalf("resp = %v, %v", resp, err)
+	}
+}
+
+func TestCalendarAnswerTTL(t *testing.T) {
+	ep := &gen.CalendarEntry{Item: &gen.CatalogItem{MediaType: "series"}}
+	live := &gen.CalendarEntry{Item: &gen.CatalogItem{MediaType: "live"}}
+	if got := calendarAnswerTTL([]*gen.CalendarEntry{ep}, nil); got != calendarTTL {
+		t.Errorf("series = %v", got)
+	}
+	if got := calendarAnswerTTL([]*gen.CalendarEntry{ep, live}, nil); got != calendarLiveTTL {
+		t.Errorf("with a live item = %v", got)
+	}
+	if got := calendarAnswerTTL(nil, errors.New("x")); got != calendarFailTTL {
+		t.Errorf("failure = %v", got)
 	}
 }
