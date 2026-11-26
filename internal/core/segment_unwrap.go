@@ -23,6 +23,8 @@ import (
 //	         keyword prefix (e.g. "payload-")
 //	magic    bytes right before the payload; required for body, which is
 //	         searched for it, and must start the carrier otherwise
+//	magic_within  png_pixels only: how many samples may precede the magic
+//	         (it is searched in that range); 0 = the magic starts the samples
 //	length   "" (payload runs to the end) | u32be | u32le — a length field
 //	         right after Magic
 //	codec    "" (raw) | gzip | zlib | base64 (standard alphabet, padding
@@ -33,8 +35,10 @@ type SegmentUnwrap struct {
 	Carrier string `yaml:"carrier" json:"carrier"`
 	Chunk   string `yaml:"chunk" json:"chunk,omitempty"`
 	Magic   string `yaml:"magic" json:"magic,omitempty"`
-	Length  string `yaml:"length" json:"length,omitempty"`
-	Codec   string `yaml:"codec" json:"codec,omitempty"`
+	// MagicWithin: see magic_within above.
+	MagicWithin int    `yaml:"magic_within" json:"magic_within,omitempty"`
+	Length      string `yaml:"length" json:"length,omitempty"`
+	Codec       string `yaml:"codec" json:"codec,omitempty"`
 }
 
 const (
@@ -46,6 +50,9 @@ const (
 	// MaxSegmentUnwrapRules bounds the rules tried on one segment.
 	MaxSegmentUnwrapRules = 8
 	maxUnwrapMagic        = 64
+	// MaxUnwrapMagicWithin bounds magic_within (samples decoded before the
+	// magic may be found).
+	MaxUnwrapMagicWithin = 16 << 20
 	// maxPNGKeyword is the PNG limit on a text chunk's keyword.
 	maxPNGKeyword = 79
 )
@@ -68,6 +75,12 @@ func (u SegmentUnwrap) Validate() error {
 		}
 	default:
 		return fmt.Errorf("carrier %q sconosciuto (body | png_pixels | webp_chunk | png_text)", u.Carrier)
+	}
+	if u.MagicWithin < 0 || u.MagicWithin > MaxUnwrapMagicWithin {
+		return fmt.Errorf("magic_within fuori da 0…%d", MaxUnwrapMagicWithin)
+	}
+	if u.MagicWithin > 0 && u.Carrier != UnwrapCarrierPNGPixels {
+		return fmt.Errorf("magic_within vale solo per png_pixels")
 	}
 	if len(u.Magic) > maxUnwrapMagic {
 		return fmt.Errorf("magic oltre %d byte", maxUnwrapMagic)

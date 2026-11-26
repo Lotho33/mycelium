@@ -299,12 +299,15 @@ func pngPixelsPayload(b []byte, r core.SegmentUnwrap) []byte {
 
 	magic := []byte(r.Magic)
 	head := len(magic) + lengthFieldSize(r)
+	// Where the magic starts: the first sample, or (magic_within) anywhere in
+	// the first r.MagicWithin samples. -1 until found.
+	start := -1
+	if len(magic) == 0 {
+		start = 0
+	}
 	// Without a length field the payload runs to the last sample: bounded by
 	// what a segment may be.
-	need := total
-	if limit := head + segmentBufferLimit; need > limit {
-		need = limit
-	}
+	need := min(total, head+r.MagicWithin+segmentBufferLimit)
 	headChecked := false
 
 	readers := make([]io.Reader, len(idat))
@@ -332,23 +335,29 @@ func pngPixelsPayload(b []byte, r core.SegmentUnwrap) []byte {
 			samples = append(samples, cur[i], cur[i+1], cur[i+2])
 		}
 		prev, cur = cur, prev
-		if !headChecked && len(samples) >= head {
-			headChecked = true
-			if !bytes.HasPrefix(samples, magic) {
+		if start < 0 {
+			span := samples[:min(len(samples), r.MagicWithin+len(magic))]
+			if i := bytes.Index(span, magic); i >= 0 {
+				start = i
+			} else if len(samples) >= r.MagicWithin+len(magic) {
 				return nil
 			}
+		}
+		if start >= 0 && !headChecked && len(samples) >= start+head {
+			headChecked = true
+			need = min(total, start+head+segmentBufferLimit)
 			if r.Length != "" {
-				f := samples[len(magic):head]
+				f := samples[start+len(magic) : start+head]
 				var n uint32
 				if r.Length == "u32le" {
 					n = binary.LittleEndian.Uint32(f)
 				} else {
 					n = binary.BigEndian.Uint32(f)
 				}
-				if n == 0 || uint64(n) > uint64(segmentBufferLimit) || head+int(n) > total {
+				if n == 0 || uint64(n) > uint64(segmentBufferLimit) || start+head+int(n) > total {
 					return nil
 				}
-				need = head + int(n)
+				need = start + head + int(n)
 			}
 		}
 	}
@@ -358,7 +367,7 @@ func pngPixelsPayload(b []byte, r core.SegmentUnwrap) []byte {
 	if len(samples) > need {
 		samples = samples[:need]
 	}
-	return framedPayload(samples[len(magic):], r)
+	return framedPayload(samples[start+len(magic):], r)
 }
 
 // pngUnfilter reverses one row's PNG filter into cur (prev is the previous

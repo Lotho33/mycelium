@@ -118,6 +118,15 @@ func normalizeSegment(body []byte, ct, rawURL string, encrypted bool, unwraps []
 		return v
 	}
 
+	// The plugin declares how its media is packed and no rule fits this image:
+	// scanning it for a media signature would relay image data as video (the
+	// player gets undecodable bytes and shows nothing, with no error). Refuse
+	// it, so the mismatch is reported.
+	if len(unwraps) > 0 && isImageContainer(body) {
+		v.reject = "image segment that no plugin unwrap rule recognises"
+		return v
+	}
+
 	// Any other prefix: look for where the media starts.
 	scan := body[:min(len(body), mediaSniffLimit)]
 	if off, mt := mediaStartOffset(scan); off >= 0 {
@@ -296,4 +305,17 @@ func gifLen(b []byte) int {
 		}
 	}
 	return 0
+}
+
+// isImageContainer: b starts like a PNG, JPEG, GIF or WebP file.
+func isImageContainer(b []byte) bool {
+	switch {
+	case bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")),
+		bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF}),
+		bytes.HasPrefix(b, []byte("GIF8")):
+		return true
+	case len(b) >= 12 && bytes.Equal(b[0:4], []byte("RIFF")) && bytes.Equal(b[8:12], []byte("WEBP")):
+		return true
+	}
+	return false
 }

@@ -79,6 +79,63 @@ func TestSegmentUnwrap_PNGPixels(t *testing.T) {
 	}
 }
 
+// magic_within: the magic may follow other samples, up to the declared
+// range; without it the magic must start the samples.
+func TestSegmentUnwrap_PNGPixelsMagicWithin(t *testing.T) {
+	ts := fakeTS(400)
+	g := gz(t, ts)
+	lead := make([]byte, 16*512*3)
+	for i := range lead {
+		lead[i] = byte(i * 7)
+	}
+	data := append(lead, pixelRule.Magic...)
+	data = binary.BigEndian.AppendUint32(data, uint32(len(g)))
+	data = append(data, g...)
+	img := pixelPNG(t, data, 512, false)
+
+	if got, _ := applySegmentUnwraps(img, []core.SegmentUnwrap{pixelRule}); got != nil {
+		t.Fatal("magic not at the first sample accepted without magic_within")
+	}
+	within := pixelRule
+	within.MagicWithin = 1 << 20
+	if got, _ := applySegmentUnwraps(img, []core.SegmentUnwrap{within}); !bytes.Equal(got, ts) {
+		t.Fatalf("magic_within: payload mismatch (%d bytes)", len(got))
+	}
+	short := pixelRule
+	short.MagicWithin = len(lead) - 1
+	if got, _ := applySegmentUnwraps(img, []core.SegmentUnwrap{short}); got != nil {
+		t.Fatal("magic past magic_within accepted")
+	}
+}
+
+func TestSegmentUnwrapRule_MagicWithinValidation(t *testing.T) {
+	if err := (core.SegmentUnwrap{Carrier: "png_pixels", MagicWithin: 1024}).Validate(); err != nil {
+		t.Fatalf("png_pixels + magic_within: %v", err)
+	}
+	for _, r := range []core.SegmentUnwrap{
+		{Carrier: "body", Magic: "X", MagicWithin: 10},
+		{Carrier: "png_pixels", MagicWithin: -1},
+		{Carrier: "png_pixels", MagicWithin: core.MaxUnwrapMagicWithin + 1},
+	} {
+		if r.Validate() == nil {
+			t.Errorf("accepted %+v", r)
+		}
+	}
+}
+
+// Rules declared, an image none of them fits: refused, not scanned for a
+// media signature. Without rules the scan stays as it was.
+func TestSegmentUnwrap_UnrecognisedImageRefused(t *testing.T) {
+	other := core.SegmentUnwrap{Carrier: "png_pixels", Magic: "OTHERMAGIC", Length: "u32be", Codec: "gzip"}
+	b := pixelCarrier(t, fakeTS(400), false)
+	if v := normalizeSegment(b, "image/png", "https://cdn.test/x", false, []core.SegmentUnwrap{other}); v.reject == "" {
+		t.Fatalf("unrecognised image relayed: ct=%q notes=%v", v.ct, v.notes)
+	}
+	if v := normalizeSegment(b, "image/png", "https://cdn.test/x", false, nil); strings.Contains(v.reject, "unwrap") {
+		t.Fatalf("no rules, refused anyway: %q", v.reject)
+	}
+}
+
 // Raw samples, no magic, no length: the payload runs to the last sample
 // (here the TS fills the image exactly).
 func TestSegmentUnwrap_PNGPixelsRawToEnd(t *testing.T) {

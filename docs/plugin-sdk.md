@@ -563,7 +563,8 @@ already MPEG-TS or fMP4.
 |-------|---------|
 | `carrier` | `body`: anywhere in the response, right after `magic` (searched). `png_pixels`: the samples of an 8-bit RGB/RGBA PNG, alpha dropped, row by row from the first pixel. `webp_chunk`: the data of the WebP chunk named `chunk`. `png_text`: the text of the PNG's `tEXt`/`zTXt`/`iTXt` chunks whose keyword starts with `chunk`, joined in file order (compressed ones inflated first) |
 | `chunk` | `webp_chunk`: the FourCC, e.g. `EXIF`. `png_text`: the keyword prefix, e.g. `payload-` (empty = every text chunk) |
-| `magic` | bytes before the payload; required for `body`, must start the carrier otherwise |
+| `magic` | bytes before the payload; required for `body`, must start the carrier otherwise (see `magic_within`) |
+| `magic_within` | `png_pixels` only: how many samples may come before `magic` (it is searched in that range, at most 16 MiB). 0 or absent: `magic` starts the samples |
 | `length` | `u32be` / `u32le`: a 4-byte length right after `magic`; empty = to the end |
 | `codec` | `gzip` / `zlib` / `base64` (standard alphabet, padding and line breaks optional), empty = raw |
 
