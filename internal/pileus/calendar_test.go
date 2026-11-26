@@ -24,8 +24,8 @@ func TestCalendarRange(t *testing.T) {
 		t.Fatalf("default = %v %v %v", f, to, err)
 	}
 	f, to, _ = calendarRange("2026-11-01", "2027-03-01")
-	if to.Format("2006-01-02") != "2026-12-01" {
-		t.Fatalf("capped to = %v", to)
+	if f.Format("2006-01-02") != "2026-11-01" || to.Format("2006-01-02") != "2026-12-01" {
+		t.Fatalf("capped = %v %v", f, to)
 	}
 	if _, _, err := calendarRange("2026-11-10", "2026-11-01"); err == nil {
 		t.Fatal("to before from accepted")
