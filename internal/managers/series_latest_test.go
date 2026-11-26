@@ -52,9 +52,16 @@ func TestFollowedSeries(t *testing.T) {
 	if err != nil || len(due) != 2 {
 		t.Fatalf("followed = %v, %v; want s1 and s2", due, err)
 	}
-	// Checked just now: not due.
+	// Checked just now but without a card (a row from before cards): due
+	// once more, to fetch it.
 	_, _ = m.SetSeriesLatest("p", "s1", 1, 1, "")
-	due, _ = m.FollowedSeries(90, 1) // checked before t=1: nothing checked lately qualifies... s2 never checked
+	due, _ = m.FollowedSeries(90, 1)
+	if len(due) != 2 {
+		t.Fatalf("due = %v; want s1 (no card) and s2", due)
+	}
+	// Checked just now, card stored (even an empty one): not due.
+	_ = m.SetSeriesCard("p", "s1", nil)
+	due, _ = m.FollowedSeries(90, 1) // s2 never checked
 	if len(due) != 1 || due[0][1] != "s2" {
 		t.Fatalf("due = %v; want only s2", due)
 	}

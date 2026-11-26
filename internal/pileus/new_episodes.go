@@ -11,6 +11,7 @@ import (
 	gen "github.com/Lotho33/stipes-sdk/sdk/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"mycelium/internal/core"
 	"mycelium/internal/engine"
@@ -92,40 +93,59 @@ func checkFollowedSeries(ctx context.Context) {
 	}
 }
 
-// checkSeries asks pluginID for seriesID's latest episode and stores it;
-// true when it is a newer one than stored. A plugin that isn't running is
-// skipped (checked again next tick); any other failure counts as a check.
+// checkSeries asks pluginID for seriesID's latest episode and stores it,
+// with the series' card; true when it is a newer one than stored. A plugin
+// that isn't running is skipped (checked again next tick); any other
+// failure counts as a check.
 func checkSeries(ctx context.Context, pluginID, seriesID string) bool {
 	if !engine.LuaPlugins.Has(pluginID) || !engine.LuaPlugins.IsOperational(pluginID) {
 		return false
 	}
-	le := fetchLatestEpisode(ctx, pluginID, seriesID)
+	le, card := fetchLatestEpisode(ctx, pluginID, seriesID)
 	var s, e int32
 	var air string
 	if le != nil {
 		s, e, air = le.SeasonNumber, le.EpisodeNumber, le.AirDate
 	}
 	newer, err := managers.DB.SetSeriesLatest(pluginID, seriesID, s, e, air)
+	if err == nil {
+		err = managers.DB.SetSeriesCard(pluginID, seriesID, card)
+	}
 	if err != nil {
 		log.Printf("[new-episodes] %s/%s: %v", pluginID, seriesID, err)
 	}
 	return newer
 }
 
-// fetchLatestEpisode: the plugin's details of a series, background class.
-func fetchLatestEpisode(ctx context.Context, pluginID, seriesID string) *gen.LatestEpisode {
+// fetchLatestEpisode: the plugin's details of a series, background class:
+// its latest episode and its card (marshalled CatalogItem, nil on failure).
+func fetchLatestEpisode(ctx context.Context, pluginID, seriesID string) (*gen.LatestEpisode, []byte) {
 	cctx, cancel := context.WithTimeout(ctx, newEpisodeTimeout)
 	defer cancel()
 	b, err := engine.LuaPlugins.CallEntrypointJSONBackgroundCtx(cctx, pluginID, engine.EPGetDetails,
 		map[string]any{"media_id": seriesID}, "", nil, newEpisodeCallWait)
 	if err != nil || isNullJSON(b) {
-		return nil
+		return nil, nil
 	}
 	var lm luaMeta
 	if json.Unmarshal(b, &lm) != nil {
+		return nil, nil
+	}
+	return lm.LatestEpisode.proto(), seriesCard(lm, seriesID)
+}
+
+// seriesCard: the card of a series from its details, for the "new episode"
+// row. The details' own episode/season fields don't belong on a series card.
+func seriesCard(lm luaMeta, seriesID string) []byte {
+	it := luaMetaToCatalogItem(lm)
+	it.Id, it.MediaType, it.IsDir = seriesID, "series", true
+	it.SeasonNumber, it.EpisodeNumber, it.ShowId, it.ParentId = 0, 0, "", ""
+	it.Rank, it.Badge = 0, ""
+	b, err := proto.Marshal(it)
+	if err != nil {
 		return nil
 	}
-	return lm.LatestEpisode.proto()
+	return b
 }
 
 // newEpisodesFor lists owner's series with a new episode (see the file
@@ -176,10 +196,24 @@ func newEpisodesFor(owner string, now time.Time) ([]*gen.NewEpisode, error) {
 		if !managers.EpisodeAfter(l.Season, l.Episode, f.season, f.ep) {
 			continue
 		}
-		out = append(out, &gen.NewEpisode{
+		ne := &gen.NewEpisode{
 			PluginId: k[0], SeriesId: k[1], Title: f.title, PosterUrl: f.poster,
 			SeasonNumber: l.Season, EpisodeNumber: l.Episode, AirDate: l.AirDate, FoundAt: l.FoundAt,
-		})
+		}
+		if len(l.Card) > 0 {
+			it := &gen.CatalogItem{}
+			if proto.Unmarshal(l.Card, it) == nil {
+				it.Id, it.Badge = k[1], BadgeNewEpisode
+				if it.Title == "" {
+					it.Title = f.title
+				}
+				if it.PosterUrl == "" {
+					it.PosterUrl = f.poster
+				}
+				ne.Item = it
+			}
+		}
+		out = append(out, ne)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FoundAt > out[j].FoundAt })
 	return out, nil

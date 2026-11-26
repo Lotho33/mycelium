@@ -252,6 +252,12 @@ series whose latest episode came out after the profile last watched them (or
 added them, if never watched) and is past where it got to — for 14 days, or
 until it is watched. A "Nuovi episodi" row on the home is that list.
 
+Each `NewEpisode` carries `item`: the series' card as its details gave it at
+the last check (backdrop in `extra.fanart_url`, `extra.plot`,
+`extra.genres`, logo, rating), with `id = series_id` and `badge =
+"new_episode"` — draw it like any other card. It is absent for a series not
+yet checked with details: fall back to `title` and `poster_url`.
+
 The same series carry `badge = "new_episode"` on `ContinueWatchingItem` and
 `MyListItem`; empty otherwise. The first check of a series never flags
 anything (what was out then is not news), and a plugin that doesn't report

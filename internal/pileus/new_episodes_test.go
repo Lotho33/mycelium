@@ -60,7 +60,8 @@ func TestNewEpisodesFor(t *testing.T) {
 		if foundDaysAgo < 0 {
 			found = 0
 		}
-		exec(`INSERT INTO series_latest VALUES(?,?,?,?,?,?,?)`, "p", series, s, e, "2026-11-20", found, now.Unix())
+		exec(`INSERT INTO series_latest(plugin_id, series_id, season_number, episode_number,
+			air_date, found_at, checked_at) VALUES(?,?,?,?,?,?,?)`, "p", series, s, e, "2026-11-20", found, now.Unix())
 	}
 
 	watched("a", "caught_up", 1, 7, 5) // watched E7 5 days ago…
@@ -79,6 +80,13 @@ func TestNewEpisodesFor(t *testing.T) {
 	exec(`UPDATE my_list SET added_at = ? WHERE media_id = 'listed'`, now.Unix()-10*day)
 	latest("listed", 3, 1, 1) // never watched, added 10 days ago, S3E1 found yesterday: new
 
+	// caught_up was checked with details: its card rides along.
+	card := seriesCard(luaMeta{ID: "ignored", Title: "Serie dalla scheda", FanartURL: "https://img.test/bg.jpg",
+		Plot: "Trama", SeasonNumber: 2, EpisodeNumber: 3}, "caught_up")
+	if err := managers.DB.SetSeriesCard("p", "caught_up", card); err != nil {
+		t.Fatal(err)
+	}
+
 	items, err := newEpisodesFor("a", now)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +100,14 @@ func TestNewEpisodesFor(t *testing.T) {
 	}
 	if c := got["caught_up"]; c.EpisodeNumber != 8 || c.Title != "Serie caught_up" || c.PosterUrl != "poster" {
 		t.Errorf("caught_up = %+v", c)
+	}
+	if it := got["caught_up"].Item; it == nil || it.Id != "caught_up" || it.Badge != BadgeNewEpisode ||
+		it.Extra["fanart_url"] != "https://img.test/bg.jpg" || it.Extra["plot"] != "Trama" ||
+		it.EpisodeNumber != 0 || !it.IsDir || it.MediaType != "series" {
+		t.Errorf("caught_up card = %+v", it)
+	}
+	if got["listed"].Item != nil {
+		t.Errorf("listed has no card yet: %+v", got["listed"].Item)
 	}
 	if items[0].SeriesId != "listed" {
 		t.Errorf("most recent first: %v", items)

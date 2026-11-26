@@ -140,6 +140,7 @@ func InitDB() error {
 	if _, err := db.Exec(SeriesLatestSchema); err != nil {
 		return err
 	}
+	runMigration(db, `ALTER TABLE series_latest ADD COLUMN card BLOB`)
 	// extra_json: card metadata, added after the table first shipped.
 	runMigration(db, `ALTER TABLE my_list ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'`)
 	// season_number/episode_number: 0 for non-episodic items.

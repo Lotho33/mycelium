@@ -20,16 +20,23 @@ CREATE TABLE IF NOT EXISTS series_latest (
 	air_date       TEXT NOT NULL DEFAULT '',
 	found_at       INTEGER NOT NULL DEFAULT 0,
 	checked_at     INTEGER NOT NULL DEFAULT 0,
+	card           BLOB,
 	PRIMARY KEY (plugin_id, series_id)
 );`
 
 // SeriesLatest is one series_latest row. FoundAt is 0 when the episode was
 // already out the first time the series was checked (not "new" to anyone).
+// Card is the series' card as of the last check (a marshalled CatalogItem:
+// backdrop, plot, genres, logo), so a "new episode" row looks like the other
+// rows without asking the plugin again; empty when the details failed, nil
+// when the row predates the column.
 type SeriesLatest struct {
 	PluginID, SeriesID string
 	Season, Episode    int32
 	AirDate            string
 	FoundAt, CheckedAt int64
+	Card               []byte
+	HasCard            bool
 }
 
 // EpisodeAfter reports whether s/e comes after season/episode.
@@ -77,11 +84,22 @@ func (m *DBManager) SetSeriesLatest(pluginID, seriesID string, season, episode i
 	return newer && err == nil, err
 }
 
+// SetSeriesCard stores the series' card from the last check (empty = the
+// details didn't come: tried, nothing to show).
+func (m *DBManager) SetSeriesCard(pluginID, seriesID string, card []byte) error {
+	if card == nil {
+		card = []byte{}
+	}
+	_, err := m.db.Exec(`UPDATE series_latest SET card = ? WHERE plugin_id = ? AND series_id = ?`,
+		card, pluginID, seriesID)
+	return err
+}
+
 // AllSeriesLatest returns every known latest episode, keyed by plugin and
 // series id.
 func (m *DBManager) AllSeriesLatest() (map[[2]string]SeriesLatest, error) {
 	rows, err := m.db.Query(`SELECT plugin_id, series_id, season_number, episode_number,
-		air_date, found_at, checked_at FROM series_latest`)
+		air_date, found_at, checked_at, card FROM series_latest`)
 	if err != nil {
 		return nil, err
 	}
@@ -89,10 +107,12 @@ func (m *DBManager) AllSeriesLatest() (map[[2]string]SeriesLatest, error) {
 	out := map[[2]string]SeriesLatest{}
 	for rows.Next() {
 		var s SeriesLatest
+		var card []byte
 		if err := rows.Scan(&s.PluginID, &s.SeriesID, &s.Season, &s.Episode, &s.AirDate,
-			&s.FoundAt, &s.CheckedAt); err != nil {
+			&s.FoundAt, &s.CheckedAt, &card); err != nil {
 			return nil, err
 		}
+		s.Card, s.HasCard = card, card != nil
 		out[[2]string{s.PluginID, s.SeriesID}] = s
 	}
 	return out, rows.Err()
@@ -113,7 +133,8 @@ func (m *DBManager) FollowedSeries(activeDays int, checkedBefore int64) ([][2]st
 		)
 		SELECT f.plugin_id, f.series_id, MAX(f.active) AS act FROM followed f
 		LEFT JOIN series_latest l ON l.plugin_id = f.plugin_id AND l.series_id = f.series_id
-		WHERE COALESCE(l.checked_at, 0) < ?
+		-- card IS NULL: checked before cards were kept, fetch it once now.
+		WHERE COALESCE(l.checked_at, 0) < ? OR (l.series_id IS NOT NULL AND l.card IS NULL)
 		GROUP BY f.plugin_id, f.series_id
 		ORDER BY act DESC`,
 		"-"+strconv.Itoa(max(activeDays, 1))+" days", checkedBefore)

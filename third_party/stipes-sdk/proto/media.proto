@@ -799,6 +799,10 @@ message NewEpisode {
   int32  episode_number = 6;
   string air_date       = 7;  // ISO 8601, when the plugin knows it
   int64  found_at       = 8;  // unix seconds: when the server saw it
+  // The series' card as the plugin's details gave it at the last check
+  // (backdrop, plot, genres, logo), id = series_id, badge "new_episode".
+  // Absent until the series has been checked once with details.
+  CatalogItem item      = 9;
 }
 message NewEpisodesResponse {
   repeated NewEpisode items = 1;  // most recent first
