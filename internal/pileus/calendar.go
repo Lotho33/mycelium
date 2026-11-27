@@ -56,6 +56,8 @@ var (
 	calendarMu    sync.Mutex
 	calendarCache = map[string]calendarCacheEntry{}
 	calendarNow   = time.Now // test seam
+	// calendarSetting reads a stored setting (test seam).
+	calendarSetting = func(key string) string { return managers.Settings.GetString(key, "") }
 )
 
 // calendarRange: the request's dates, defaulted and bounded.
@@ -179,12 +181,19 @@ func calendarPlugins(only string) []string {
 	return ids
 }
 
-// calendarPluginVersion: the running version of pluginID ("" if unknown).
-func calendarPluginVersion(pluginID string) string {
+// calendarPluginStamp: what a cached answer of pluginID depends on besides
+// the request — its running version and its global settings (an option may
+// change what the plugin lists) — as a short string for the cache key.
+func calendarPluginStamp(pluginID string) string {
 	for _, mf := range engine.LuaPlugins.GetMeta() {
-		if mf.ID == pluginID {
-			return mf.Version
+		if mf.ID != pluginID {
+			continue
 		}
+		h := sha256.New()
+		for _, f := range mf.Settings.Global {
+			h.Write([]byte(f.ID + "=" + calendarSetting("lua:"+pluginID+":global:"+f.ID) + "\x00"))
+		}
+		return mf.Version + "~" + hex.EncodeToString(h.Sum(nil)[:6])
 	}
 	return ""
 }
@@ -193,9 +202,9 @@ func calendarPluginVersion(pluginID string) string {
 func pluginCalendar(ctx context.Context, pluginID string, from, to time.Time, follows []string, profileID string) ([]*gen.CalendarEntry, bool) {
 	sort.Strings(follows)
 	sum := sha256.Sum256([]byte(strings.Join(follows, "\x00")))
-	// The version is in the key: an updated plugin is asked again at once
-	// instead of serving the old version's answer for calendarTTL.
-	key := pluginID + "@" + calendarPluginVersion(pluginID) + "|" + from.Format("2006-01-02") + "|" + to.Format("2006-01-02") + "|" + hex.EncodeToString(sum[:8])
+	// Version and settings are in the key: an updated or reconfigured plugin
+	// is asked again at once instead of serving the old answer.
+	key := pluginID + "@" + calendarPluginStamp(pluginID) + "|" + from.Format("2006-01-02") + "|" + to.Format("2006-01-02") + "|" + hex.EncodeToString(sum[:8])
 	now := calendarNow()
 	calendarMu.Lock()
 	if c, ok := calendarCache[key]; ok && now.Before(c.expires) {

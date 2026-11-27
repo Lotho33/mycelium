@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +178,34 @@ func TestCalendarAnswerTTL(t *testing.T) {
 	}
 	if got := calendarAnswerTTL(nil, errors.New("x")); got != calendarFailTTL {
 		t.Errorf("failure = %v", got)
+	}
+}
+
+func TestCalendarPluginStamp_Settings(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "t.calset")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "id: t.calset\nname: T\nversion: \"1.0.0\"\npool_size: 1\nsettings:\n  global:\n    - id: mode\n      label: M\n      type: bool\nentrypoints:\n  calendar: calendar\n"
+	_ = os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "init.lua"), []byte("function calendar() return {} end"), 0o644)
+	if err := engine.LuaPlugins.LoadPlugin(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.LuaPlugins.UnloadPlugin("t.calset") })
+
+	vals := map[string]string{}
+	prev := calendarSetting
+	calendarSetting = func(k string) string { return vals[k] }
+	t.Cleanup(func() { calendarSetting = prev })
+
+	off := calendarPluginStamp("t.calset")
+	vals["lua:t.calset:global:mode"] = "true"
+	on := calendarPluginStamp("t.calset")
+	if off == on || !strings.HasPrefix(on, "1.0.0~") {
+		t.Fatalf("a changed setting must change the stamp: %q / %q", off, on)
+	}
+	if calendarPluginStamp("t.calset") != on {
+		t.Fatal("stamp not stable")
 	}
 }
